@@ -1,0 +1,328 @@
+package grimoireapi
+
+import (
+	"context"
+	"errors"
+	"path"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/chinese-room-solutions/grimoire/internal/app"
+	"github.com/chinese-room-solutions/grimoire/internal/frontmatter"
+)
+
+const rfc3339 = time.RFC3339
+
+// errorsIsNoteExists reports whether err is the service's "note/folder already
+// exists" sentinel — the signal the overwrite flag turns into a replace.
+func errorsIsNoteExists(err error) bool {
+	return errors.Is(err, app.ErrNoteExists)
+}
+
+// baseName is a note/folder's display name: its final slash segment with any
+// Markdown extension dropped.
+func baseName(rel string) string {
+	name := path.Base(rel)
+	return strings.TrimSuffix(strings.TrimSuffix(name, ".md"), ".markdown")
+}
+
+// The write surface: thin wrappers over app.Service's CRUD, which already
+// enforces path-safety (rejecting escapes from the vault), atomic writes, and
+// automatic reindexing. Exposing these through the API lets an external agent
+// mutate the vault *through Grimoire* — gaining that safety layer — rather than
+// touching the filesystem directly.
+
+// CreateNote creates a note at path with the given Markdown content (frontmatter
+// included, as on disk). When the note already exists, overwrite=false fails
+// (the service returns ErrNoteExists) and overwrite=true replaces its content
+// like UpdateNote. Returns the created note.
+func (a *API) CreateNote(ctx context.Context, path, content string, overwrite bool) (Note, error) {
+	svc, err := a.service()
+	if err != nil {
+		return Note{}, err
+	}
+	written, err := svc.CreateNote(ctx, path)
+	if err != nil {
+		if errorsIsNoteExists(err) && overwrite {
+			// The note is there; treat create-with-overwrite as an update.
+			return a.UpdateNote(ctx, path, content)
+		}
+		return Note{}, err
+	}
+	if content != "" {
+		// The content is the note as it should appear on disk — any frontmatter it
+		// carries is the note's frontmatter, not body text.
+		if err := svc.WriteNote(ctx, written, content); err != nil {
+			return Note{}, err
+		}
+	}
+	return a.GetNote(ctx, written)
+}
+
+// UpdateNote replaces an existing note's Markdown content. Content without a
+// frontmatter block replaces only the body, leaving the note's existing
+// frontmatter untouched; content that carries its own frontmatter block replaces
+// both — so a note round-tripped through get_note writes back verbatim instead
+// of nesting its "---" block inside the old one. It fails if the note doesn't
+// exist. Returns the updated note.
+func (a *API) UpdateNote(ctx context.Context, path, content string) (Note, error) {
+	svc, err := a.service()
+	if err != nil {
+		return Note{}, err
+	}
+	if frontmatter.Has(content) {
+		err = svc.WriteNote(ctx, path, content)
+	} else {
+		err = svc.WriteBody(ctx, path, content)
+	}
+	if err != nil {
+		return Note{}, err
+	}
+	return a.GetNote(ctx, path)
+}
+
+// ErrEditNotFound is returned by EditNote when oldText doesn't occur in the
+// note's body; ErrEditAmbiguous when it occurs more than once. Both mean the
+// edit was rejected without touching the note — the caller must supply a unique
+// anchor. They alias the service's sentinels (the check lives inside its
+// serialized read→write span).
+var (
+	ErrEditNotFound  = app.ErrEditNotFound
+	ErrEditAmbiguous = app.ErrEditAmbiguous
+)
+
+// EditNote applies a surgical string replacement to a note's Markdown body:
+// oldText must occur exactly once (so the edit is unambiguous), and is replaced
+// by newText. The frontmatter is left untouched. This is the cheap, safe way to
+// change part of a large note without resending its whole body: the read,
+// replace, and atomic write happen server-side as one serialized span, and a
+// non-unique anchor is rejected (ErrEditNotFound / ErrEditAmbiguous) rather than
+// guessed at. Returns the updated note.
+func (a *API) EditNote(ctx context.Context, path, oldText, newText string) (Note, error) {
+	svc, err := a.service()
+	if err != nil {
+		return Note{}, err
+	}
+	if err := svc.ReplaceInBody(ctx, path, oldText, newText); err != nil {
+		return Note{}, err
+	}
+	return a.GetNote(ctx, path)
+}
+
+// SetNoteProperties replaces a note's YAML frontmatter from a property map,
+// leaving the Markdown body untouched. A value may be a string or a list of
+// strings; both land as a frontmatter property. Returns the updated note.
+func (a *API) SetNoteProperties(ctx context.Context, path string, props map[string][]string) (Note, error) {
+	svc, err := a.service()
+	if err != nil {
+		return Note{}, err
+	}
+	if err := svc.WriteFrontmatter(ctx, path, toProperties(props)); err != nil {
+		return Note{}, err
+	}
+	return a.GetNote(ctx, path)
+}
+
+// toProperties converts a {key: values} map to the frontmatter property list the
+// service writes, in key order so the output is stable.
+func toProperties(props map[string][]string) []frontmatter.Property {
+	keys := make([]string, 0, len(props))
+	for k := range props {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]frontmatter.Property, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, frontmatter.Property{Key: k, Values: props[k]})
+	}
+	return out
+}
+
+// RenameResult is a rename's outcome: the note at its new path, plus — when
+// overwrite displaced an existing note — whether that note went to the trash
+// (per the vault's trash mode) and the id to restore it by.
+type RenameResult struct {
+	Note
+	ReplacedTrashed bool   `json:"replacedTrashed,omitempty"`
+	ReplacedTrashID string `json:"replacedTrashID,omitempty"`
+}
+
+// RenameNote moves a note from one vault-relative path to another. With
+// overwrite=false it refuses to replace an existing note at the target
+// (ErrNoteExists); overwrite=true removes the target first — honouring the
+// vault's trash mode like every other agent deletion, so the displaced note is
+// recoverable when trashing is on (its trash id rides in the result). Returns
+// the note at its new path.
+func (a *API) RenameNote(ctx context.Context, from, to string, overwrite bool) (RenameResult, error) {
+	svc, err := a.service()
+	if err != nil {
+		return RenameResult{}, err
+	}
+	var res RenameResult
+	written, err := svc.RenameNote(ctx, from, to)
+	if err != nil {
+		if errorsIsNoteExists(err) && overwrite {
+			// Displace the occupant (to the trash when the mode allows), then retry.
+			trashID, trashed, delErr := svc.RemoveNote(ctx, to, false, true)
+			if delErr != nil {
+				return RenameResult{}, delErr
+			}
+			res.ReplacedTrashed, res.ReplacedTrashID = trashed, trashID
+			written, err = svc.RenameNote(ctx, from, to)
+		}
+		if err != nil {
+			return RenameResult{}, err
+		}
+	}
+	res.Note, err = a.GetNote(ctx, written)
+	if err != nil {
+		return RenameResult{}, err
+	}
+	return res, nil
+}
+
+// DeleteResult reports the outcome of a delete: the path acted on, whether it was
+// moved to the trash (vs. removed permanently), and the trash id to restore it by
+// when it was trashed.
+type DeleteResult struct {
+	Path    string `json:"path"`
+	Trashed bool   `json:"trashed"`
+	TrashID string `json:"trashID,omitempty"`
+}
+
+// DeleteNote deletes a note. With permanent=false it honours the vault's trash
+// setting (soft-deleting to .trash/ when enabled); permanent=true always removes
+// it outright. The result says which happened and, if trashed, the id to restore.
+func (a *API) DeleteNote(ctx context.Context, path string, permanent bool) (DeleteResult, error) {
+	svc, err := a.service()
+	if err != nil {
+		return DeleteResult{}, err
+	}
+	// byAgent=true: this is an API delete, so the "agents only" trash mode
+	// soft-deletes it even when the user's own GUI deletes are permanent.
+	trashID, trashed, err := svc.RemoveNote(ctx, path, permanent, true)
+	if err != nil {
+		return DeleteResult{}, err
+	}
+	return DeleteResult{Path: path, Trashed: trashed, TrashID: trashID}, nil
+}
+
+// CreateFolder creates a folder at a vault-relative path (and any missing
+// parents). It fails if the folder already exists. Returns the folder node.
+func (a *API) CreateFolder(ctx context.Context, path string) (NoteRef, error) {
+	svc, err := a.service()
+	if err != nil {
+		return NoteRef{}, err
+	}
+	written, err := svc.CreateFolderAt(ctx, path)
+	if err != nil {
+		return NoteRef{}, err
+	}
+	return NoteRef{Name: baseName(written), Path: written}, nil
+}
+
+// DeleteFolder deletes a folder and everything inside it. With permanent=false
+// it honours the vault's trash setting like a note delete — soft-deleting the
+// folder as a unit (tree intact) when enabled; permanent=true always removes it
+// outright. The result says which happened and, if trashed, the id to restore.
+func (a *API) DeleteFolder(ctx context.Context, path string, permanent bool) (DeleteResult, error) {
+	svc, err := a.service()
+	if err != nil {
+		return DeleteResult{}, err
+	}
+	// byAgent=true: an API delete, so the "agents only" trash mode applies.
+	trashID, trashed, err := svc.RemoveFolder(ctx, path, permanent, true)
+	if err != nil {
+		return DeleteResult{}, err
+	}
+	return DeleteResult{Path: path, Trashed: trashed, TrashID: trashID}, nil
+}
+
+// RenameFolder moves a folder to a new vault-relative path. It refuses to replace
+// an existing folder at the target. Returns the folder node at its new path.
+func (a *API) RenameFolder(ctx context.Context, from, to string) (NoteRef, error) {
+	svc, err := a.service()
+	if err != nil {
+		return NoteRef{}, err
+	}
+	written, err := svc.RenameFolder(ctx, from, to)
+	if err != nil {
+		return NoteRef{}, err
+	}
+	return NoteRef{Name: baseName(written), Path: written}, nil
+}
+
+// TrashItem is one soft-deleted item (a note, or a folder trashed as a unit):
+// the id that addresses it, the path it was deleted from (where Restore returns
+// it), its name, whether it is a folder, and when it was deleted (RFC3339).
+type TrashItem struct {
+	TrashID      string `json:"trashID"`
+	OriginalPath string `json:"originalPath"`
+	Name         string `json:"name"`
+	IsDir        bool   `json:"isDir,omitempty"`
+	DeletedAt    string `json:"deletedAt,omitempty"`
+}
+
+// ListTrash returns the soft-deleted items, newest first.
+func (a *API) ListTrash(ctx context.Context) ([]TrashItem, error) {
+	svc, err := a.service()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := svc.ListTrash()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TrashItem, len(entries))
+	for i, e := range entries {
+		deletedAt := ""
+		if !e.DeletedAt.IsZero() {
+			deletedAt = e.DeletedAt.UTC().Format(rfc3339)
+		}
+		out[i] = TrashItem{
+			TrashID:      e.TrashID,
+			OriginalPath: e.OriginalPath,
+			Name:         e.Name,
+			IsDir:        e.IsDir,
+			DeletedAt:    deletedAt,
+		}
+	}
+	return out, nil
+}
+
+// RestoreTrash moves a trashed item back to where it was deleted from (or
+// alongside, suffixed, if that path is now taken). Returns the restored note; a
+// restored folder yields just its path (there is no single note to read back).
+func (a *API) RestoreTrash(ctx context.Context, trashID string) (Note, error) {
+	svc, err := a.service()
+	if err != nil {
+		return Note{}, err
+	}
+	restored, isDir, err := svc.RestoreTrash(ctx, trashID)
+	if err != nil {
+		return Note{}, err
+	}
+	if isDir {
+		return Note{Path: restored}, nil
+	}
+	return a.GetNote(ctx, restored)
+}
+
+// DeleteTrashItem permanently removes one item from the trash by its id.
+func (a *API) DeleteTrashItem(ctx context.Context, trashID string) error {
+	svc, err := a.service()
+	if err != nil {
+		return err
+	}
+	return svc.DeleteTrash(ctx, trashID)
+}
+
+// EmptyTrash permanently removes everything in the trash.
+func (a *API) EmptyTrash(ctx context.Context) error {
+	svc, err := a.service()
+	if err != nil {
+		return err
+	}
+	return svc.EmptyTrash(ctx)
+}

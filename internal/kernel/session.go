@@ -1,0 +1,357 @@
+package kernel
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os/exec"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/KernelPryanic/ctxerr"
+	"github.com/rs/zerolog"
+)
+
+// ErrNoKernel is returned when no kernel claims a block's language.
+var ErrNoKernel = errors.New("no kernel for language")
+
+// ErrKernelDied is returned when the kernel process ended before producing a
+// run's terminal event (e.g. a block called exit, or the shell crashed). The
+// Manager drops the dead session so the next run spawns a fresh one.
+var ErrKernelDied = errors.New("kernel exited")
+
+// Session is one running kernel process. A session is reused across the blocks of
+// a single note so they share shell state; runMu serializes those runs (a shell
+// runs one block at a time). A dedicated reader goroutine owns the kernel's
+// stdout and feeds events; Run selects between it and its context, so a runaway
+// block can be cancelled instead of wedging the note's session.
+type Session struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	events chan readResult // closed when the kernel's stdout ends.
+	done   chan struct{}   // closed on kill/Close; unblocks the reader's sends.
+	stop   sync.Once       // guards closing done.
+
+	runMu  sync.Mutex
+	nextID int
+}
+
+// readResult is one parsed line from the kernel's stdout, or the protocol error
+// that ended the stream.
+type readResult struct {
+	ev  Event
+	err error
+}
+
+// spawn starts the kernel process for a manifest and wires up its stdio.
+func spawn(m *Manifest) (*Session, error) {
+	exe, args, err := m.spawnCommand()
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(exe, args...)
+	hideConsole(cmd)          // no stray console window on Windows.
+	ensureToolchain(cmd, exe) // make sure the shell finds its coreutils (Windows PATH fix).
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("kernel stdin: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("kernel stdout: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting kernel %s: %w", m.Name(), err)
+	}
+	return newSession(cmd, stdin, stdout), nil
+}
+
+// newSession builds a Session over arbitrary stdio and starts its reader
+// goroutine, so tests can drive the protocol without a real process. cmd may be
+// nil in tests.
+func newSession(cmd *exec.Cmd, stdin io.WriteCloser, stdout io.Reader) *Session {
+	s := &Session{
+		cmd:    cmd,
+		stdin:  stdin,
+		events: make(chan readResult),
+		done:   make(chan struct{}),
+	}
+	go s.readLoop(stdout)
+	return s
+}
+
+// readLoop owns the kernel's stdout for the session's life: it parses each
+// NDJSON line and hands it to the in-flight Run. It exits when the stream ends
+// (kernel death — events is closed so Run reports ErrKernelDied), on a protocol
+// violation (forwarded as the final result), or when done closes (kill/Close)
+// with no Run left to receive.
+func (s *Session) readLoop(stdout io.Reader) {
+	defer close(s.events)
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20) // allow long output lines.
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		ev, err := parseEvent(line)
+		select {
+		case s.events <- readResult{ev: ev, err: err}:
+			if err != nil {
+				return // the stream is unusable after a protocol violation.
+			}
+		case <-s.done:
+			return
+		}
+	}
+}
+
+// Run executes one block in the session, delivering each stdout/stderr/exit event
+// to emit. It blocks until the run's terminal event, the kernel dying, or ctx
+// being cancelled — a cancelled run kills the kernel process (a runaway block
+// can't be interrupted any other way) and the Manager respawns a fresh session
+// on the next run. A non-zero block exit is reported through emit (an exit
+// event), not as an error; errors are reserved for infrastructure failures.
+func (s *Session) Run(ctx context.Context, code string, emit func(Event)) error {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.nextID++
+	id := "r" + strconv.Itoa(s.nextID)
+
+	if _, err := s.stdin.Write(encodeRequest(id, code)); err != nil {
+		return ctxerr.With(fmt.Errorf("%w: %v", ErrKernelDied, err), map[string]any{"run": id})
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			// A runaway block wedges the kernel; kill it so this run (and the session)
+			// end now. The caller drops the dead session and respawns on the next run.
+			s.kill()
+			return ctx.Err()
+		case r, ok := <-s.events:
+			if !ok {
+				return ctxerr.With(fmt.Errorf("kernel run %s: %w", id, ErrKernelDied), map[string]any{"run": id})
+			}
+			if r.err != nil {
+				return ctxerr.With(fmt.Errorf("kernel run %s: %w", id, r.err), map[string]any{"run": id})
+			}
+			if r.ev.Id != id {
+				continue // stale event from an earlier run; ignore.
+			}
+			emit(r.ev)
+			if r.ev.Terminal() {
+				return nil
+			}
+		}
+	}
+}
+
+// kill force-terminates the kernel process and releases the reader goroutine.
+// Safe without a process (tests) and safe to call more than once.
+func (s *Session) kill() {
+	s.stop.Do(func() { close(s.done) })
+	if s.cmd != nil && s.cmd.Process != nil {
+		_ = s.cmd.Process.Kill()
+	}
+}
+
+// closeWait bounds how long Close waits for the kernel to exit after its stdin
+// closes before killing it — a runner that ignores EOF must not hang shutdown.
+// A var so tests can shorten it.
+var closeWait = 5 * time.Second
+
+// Close ends the kernel: closing stdin makes a well-behaved runner's read loop
+// hit EOF and exit; the process is then reaped, with a deadline — a kernel that
+// ignores EOF (e.g. a block left something blocking) is killed after closeWait.
+func (s *Session) Close() error {
+	s.stop.Do(func() { close(s.done) })
+	if s.stdin != nil {
+		_ = s.stdin.Close()
+	}
+	if s.cmd == nil {
+		return nil
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- s.cmd.Wait() }()
+	select {
+	case err := <-waited:
+		return ignoreExit(err)
+	case <-time.After(closeWait):
+		if s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
+		}
+		return ignoreExit(<-waited)
+	}
+}
+
+// ignoreExit drops the exit-status error a kernel that ran user code (or was
+// killed) reports — that's not a host failure.
+func ignoreExit(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := errors.AsType[*exec.ExitError](err); ok {
+		return nil
+	}
+	return err
+}
+
+// Manager keeps a Session per (note, kernel), spawning lazily and reusing across
+// a note's blocks so blocks on the same kernel share shell state. It is safe for
+// concurrent use.
+type Manager struct {
+	reg    *Registry
+	logger zerolog.Logger
+
+	mu       sync.Mutex
+	sessions map[string]*Session // keyed by sessionKey(notePath, kernelName).
+}
+
+// NewManager builds a Manager over a registry.
+func NewManager(reg *Registry, logger zerolog.Logger) *Manager {
+	return &Manager{
+		reg:      reg,
+		logger:   logger.With().Str("component", "kernel").Logger(),
+		sessions: map[string]*Session{},
+	}
+}
+
+// Has reports whether a kernel claims the given language.
+func (m *Manager) Has(lang string) bool {
+	_, ok := m.reg.Lookup(lang)
+	return ok
+}
+
+// ResolveInfo returns the friendly label and version of the kernel that would run
+// a block for (lang, family, version) — the same resolution Run uses — so the UI
+// can show which kernel a block will use, and its version, before it's run. ok is
+// false when nothing resolves (no kernel for the language, or an unknown family/
+// version override). version is the resolved kernel's version.
+func (m *Manager) ResolveInfo(lang, family, version string) (label, resolvedVersion string, ok bool) {
+	man, ok := m.reg.Resolve(lang, family, version)
+	if !ok {
+		return "", "", false
+	}
+	return man.Label(), man.Version, true
+}
+
+// Run runs a block in the kernel resolved for (lang, family, version) — a
+// per-block {kernel=family}{version=} override, else the newest version of the
+// first family claiming the language. The session is keyed by note AND kernel, so
+// one note can drive several kernels (or several versions) in parallel sessions.
+// ErrNoKernel if nothing resolves; ErrKernelUnavailable if the resolved command
+// isn't installed. If the kernel died, the dead session is dropped so a later run
+// respawns.
+func (m *Manager) Run(ctx context.Context, notePath, lang, family, version, code string, emit func(Event)) error {
+	man, ok := m.reg.Resolve(lang, family, version)
+	if !ok {
+		if family != "" {
+			return fmt.Errorf("%w: %s", ErrNoKernel, family)
+		}
+		return fmt.Errorf("%w: %s", ErrNoKernel, lang)
+	}
+	key := sessionKey(notePath, man.Name())
+	sess, err := m.session(key, man)
+	if err != nil {
+		return err
+	}
+	// Stamp the resolved kernel's label onto the terminal event so the UI can show
+	// which kernel ran the block (the runner doesn't know its own manifest).
+	label := man.Label()
+	stamp := func(ev Event) {
+		if ev.Terminal() {
+			ev.Kernel = label
+		}
+		emit(ev)
+	}
+	if err := sess.Run(ctx, code, stamp); err != nil {
+		// A dead kernel — or one Run just killed because the ctx was cancelled —
+		// is dropped so the next run respawns a fresh session.
+		if errors.Is(err, ErrKernelDied) || ctx.Err() != nil {
+			m.drop(key, sess)
+		}
+		return err
+	}
+	return nil
+}
+
+// sessionKey scopes a kernel session to one note and one kernel. The NUL
+// separator can't appear in a path or kernel name, so the note prefix is
+// unambiguous for CloseNote's prefix match.
+func sessionKey(notePath, kernelName string) string {
+	return notePath + "\x00" + kernelName
+}
+
+// session returns noteKey's live session, spawning one if absent.
+func (m *Manager) session(noteKey string, man *Manifest) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.sessions[noteKey]; ok {
+		return s, nil
+	}
+	s, err := spawn(man)
+	if err != nil {
+		return nil, err
+	}
+	m.sessions[noteKey] = s
+	return s, nil
+}
+
+// drop removes and closes a note's session if it's still the one recorded (a
+// concurrent run may already have replaced it).
+func (m *Manager) drop(noteKey string, sess *Session) {
+	m.mu.Lock()
+	cur, ok := m.sessions[noteKey]
+	if ok && cur == sess {
+		delete(m.sessions, noteKey)
+	}
+	m.mu.Unlock()
+	_ = sess.Close()
+}
+
+// CloseNote ends and forgets every kernel session for a note (called when its
+// tab closes). A note may hold more than one session — one per kernel it used —
+// so this closes all sessions whose key carries the note's prefix.
+func (m *Manager) CloseNote(notePath string) {
+	prefix := notePath + "\x00"
+	m.mu.Lock()
+	var closing []*Session
+	for key, sess := range m.sessions {
+		if strings.HasPrefix(key, prefix) {
+			closing = append(closing, sess)
+			delete(m.sessions, key)
+		}
+	}
+	m.mu.Unlock()
+	for _, sess := range closing {
+		if err := sess.Close(); err != nil {
+			m.logger.Warn().Err(err).Str("note", notePath).Msg("closing note kernel")
+		}
+	}
+}
+
+// CloseAll ends every kernel (called on app shutdown).
+func (m *Manager) CloseAll() error {
+	m.mu.Lock()
+	sessions := m.sessions
+	m.sessions = map[string]*Session{}
+	m.mu.Unlock()
+	var firstErr error
+	for key, sess := range sessions {
+		if err := sess.Close(); err != nil && firstErr == nil {
+			firstErr = err
+			m.logger.Warn().Err(err).Str("note", key).Msg("closing kernel on shutdown")
+		}
+	}
+	return firstErr
+}

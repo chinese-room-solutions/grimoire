@@ -1,0 +1,106 @@
+name: release
+
+# On a version tag (or manual dispatch), build the Grimoire binary natively on
+# each target OS and attach the archives to a single GitHub Release.
+# Linux needs the GTK/WebKit dev headers (webview_go CGO); Windows ships the
+# pure-Go webview2 binary (no extra DLLs).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+
+env:
+  GOPRIVATE: github.com/chinese-room-solutions/*
+
+jobs:
+  build:
+    name: build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # `asset` is the release-asset basename: grimoire_<goos>_<goarch>, no
+        # version — stable names keep releases/latest/download/ links evergreen
+        # (the website and READMEs hardcode them).
+        include:
+          - os: ubuntu-latest
+            label: linux-amd64
+            asset: grimoire_linux_amd64
+          - os: windows-latest
+            label: windows-amd64
+            asset: grimoire_windows_amd64
+          - os: macos-15
+            label: macos-arm64
+            asset: grimoire_darwin_arm64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Configure private module access
+        shell: bash
+        run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
+      - name: Install Linux GUI deps (cached)
+        if: runner.os == 'Linux'
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libgtk-3-dev libwebkit2gtk-4.1-dev
+          version: 1.0
+      - name: Alias webkit2gtk pkg-config 4.0 -> 4.1
+        if: runner.os == 'Linux'
+        run: |
+          # webview_go hardcodes pkg-config webkit2gtk-4.0, but Ubuntu 24.04
+          # ships only 4.1 (API-compatible). Alias the .pc files, in the dir
+          # where the 4.1 ones actually live, so cgo resolves.
+          pcdir=$(pkg-config --variable=pcfiledir webkit2gtk-4.1)
+          sudo ln -sf "$pcdir/webkit2gtk-4.1.pc" "$pcdir/webkit2gtk-4.0.pc"
+          sudo ln -sf "$pcdir/javascriptcoregtk-4.1.pc" "$pcdir/javascriptcoregtk-4.0.pc"
+      - name: Build
+        run: make build
+      # Installer wizard (grimoire-setup): .AppImage on Linux, ditto-zipped
+      # .app on macOS, console .exe on Windows. The bundlers self-fetch
+      # appimagetool, so no extra CI deps.
+      - name: Package installer
+        run: make package
+      - name: Archive
+        shell: bash
+        run: |
+          name="${{ matrix.asset }}"
+          setup="grimoire-setup_${name#grimoire_}"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a "$name.zip" ./bin/grimoire.exe
+            mv dist/grimoire-setup.exe "$setup.exe"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            tar -czf "$name.tar.gz" -C bin grimoire
+            mv dist/Grimoire-Setup.zip "$setup.zip"
+          else
+            tar -czf "$name.tar.gz" -C bin grimoire
+            mv dist/*.AppImage "$setup.AppImage"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            grimoire_*.tar.gz
+            grimoire_*.zip
+            grimoire-setup_*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+            artifacts/**/*.AppImage
+            artifacts/**/*.exe
+          generate_release_notes: true

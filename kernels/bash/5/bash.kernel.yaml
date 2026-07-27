@@ -1,0 +1,7 @@
+language: Bash
+display_name: Bash
+match: [bash, sh, shell]
+runner: bash.sh
+command:
+  default: { exe: bash, args: ["{runner}"] }
+  windows: { exe: bash.exe, args: ["{runner}"] }

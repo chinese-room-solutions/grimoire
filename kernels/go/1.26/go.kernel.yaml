@@ -1,0 +1,13 @@
+language: Go
+display_name: Go
+# Identity is the folder: kernels/go/<version>/. The folder version (e.g. 1.26)
+# must be a Go toolchain the `go` on PATH satisfies, or a block's compile fails.
+#
+# The default Go kernel: compiles each block as a complete, self-contained program
+# with the real Go toolchain (no shared state between blocks). For shared,
+# notebook-style state across blocks, install the yaegi kernel and select it with
+# {kernel=yaegi}.
+match: [go, golang]
+runner: runner
+command:
+  default: { exe: go, args: [run, -C, "{runner}", "."] }

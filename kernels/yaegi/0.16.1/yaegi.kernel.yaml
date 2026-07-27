@@ -1,0 +1,17 @@
+language: Go
+display_name: Go (yaegi)
+# Identity is the folder: kernels/yaegi/<version>/, the version being the embedded
+# yaegi interpreter version (see runner/go.mod).
+#
+# Runs Go blocks through the yaegi interpreter, so blocks share session state
+# (vars, funcs, imports) across runs like notebook cells. Faster than compiling,
+# but it's an interpreter: it lags the language (no Go 1.21 max/min, older loop-
+# variable semantics). For exact, real-toolchain behaviour use the `go` kernel.
+match: [go, golang]
+# The runner is a Go module (its own go.mod) compiled and run on demand by the
+# user's `go` toolchain — yaegi lives inside it, never in Grimoire's binary.
+runner: runner
+# `-C {runner}` makes `go` switch into the runner's module dir before building,
+# so the runner's go.mod resolves regardless of where Grimoire is launched from.
+command:
+  default: { exe: go, args: [run, -C, "{runner}", "."] }

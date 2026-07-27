@@ -1,0 +1,538 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/chinese-room-solutions/grimoire/internal/apiclient"
+	"github.com/stretchr/testify/require"
+)
+
+// cliBackend is a stub /api/v1 server the CLI tests run against, standing in for
+// a real backend so no process is spawned. It routes on method+path and records
+// the last request's body/query for the write-shape assertions.
+type cliBackend struct {
+	srv       *httptest.Server
+	lastBody  string
+	lastQuery string
+}
+
+// newCLIBackend starts a stub backend whose routes come from routes (keyed by
+// "METHOD /api/v1/path"); an unmatched route 404s with the API error shape.
+func newCLIBackend(t *testing.T, routes map[string]http.HandlerFunc) *cliBackend {
+	t.Helper()
+	b := &cliBackend{}
+	mux := http.NewServeMux()
+	for pattern, h := range routes {
+		handler := h
+		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			data := make([]byte, r.ContentLength)
+			if r.ContentLength > 0 {
+				_, _ = r.Body.Read(data)
+			}
+			b.lastBody = strings.TrimSpace(string(data))
+			b.lastQuery = r.URL.RawQuery
+			handler(w, r)
+		})
+	}
+	b.srv = httptest.NewServer(mux)
+	t.Cleanup(b.srv.Close)
+	return b
+}
+
+// env builds a cliEnv wired to this backend, capturing stdout and stderr. Both
+// connect and respawn return a client at the stub, so the stale-port retry path
+// reconnects to the same server.
+func (b *cliBackend) env(t *testing.T, jsonOut bool) (*cliEnv, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	client := apiclient.NewForTest(b.srv.URL)
+	var out, errBuf bytes.Buffer
+	e := &cliEnv{
+		out:     &out,
+		err:     &errBuf,
+		json:    jsonOut,
+		vault:   "/test/vault",
+		connect: func() (*apiclient.Client, error) { return client, nil },
+		respawn: func() (*apiclient.Client, error) { return client, nil },
+	}
+	return e, &out, &errBuf
+}
+
+// writeJSON is the stub's success-body helper.
+func stubJSON(t *testing.T, w http.ResponseWriter, v any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	require.NoError(t, json.NewEncoder(w).Encode(v))
+}
+
+// stubErr is the stub's error-body helper, mirroring the backend's shape.
+func stubErr(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = fmt.Fprintf(w, `{"error":%q}`, msg)
+}
+
+func TestCLINoteGet(t *testing.T) {
+	tests := []struct {
+		name     string
+		routes   map[string]http.HandlerFunc
+		args     []string
+		json     bool
+		wantExit int
+		wantOut  string // substring/exact per assertContains.
+		exact    bool
+	}{
+		{
+			name: "get prints raw markdown, no decoration",
+			routes: map[string]http.HandlerFunc{
+				"GET /api/v1/note": func(w http.ResponseWriter, _ *http.Request) {
+					stubJSON(t, w, map[string]string{"path": "a.md", "content": "# Title\nbody"})
+				},
+			},
+			args:     []string{"note", "get", "a.md"},
+			wantExit: exitOK,
+			wantOut:  "# Title\nbody",
+			exact:    true,
+		},
+		{
+			name: "get missing note maps 404 to exit 3",
+			routes: map[string]http.HandlerFunc{
+				"GET /api/v1/note": func(w http.ResponseWriter, _ *http.Request) {
+					stubErr(w, http.StatusNotFound, "note not found")
+				},
+			},
+			args:     []string{"note", "get", "missing.md"},
+			wantExit: exitNotFound,
+		},
+		{
+			name:     "get with no path is a usage error",
+			routes:   map[string]http.HandlerFunc{},
+			args:     []string{"note", "get"},
+			wantExit: exitUsage,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newCLIBackend(t, tt.routes)
+			e, out, _ := b.env(t, tt.json)
+			code := e.dispatch(tt.args)
+			require.Equal(t, tt.wantExit, code)
+			if tt.wantOut != "" {
+				if tt.exact {
+					require.Equal(t, tt.wantOut, out.String())
+				} else {
+					require.Contains(t, out.String(), tt.wantOut)
+				}
+			}
+		})
+	}
+}
+
+func TestCLINoteWriteExitCodes(t *testing.T) {
+	tests := []struct {
+		name     string
+		routes   map[string]http.HandlerFunc
+		args     []string
+		wantExit int
+		wantBody string // canonical JSON of the recorded request body, "" to skip.
+	}{
+		{
+			name: "create sends path/content/overwrite",
+			routes: map[string]http.HandlerFunc{
+				"POST /api/v1/note": func(w http.ResponseWriter, _ *http.Request) {
+					stubJSON(t, w, map[string]string{"path": "n.md", "content": "hi"})
+				},
+			},
+			args:     []string{"note", "create", "n.md", "--content", "hi", "--overwrite"},
+			wantExit: exitOK,
+			wantBody: `{"content":"hi","overwrite":true,"path":"n.md"}`,
+		},
+		{
+			name: "create existing without overwrite maps 409 to exit 4",
+			routes: map[string]http.HandlerFunc{
+				"POST /api/v1/note": func(w http.ResponseWriter, _ *http.Request) {
+					stubErr(w, http.StatusConflict, "note already exists")
+				},
+			},
+			args:     []string{"note", "create", "n.md", "--content", "hi"},
+			wantExit: exitConflict,
+		},
+		{
+			name:     "create with both --content and -f is an error",
+			routes:   map[string]http.HandlerFunc{},
+			args:     []string{"note", "create", "n.md", "--content", "hi", "-f", "x.md"},
+			wantExit: exitError,
+		},
+		{
+			name:     "edit requires --old and --new",
+			routes:   map[string]http.HandlerFunc{},
+			args:     []string{"note", "edit", "n.md", "--old", "a"},
+			wantExit: exitUsage,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newCLIBackend(t, tt.routes)
+			e, _, _ := b.env(t, false)
+			code := e.dispatch(tt.args)
+			require.Equal(t, tt.wantExit, code)
+			if tt.wantBody != "" {
+				require.JSONEq(t, tt.wantBody, b.lastBody)
+			}
+		})
+	}
+}
+
+func TestCLIResolveExitCodes(t *testing.T) {
+	tests := []struct {
+		name     string
+		found    bool
+		wantExit int
+		wantOut  string
+	}{
+		{"resolved prints path, exit 0", true, exitOK, "notes/a.md\n"},
+		{"unresolved is exit 3", false, exitNotFound, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newCLIBackend(t, map[string]http.HandlerFunc{
+				"GET /api/v1/resolve": func(w http.ResponseWriter, _ *http.Request) {
+					stubJSON(t, w, map[string]any{"target": "A", "path": "notes/a.md", "found": tt.found})
+				},
+			})
+			e, out, _ := b.env(t, false)
+			code := e.dispatch([]string{"resolve", "A"})
+			require.Equal(t, tt.wantExit, code)
+			require.Equal(t, tt.wantOut, out.String())
+		})
+	}
+}
+
+func TestCLIVaultTreeIndents(t *testing.T) {
+	b := newCLIBackend(t, map[string]http.HandlerFunc{
+		"GET /api/v1/vault": func(w http.ResponseWriter, _ *http.Request) {
+			stubJSON(t, w, map[string]any{"tree": []map[string]any{
+				{"name": "folder", "path": "folder", "isDir": true, "children": []map[string]any{
+					{"name": "child", "path": "folder/child.md"},
+				}},
+				{"name": "top", "path": "top.md"},
+			}})
+		},
+	})
+	e, out, _ := b.env(t, false)
+	code := e.dispatch([]string{"vault", "tree"})
+	require.Equal(t, exitOK, code)
+	require.Equal(t, "folder/\n  child\ntop\n", out.String())
+}
+
+func TestCLIVaultListMarksCurrent(t *testing.T) {
+	b := newCLIBackend(t, map[string]http.HandlerFunc{
+		"GET /api/v1/vaults": func(w http.ResponseWriter, _ *http.Request) {
+			stubJSON(t, w, map[string]any{"vaults": []map[string]any{
+				{"name": "v1", "path": "/v1", "current": false},
+				{"name": "v2", "path": "/v2", "current": true},
+			}})
+		},
+	})
+	e, out, _ := b.env(t, false)
+	code := e.dispatch([]string{"vault", "list"})
+	require.Equal(t, exitOK, code)
+	require.Equal(t, "  v1\t/v1\n* v2\t/v2\n", out.String())
+}
+
+func TestCLITrashList(t *testing.T) {
+	b := newCLIBackend(t, map[string]http.HandlerFunc{
+		"GET /api/v1/trash": func(w http.ResponseWriter, _ *http.Request) {
+			stubJSON(t, w, map[string]any{"items": []map[string]any{
+				{"trashID": "t1", "originalPath": "a.md", "name": "a", "deletedAt": "2026-07-19T10:00:00Z"},
+			}})
+		},
+	})
+	e, out, _ := b.env(t, false)
+	code := e.dispatch([]string{"trash", "list"})
+	require.Equal(t, exitOK, code)
+	require.Equal(t, "t1\tnote\ta.md\t2026-07-19T10:00:00Z\n", out.String())
+}
+
+func TestCLINoteDeleteSendsQueryAndReportsTrash(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantQuery string
+		trashed   bool
+		wantOut   string
+	}{
+		{
+			name:      "soft delete sends only path and reports the restore id",
+			args:      []string{"note", "delete", "a.md"},
+			wantQuery: "path=a.md",
+			trashed:   true,
+			wantOut:   "trashed a.md (restore id: t9)\n",
+		},
+		{
+			name:      "permanent delete adds permanent=true",
+			args:      []string{"note", "delete", "a.md", "--permanent"},
+			wantQuery: "path=a.md&permanent=true",
+			trashed:   false,
+			wantOut:   "deleted a.md\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newCLIBackend(t, map[string]http.HandlerFunc{
+				"DELETE /api/v1/note": func(w http.ResponseWriter, _ *http.Request) {
+					out := map[string]any{"path": "a.md", "trashed": tt.trashed}
+					if tt.trashed {
+						out["trashID"] = "t9"
+					}
+					stubJSON(t, w, out)
+				},
+			})
+			e, out, _ := b.env(t, false)
+			code := e.dispatch(tt.args)
+			require.Equal(t, exitOK, code)
+			require.Equal(t, tt.wantQuery, b.lastQuery)
+			require.Equal(t, tt.wantOut, out.String())
+		})
+	}
+}
+
+func TestCLIJSONErrorGoesToStderr(t *testing.T) {
+	b := newCLIBackend(t, map[string]http.HandlerFunc{
+		"GET /api/v1/note": func(w http.ResponseWriter, _ *http.Request) {
+			stubErr(w, http.StatusNotFound, "note not found")
+		},
+	})
+	e, out, errBuf := b.env(t, true)
+	code := e.dispatch([]string{"note", "get", "x.md"})
+	require.Equal(t, exitNotFound, code)
+	require.Empty(t, out.String())
+	var payload struct {
+		Error  string `json:"error"`
+		Status int    `json:"status"`
+	}
+	require.NoError(t, json.Unmarshal(errBuf.Bytes(), &payload))
+	require.Equal(t, "note not found", payload.Error)
+	require.Equal(t, http.StatusNotFound, payload.Status)
+}
+
+func TestCLIHumanErrorGoesToStderr(t *testing.T) {
+	b := newCLIBackend(t, map[string]http.HandlerFunc{
+		"GET /api/v1/note": func(w http.ResponseWriter, _ *http.Request) {
+			stubErr(w, http.StatusInternalServerError, "boom")
+		},
+	})
+	e, out, errBuf := b.env(t, false)
+	code := e.dispatch([]string{"note", "get", "x.md"})
+	require.Equal(t, exitError, code)
+	require.Empty(t, out.String())
+	require.Equal(t, "error: boom\n", errBuf.String())
+}
+
+// TestCLIStalePortRetry proves the one-shot retry: connect returns a client
+// pointed at a dead address (transport error), respawn returns one at the live
+// stub, and the verb succeeds on the retry.
+func TestCLIStalePortRetry(t *testing.T) {
+	b := newCLIBackend(t, map[string]http.HandlerFunc{
+		"GET /api/v1/note": func(w http.ResponseWriter, _ *http.Request) {
+			stubJSON(t, w, map[string]string{"path": "a.md", "content": "recovered"})
+		},
+	})
+	dead := apiclient.NewForTest("http://127.0.0.1:1") // nothing listens.
+	live := apiclient.NewForTest(b.srv.URL)
+	var out bytes.Buffer
+	respawned := false
+	e := &cliEnv{
+		out:     &out,
+		err:     &bytes.Buffer{},
+		vault:   "/test/vault",
+		connect: func() (*apiclient.Client, error) { return dead, nil },
+		respawn: func() (*apiclient.Client, error) { respawned = true; return live, nil },
+	}
+	code := e.dispatch([]string{"note", "get", "a.md"})
+	require.Equal(t, exitOK, code)
+	require.True(t, respawned, "respawn must be attempted after a transport error")
+	require.Equal(t, "recovered", out.String())
+}
+
+// TestCLIAPIErrorNoRetry confirms an APIError (the server answered) does NOT
+// trigger a respawn — only transport failures do.
+func TestCLIAPIErrorNoRetry(t *testing.T) {
+	b := newCLIBackend(t, map[string]http.HandlerFunc{
+		"GET /api/v1/note": func(w http.ResponseWriter, _ *http.Request) {
+			stubErr(w, http.StatusNotFound, "note not found")
+		},
+	})
+	live := apiclient.NewForTest(b.srv.URL)
+	respawned := false
+	e := &cliEnv{
+		out:     &bytes.Buffer{},
+		err:     &bytes.Buffer{},
+		vault:   "/test/vault",
+		connect: func() (*apiclient.Client, error) { return live, nil },
+		respawn: func() (*apiclient.Client, error) { respawned = true; return live, nil },
+	}
+	code := e.dispatch([]string{"note", "get", "x.md"})
+	require.Equal(t, exitNotFound, code)
+	require.False(t, respawned, "an APIError must not trigger a respawn")
+}
+
+func TestFirstNonFlag(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"bare verb", []string{"search", "q"}, "search"},
+		{"vault flag with space value then verb", []string{"--vault", "/v", "note", "get", "x"}, "note"},
+		{"vault flag with equals value then verb", []string{"--vault=/v", "vault", "tree"}, "vault"},
+		{"json bool flag then verb", []string{"--json", "trash", "list"}, "trash"},
+		{"single-dash vault then verb", []string{"-vault", "/v", "resolve", "A"}, "resolve"},
+		{"combined flags then verb", []string{"--json", "--vault", "/v", "folder", "create", "f"}, "folder"},
+		{"only flags, no verb", []string{"--vault", "/v"}, ""},
+		{"empty", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, firstNonFlag(tt.args))
+		})
+	}
+}
+
+func TestParseProps(t *testing.T) {
+	tests := []struct {
+		name    string
+		sets    []string
+		want    map[string][]string
+		wantErr bool
+	}{
+		{"single key single value", []string{"status=done"}, map[string][]string{"status": {"done"}}, false},
+		{"comma list becomes a slice", []string{"tags=a,b,c"}, map[string][]string{"tags": {"a", "b", "c"}}, false},
+		{"multiple keys", []string{"a=1", "b=2"}, map[string][]string{"a": {"1"}, "b": {"2"}}, false},
+		{"empty value clears the key", []string{"tags="}, map[string][]string{"tags": nil}, false},
+		{"missing equals is an error", []string{"nope"}, nil, true},
+		{"empty key is an error", []string{"=v"}, nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseProps(tt.sets)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestReadContentSource(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		file    string
+		stdin   string
+		want    string
+		wantErr bool
+	}{
+		{"content flag wins over stdin", "hello", "", "ignored", "hello", false},
+		{"stdin used when no flags", "", "", "from stdin", "from stdin", false},
+		{"both content and file is an error", "x", "f.md", "", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := readContentSource(tt.content, tt.file, strings.NewReader(tt.stdin))
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestIsTransportError guards the retry predicate: an APIError and a context
+// cancellation are not transport errors; a bare error is.
+func TestIsTransportError(t *testing.T) {
+	require.False(t, isTransportError(&apiclient.APIError{Status: 404, Message: "x"}))
+	require.False(t, isTransportError(context.Canceled))
+	require.False(t, isTransportError(context.DeadlineExceeded))
+	require.True(t, isTransportError(errors.New("connection refused")))
+}
+
+// A transport error means the advertised backend is gone. Both verb kinds get a
+// fresh backend respawned — the next invocation needs one — but only a read-only
+// verb may be re-sent: a mutating request may have reached the dying backend and
+// been applied before its response was lost, and the API has no idempotency key.
+// The exit codes are asserted on the mutating side, where the new error lands.
+func TestCLIRespawnRetriesOnlyReadOnlyVerbs(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		mutates bool
+	}{
+		{"search", []string{"search", "q"}, false},
+		{"note get", []string{"note", "get", "a.md"}, false},
+		{"resolve", []string{"resolve", "A"}, false},
+		{"screenshot", []string{"screenshot"}, false},
+		{"vault tree", []string{"vault", "tree"}, false},
+		{"vault list", []string{"vault", "list"}, false},
+		{"vault current", []string{"vault", "current"}, false},
+		{"trash list", []string{"trash", "list"}, false},
+		{"note create", []string{"note", "create", "a.md", "--content", "x"}, true},
+		{"note update", []string{"note", "update", "a.md", "--content", "x"}, true},
+		{"note edit", []string{"note", "edit", "a.md", "--old", "x", "--new", "y"}, true},
+		{"note delete", []string{"note", "delete", "a.md"}, true},
+		{"note rename", []string{"note", "rename", "a.md", "b.md"}, true},
+		{"note props", []string{"note", "props", "a.md", "--set", "tags=x"}, true},
+		{"folder create", []string{"folder", "create", "f"}, true},
+		{"folder delete", []string{"folder", "delete", "f"}, true},
+		{"folder rename", []string{"folder", "rename", "f", "g"}, true},
+		{"trash restore", []string{"trash", "restore", "1"}, true},
+		{"trash delete", []string{"trash", "delete", "1"}, true},
+		{"trash empty", []string{"trash", "empty"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var reached atomic.Int64
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				reached.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer srv.Close()
+
+			respawned := false
+			var out, errBuf bytes.Buffer
+			e := &cliEnv{
+				out:     &out,
+				err:     &errBuf,
+				vault:   "/test/vault",
+				connect: func() (*apiclient.Client, error) { return apiclient.NewForTest("http://127.0.0.1:1"), nil },
+				respawn: func() (*apiclient.Client, error) {
+					respawned = true
+					return apiclient.NewForTest(srv.URL), nil
+				},
+			}
+			code := e.dispatch(tc.args)
+
+			require.True(t, respawned, "a dead backend must be respawned either way")
+			if tc.mutates {
+				require.Zero(t, reached.Load(), "a mutating command must not be re-sent")
+				require.Equal(t, exitError, code)
+				require.Contains(t, errBuf.String(), "NOT re-run", "the operator must be told to re-run it")
+			} else {
+				require.EqualValues(t, 1, reached.Load(), "a read-only command is retried once")
+			}
+		})
+	}
+}

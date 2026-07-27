@@ -1,0 +1,51 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+linters:
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - canonicalheader
+    - copyloopvar
+    - decorder
+    - durationcheck
+    - errcheck
+    - errchkjson
+    - ginkgolinter
+    - gocheckcompilerdirectives
+    - gochecksumtype
+    - goheader
+    - gomodguard
+    - goprintffuncname
+    - gosmopolitan
+    - govet
+    - grouper
+    - iface
+    - importas
+    - ineffassign
+    - loggercheck
+    - mirror
+    - misspell
+    - nolintlint
+    - nosprintfhostport
+    - reassign
+    - rowserrcheck
+    - sloglint
+    - spancheck
+    - sqlclosecheck
+    - staticcheck
+    - testableexamples
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - wastedassign
+    - whitespace
+    - zerologlint

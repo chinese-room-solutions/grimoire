@@ -1,0 +1,1091 @@
+package ui
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/chinese-room-solutions/mass-sdk/uikit"
+)
+
+templ grimoirePage(settingsHTML, theme string, st State) {
+	<div
+		id="app-grimoire"
+		class="flex flex-col"
+		style="height:100vh;overflow:hidden"
+		data-signals={ initialSignals(st) }
+	>
+		@templ.Raw(styleBlock)
+
+		<!-- Signals are declared in the data-signals blob above (initialSignals) so
+		     booleans/numbers keep real types — a hidden input would make them strings
+		     ("false" is truthy in a data-attr:loading expression and would pin every
+		     button on). The Vault-tab controls (vault path, models, concurrency) write
+		     their own signals via data-on:sl-change in the templ; the signals JS still
+		     drives directly (query, paths, session edits, concurrency-for-importLimit)
+		     remain hidden data-bind inputs below. -->
+		<input type="hidden" data-bind="gQuery" value=""/>
+		<input type="hidden" data-bind="gSeq" value="0"/>
+		<input type="hidden" data-bind="gPreviewPath" value=""/>
+		<input type="hidden" data-bind="gNotePath" value=""/>
+		<input type="hidden" data-bind="gProps" value=""/>
+		<input type="hidden" data-bind="gBody" value=""/>
+		<input type="hidden" data-bind="gRenamePath" value=""/>
+		<input type="hidden" data-bind="gNewNote" value=""/>
+		<input type="hidden" data-bind="gFolderPath" value=""/>
+		<input type="hidden" data-bind="gNewFolder" value=""/>
+		<input type="hidden" data-bind="gNewParent" value=""/>
+		<!-- Multi-select batch delete + drag-move: JS writes the selected/dragged
+		     ids/paths as JSON arrays (and a move target), then fires a trigger below. -->
+		<input type="hidden" data-bind="gBatchIDs" value="[]"/>
+		<input type="hidden" data-bind="gBatchPaths" value="[]"/>
+		<input type="hidden" data-bind="gBatchFolders" value="[]"/>
+		<input type="hidden" data-bind="gMoveTarget" value=""/>
+		<input type="hidden" data-bind="gChunkCount" value={ fmt.Sprint(st.ChunkCount) }/>
+		<!-- gConcurrency is kept as a hidden data-bind input because JS reads it
+		     (importLimit); the visible Vault-tab number input writes the signal. -->
+		<input type="hidden" data-bind="gConcurrency" value={ fmt.Sprint(st.IndexConcurrency) }/>
+		<input type="hidden" data-bind="gStatus" value=""/>
+		<input type="hidden" data-bind="gSessionID" value="0"/>
+		<input type="hidden" data-bind="gTurnID" value="0"/>
+		<input type="hidden" data-bind="gSessionTitle" value=""/>
+		<input type="hidden" data-bind="gOpenURL" value=""/>
+		<!-- Runnable code blocks: JS writes the clicked block's language, source and
+		     id (and the note's path for the per-note kernel session), then fires the
+		     run trigger. gClosePath carries a closed note's path to its close trigger. -->
+		<input type="hidden" data-bind="gRunLang" value=""/>
+		<input type="hidden" data-bind="gRunCode" value=""/>
+		<input type="hidden" data-bind="gRunBlock" value=""/>
+		<input type="hidden" data-bind="gClosePath" value=""/>
+		<!-- Selected trash ids (JSON array) for the bulk restore/delete actions. -->
+		<input type="hidden" data-bind="gTrashIDs" value="[]"/>
+
+		<!-- Hidden Datastar triggers (clicked by JS) -->
+		<button id="g-session-clear-trigger" style="display:none" data-on:click="@post('api/sessions/clear')"></button>
+		<button id="g-session-open-trigger" style="display:none" data-on:click="@post($gOpenURL)"></button>
+		<button id="g-session-rename-trigger" style="display:none" data-on:click="@post('api/sessions/rename')"></button>
+		<button id="g-session-delete-trigger" style="display:none" data-on:click="@post('api/sessions/delete')"></button>
+		<button id="g-turn-delete-trigger" style="display:none" data-on:click="@post('api/sessions/turn/delete')"></button>
+		<button id="g-sessions-delete-many-trigger" style="display:none" data-on:click="@post('api/sessions/delete-many')"></button>
+		<button id="g-sessions-trigger" style="display:none" data-on:click="@get('api/sessions/render')"></button>
+		<button id="g-files-trigger" style="display:none" data-on:click="@get('api/files/render')"></button>
+		<button id="g-note-create-trigger" style="display:none" data-on:click="@post('api/note/create')"></button>
+		<button id="g-note-rename-trigger" style="display:none" data-on:click="@post('api/note/rename')"></button>
+		<button id="g-note-delete-trigger" style="display:none" data-on:click="@post('api/note/delete')"></button>
+		<button id="g-note-delete-many-trigger" style="display:none" data-on:click="@post('api/note/delete-many')"></button>
+		<button id="g-move-trigger" style="display:none" data-on:click="@post('api/move')"></button>
+		<button id="g-folder-create-trigger" style="display:none" data-on:click="@post('api/folder/create')"></button>
+		<button id="g-folder-rename-trigger" style="display:none" data-on:click="@post('api/folder/rename')"></button>
+		<button id="g-folder-delete-trigger" style="display:none" data-on:click="@post('api/folder/delete')"></button>
+		<button id="g-search-trigger" style="display:none" data-on:click="@post('action/search')"></button>
+		<button id="g-preview-trigger" style="display:none" data-on:click="@post('action/preview')"></button>
+		<button id="g-props-save-trigger" style="display:none" data-on:click="@post('api/note/properties')"></button>
+		<button id="g-body-save-trigger" style="display:none" data-on:click="@post('api/note/body')"></button>
+		<button id="g-runblock-trigger" style="display:none" data-on:click="@post('action/run-block')"></button>
+		<button id="g-runabove-trigger" style="display:none" data-on:click="@post('action/run-above')"></button>
+		<button id="g-runsave-trigger" style="display:none" data-on:click="@post('action/run-save')"></button>
+		<button id="g-rundiscard-trigger" style="display:none" data-on:click="@post('action/run-discard')"></button>
+		<button id="g-runsaveall-trigger" style="display:none" data-on:click="@post('action/run-save-all')"></button>
+		<button id="g-rundiscardall-trigger" style="display:none" data-on:click="@post('action/run-discard-all')"></button>
+		<button id="g-rundelete-trigger" style="display:none" data-on:click="@post('action/run-delete')"></button>
+		<button id="g-rundeleteall-trigger" style="display:none" data-on:click="@post('action/run-delete-all')"></button>
+		<button id="g-note-close-trigger" style="display:none" data-on:click="@post('api/note/close')"></button>
+		<!-- Empty trash: no id, so a single trigger. Per-row restore/delete post with
+		     the id inlined into the URL (no client signal to race). The many-actions
+		     post a JSON list of selected trash ids (gTrashIDs). -->
+		<button id="g-trash-empty-trigger" style="display:none" data-on:click="@post('api/trash/empty-ui')"></button>
+		<button id="g-trash-restore-many-trigger" style="display:none" data-on:click="@post('api/trash/restore-many-ui')"></button>
+		<button id="g-trash-delete-many-trigger" style="display:none" data-on:click="@post('api/trash/delete-many-ui')"></button>
+		<!-- Open/leave the trash view: each re-renders #g-files with the trash list
+		     or the vault tree. The toolbar Trash toggle fires these. -->
+		<button id="g-trash-open-trigger" style="display:none" data-on:click="@get('api/trash/render')"></button>
+		<button id="g-trash-close-trigger" style="display:none" data-on:click="@get('api/files/render')"></button>
+
+		<!-- Body: sidebar + main, side by side. The shared bottom bar (icons + input)
+		     sits below this, full width. -->
+		<div id="g-body" class="flex" style="flex:1;min-height:0">
+		<!-- ── Sidebar: tabbed (Sessions / Files), resizable, MASS-style ── -->
+		<aside id="g-sidebar" class="g-sidebar flex flex-col flex-shrink-0">
+			<div class="g-side-head flex items-center gap-2">
+				<!-- The book is a Home button. The clickable/hover target is the wrapping
+				     span (a plain element reliably shows the pointer cursor); the inner
+				     sl-icon is inert so its shadow SVG doesn't swallow the cursor. -->
+				<span id="g-home" class="g-home" title="Home">
+					<sl-icon name="book-half" class="g-brand-icon" style="font-size:1.1rem;color:var(--mass-accent)"></sl-icon>
+				</span>
+				<span class="g-brand">Grimoire</span>
+				<!-- Obsidian-style sidebar collapse: folds the panel to a slim rail; the
+				     icon flips to point the other way (and the title says expand). -->
+				<sl-icon-button id="g-sidebar-toggle" class="g-sidebar-toggle" name="layout-sidebar-inset" title="Collapse sidebar (Ctrl+B)"></sl-icon-button>
+			</div>
+
+			<sl-tab-group id="g-tabs" class="g-tabs flex flex-col flex-1" style="min-height:0">
+				<sl-tab slot="nav" panel="sessions">Sessions</sl-tab>
+				<sl-tab slot="nav" panel="files">Files</sl-tab>
+
+				<!-- Sessions tab: new-session button + the session history list. -->
+				<sl-tab-panel name="sessions" class="g-tab-panel">
+					<div class="g-sessions-section flex flex-col" style="height:100%">
+						<sl-button id="g-new-session" class="g-new-session" size="small" variant="primary" style="width:100%">
+							<sl-icon slot="prefix" name="plus-lg"></sl-icon>
+							New session
+						</sl-button>
+						<sl-input id="g-session-filter" size="small" clearable autocomplete="off" placeholder="Filter sessions (any word order)…">
+							<sl-icon slot="prefix" name="search"></sl-icon>
+						</sl-input>
+						<div id="g-sessions" class="g-sessions g-sessions-tab" if st.HasVault { data-init="@get('api/sessions/render')" }></div>
+						<!-- Multi-select action bar, pinned below the list (shown by JS). -->
+						<div id="g-sessions-actions" class="g-actions">
+							<span class="g-actions-count"></span>
+							<sl-button class="g-actions-del" size="small" variant="danger" pill>Delete</sl-button>
+							<sl-icon-button class="g-actions-clear" name="x-lg" title="Clear selection"></sl-icon-button>
+						</div>
+					</div>
+				</sl-tab-panel>
+
+				<!-- Files tab: an Obsidian-style icon toolbar (new note, new folder,
+				     sort, collapse all), a name filter, and the vault folder tree;
+				     click a note to preview it, double-click to open it pinned,
+				     right-click to rename. -->
+				<sl-tab-panel name="files" class="g-tab-panel">
+					<div id="g-files-section" class="g-files-section flex flex-col" style="height:100%">
+						<div class="g-files-tools">
+							<sl-icon-button id="g-new-note" name="file-earmark-plus" title="New note"></sl-icon-button>
+							<sl-icon-button id="g-new-folder" name="folder-plus" title="New folder"></sl-icon-button>
+							<sl-icon-button id="g-files-import" name="file-earmark-arrow-up" title="Import notes (.md, .txt, .html, .docx, .odt, .pdf)"></sl-icon-button>
+							<sl-icon-button id="g-files-sort" name="sort-down-alt" title="Sort: A → Z"></sl-icon-button>
+							<sl-icon-button id="g-files-collapse" name="chevron-bar-contract" title="Collapse all"></sl-icon-button>
+							<!-- Trash toggle: swaps the tree for the trash browser. -->
+							<sl-icon-button id="g-files-trash" name="trash" title="Trash"></sl-icon-button>
+						</div>
+						<sl-input id="g-files-filter" size="small" clearable autocomplete="off" placeholder="Filter notes (any word order)…">
+							<sl-icon slot="prefix" name="search"></sl-icon>
+						</sl-input>
+						<!-- The tree doubles as a drop target: drag .md / .txt / .html /
+						     .docx / .odt / .pdf files onto it to import them as notes — HTML,
+						     Word/OpenDocument and PDFs are converted to Markdown (the overlay
+						     shows while dragging). The
+						     toolbar's import button opens the same picker. The overlay is a
+						     sibling of the tree inside this wrap so it covers the tree area
+						     exactly (inset:0) only while a drag is active. -->
+						<div class="g-files-tree-wrap">
+							<!-- #g-files holds the vault tree, or — in trash mode — the trash
+							     list (the same file view, just "opened in a special folder"),
+							     swapped in place by the toolbar Trash toggle. -->
+							<div id="g-files" class="g-files" if st.HasVault { data-init="@get('api/files/render')" }></div>
+							<div id="g-files-drop" class="g-files-drop">Drop .md, .txt, .html, .docx, .odt or .pdf files to import</div>
+						</div>
+						<!-- Footer status zone, pinned below the tree: the import progress /
+						     failed-files notice and the multi-select action bar both live here. -->
+						<div id="g-files-status" class="g-files-status">
+							<div class="g-files-status-row">
+								<sl-spinner class="g-files-status-spinner"></sl-spinner>
+								<span id="g-files-status-text" class="g-files-status-text"></span>
+								<sl-icon-button id="g-files-status-close" class="g-files-status-close" name="x" title="Dismiss"></sl-icon-button>
+							</div>
+							<div id="g-files-status-bar" class="g-files-status-bar">
+								<div id="g-files-status-fill" class="g-files-status-fill"></div>
+							</div>
+						</div>
+						<!-- One action bar for both the tree and the trash (they share #g-files).
+						     Restore shows only in trash mode (CSS, under g-files-trashing); in
+						     trash mode Delete means permanent removal. -->
+						<div id="g-files-actions" class="g-actions">
+							<span class="g-actions-count"></span>
+							<sl-button class="g-actions-restore" size="small" variant="primary" pill>Restore</sl-button>
+							<sl-button class="g-actions-del" size="small" variant="danger" pill>Delete</sl-button>
+							<sl-icon-button class="g-actions-clear" name="x-lg" title="Clear selection"></sl-icon-button>
+						</div>
+						<!-- Empty trash: a service action in the footer zone, shown only in
+						     trash mode (CSS, under g-files-trashing). -->
+						<div id="g-files-trash-service" class="g-trash-service">
+							<sl-button id="g-files-trash-empty" size="small" variant="default" pill>Empty trash</sl-button>
+						</div>
+						<input type="file" id="g-files-input" accept=".md,.markdown,.txt,.html,.htm,.docx,.odt,.pdf" multiple style="display:none"/>
+					</div>
+				</sl-tab-panel>
+
+			</sl-tab-group>
+		</aside>
+
+		<!-- Drag to resize the sidebar (MASS pattern). -->
+		<div id="g-resize-handle" class="g-resize-handle">
+			<div id="g-resize-bar" class="g-resize-bar"></div>
+		</div>
+
+		<!-- ── Main: conversation / results + input bar (Claude-style) ── -->
+		<main id="g-main" class="flex flex-col" style="flex:1;min-width:0;position:relative">
+			if !st.HasVault {
+				<!-- No vault bound: the empty state covers the workspace. Opening one
+				     binds it to this instance in-process and the page reloads into it. -->
+				@vaultEmptyState(st.Recents)
+			}
+			<!-- Workspace tab strip: open notes / sessions / the graph. JS renders the
+			     tabs into #g-tabstrip-tabs; only the focused tab's content is shown in
+			     the shared panel below. The "+" opens a blank scratch tab (the empty
+			     search prompt) that becomes a session once you search — it commits
+			     nothing by itself. There's always at least one tab open, so the strip
+			     is always present. -->
+			<div class="g-tabstrip">
+				<div id="g-tabstrip-tabs" class="g-tabstrip-tabs"></div>
+				<sl-icon-button id="g-tab-new" class="g-tab-new" name="plus-lg" title="New tab"></sl-icon-button>
+			</div>
+
+			<!-- Panel area below the strip. position:relative so the preview/graph
+			     overlays (inset:0) cover only this area, NOT the tab strip above it. -->
+			<div id="g-panel" class="g-panel">
+			<!-- Search tuning bar, peer of the graph head. Sits above the stream so it
+			     shows only for the session view (the preview/graph overlays cover it).
+			     The sliders write their signals directly; the next search picks them up
+			     (no live re-run, so the session history stays clean). -->
+			<div class="g-search-head">
+				<span class="g-search-title">Search</span>
+				<div class="g-graph-controls">
+					<label class="g-graph-ctl">
+						<span class="g-muted g-ctl-tip" title="How many matching notes to return. Higher shows more, including weaker matches.">Results</span>
+						<input type="range" id="g-search-k" class="g-range" min="1" max="30" step="1" value="10"
+							data-on:input="$gSearchK = evt.target.value"/>
+						<span class="g-muted g-graph-ctl-val" data-text="$gSearchK"></span>
+					</label>
+					<label class="g-graph-ctl">
+						<span class="g-muted g-ctl-tip" title="Minimum closeness a note must have to the query. Higher = stricter, fewer but more relevant results.">Min relevance</span>
+						<input type="range" id="g-search-minsim" class="g-range" min="0" max="0.95" step="0.05" value="0.5"
+							data-on:input="$gSearchMinSim = evt.target.value"/>
+						<span class="g-muted g-graph-ctl-val" data-text="$gSearchMinSim"></span>
+					</label>
+				</div>
+			</div>
+			<div id="g-stream" class="g-stream flex-1">
+				<!-- Conversation: turns append here; opening a session replaces the
+				     whole panel, a new/empty session shows the empty-state prompt. -->
+				@ConversationPanel(nil)
+			</div>
+
+			<!-- Note preview: slides over the stream when a source is clicked. -->
+			<div id="g-preview" class="g-preview" data-show="$gPreviewOpen">
+				<div class="g-preview-head">
+					<div class="g-preview-nav">
+						<sl-icon-button id="g-preview-back" name="arrow-left" title="Back" style="font-size:1rem"></sl-icon-button>
+						<sl-icon-button id="g-preview-fwd" name="arrow-right" title="Forward" style="font-size:1rem"></sl-icon-button>
+					</div>
+					<span class="g-preview-title">
+						<span data-text="$gPreviewTitle"></span><span id="g-preview-section" class="g-preview-section"></span>
+					</span>
+					<!-- Modified/created dates for the open note, patched per preview. -->
+					<span id="g-preview-dates" class="g-preview-dates"></span>
+					<!-- Header action icons, grouped so they sit close together. -->
+					<span class="g-preview-actions">
+						<!-- Run all runnable blocks in this note top-to-bottom, into the shared
+						     session (like running a whole notebook). Shown only when the note has
+						     at least one runnable block (JS toggles g-has-runnable). -->
+						<sl-icon-button id="g-runall-btn" class="g-runall-btn" name="play-fill" title="Run all blocks" style="font-size:1.05rem"></sl-icon-button>
+						<!-- Discard all unsaved re-runs in this note: revert each block to its
+						     saved output. Shown only while a block has unsaved output (the same
+						     g-has-unsaved class that reveals Save all). -->
+						<sl-icon-button id="g-rundiscardall-btn" class="g-rundiscardall-btn" name="arrow-counterclockwise" title="Discard all unsaved results" style="font-size:1rem"></sl-icon-button>
+						<!-- Save all unsaved run results in this note. Shown only while a
+						     block has unsaved output (JS toggles g-has-unsaved on the preview). -->
+						<sl-icon-button id="g-runsaveall-btn" class="g-runsaveall-btn" name="floppy" title="Save all run results" style="font-size:1rem"></sl-icon-button>
+						<!-- Remove all run results in this note. Shown only while the note has
+						     stored output (JS toggles g-has-results on the preview). -->
+						<sl-icon-button id="g-rundeleteall-btn" class="g-rundeleteall-btn" name="trash" title="Remove all run results" style="font-size:1rem"></sl-icon-button>
+						<sl-icon-button id="g-edit-toggle" name="pencil" title="Edit note" style="font-size:1rem"></sl-icon-button>
+						<sl-icon-button name="x-lg" class="g-preview-close" data-on:click="$gPreviewOpen = false" style="font-size:1rem"></sl-icon-button>
+					</span>
+				</div>
+				<!-- In-note find bar (Ctrl+F while the preview is open). Searches and
+				     highlights only the note body, not the rest of the page. -->
+				<div id="g-find" class="g-find">
+					<input id="g-find-input" type="text" placeholder="Find in note…" spellcheck="false"/>
+					<span id="g-find-count" class="g-find-count"></span>
+					<sl-icon-button id="g-find-prev" name="chevron-up" title="Previous (Shift+Enter)"></sl-icon-button>
+					<sl-icon-button id="g-find-next" name="chevron-down" title="Next (Enter)"></sl-icon-button>
+					<sl-icon-button id="g-find-close" name="x" title="Close (Esc)"></sl-icon-button>
+				</div>
+				<div id="g-preview-body" class="g-preview-body markdown-body"></div>
+				<!-- Body editor (raw Markdown), shown when editing. The textarea holds
+				     the note's body (frontmatter excluded — that has its own panel);
+				     Save writes it, Ctrl+S too. -->
+				<div id="g-editor" class="g-editor">
+					<textarea id="g-editor-text" class="g-editor-text" spellcheck="false"></textarea>
+					<div class="g-editor-bar">
+						<span id="g-editor-dirty" class="g-editor-dirty"></span>
+						<button type="button" id="g-editor-save" class="g-btn-primary">Save</button>
+						<button type="button" id="g-editor-cancel" class="g-btn">Cancel</button>
+					</div>
+				</div>
+			</div>
+
+			<!-- Similarity graph: a full-panel canvas overlay (peer of the preview)
+			     shown while the Graph tab's view is open. The canvas is drawn and
+			     simulated entirely in JS; clicking a node opens that note. Visibility
+			     is a plain class (g-graph-open) the workspace toggles directly — not a
+			     Datastar data-show — so showing it is synchronous and deterministic
+			     (data-show's reactive display churn left the overlay flickering hidden
+			     on launch). Seeded open server-side when the restored tab is the graph. -->
+			<div id="g-graph" class={ "g-graph", templ.KV("g-graph-open", st.GraphOpen) }>
+				<div class="g-graph-head">
+					<span class="g-graph-title">Similarity graph</span>
+					<span id="g-graph-count" class="g-graph-count"></span>
+					<!-- k / min-similarity controls live on the overlay (the graph is a
+					     main-panel tab now, not a sidebar tab). Each writes its signal and
+					     nudges the reload trigger; the canvas re-fetches /api/graph. -->
+					<div class="g-graph-controls">
+						<!-- Title filter: dims everything except matching nodes and their
+						     direct neighbours. Client-side only (no refetch). -->
+						<sl-input id="g-graph-filter" class="g-graph-filter" size="small" clearable
+							placeholder="Filter by title" autocomplete="off">
+							<sl-icon slot="prefix" name="search"></sl-icon>
+						</sl-input>
+						<label class="g-graph-ctl">
+							<span class="g-muted g-ctl-tip" title="Links kept per note — how many of its closest neighbours to draw. Higher = denser graph.">Neighbours</span>
+							<input type="range" id="g-graph-k" class="g-range" min="1" max="20" step="1" value="6"
+								data-on:input="$gGraphK = evt.target.value"
+								data-on:change="document.getElementById('g-graph-reload').click()"/>
+							<span class="g-muted g-graph-ctl-val" data-text="$gGraphK"></span>
+						</label>
+						<label class="g-graph-ctl">
+							<span class="g-muted g-ctl-tip" title="Minimum closeness for two notes to be linked. Higher = fewer, stronger links.">Min similarity</span>
+							<input type="range" id="g-graph-minsim" class="g-range" min="0" max="0.95" step="0.05" value="0.5"
+								data-on:input="$gGraphMinSim = evt.target.value"
+								data-on:change="document.getElementById('g-graph-reload').click()"/>
+							<span class="g-muted g-graph-ctl-val" data-text="$gGraphMinSim"></span>
+						</label>
+					</div>
+					<sl-icon-button name="x-lg" class="g-graph-close" style="font-size:1rem"></sl-icon-button>
+				</div>
+				<canvas id="g-graph-canvas" class="g-graph-canvas"></canvas>
+				<div id="g-graph-empty" class="g-graph-empty">No notes to map yet — index a vault first.</div>
+				<div id="g-graph-loading" class="g-graph-loading">
+					<div class="g-graph-dots"><span></span><span></span><span></span></div>
+				</div>
+			</div>
+			</div><!-- /#g-panel -->
+		</main>
+		</div><!-- /#g-body -->
+
+		<!-- ── Shared bottom bar: app icons on the left, the search input on the
+		     right, spanning the full window width (not part of the sidebar). ── -->
+		<div id="g-bottombar" class="g-bottombar">
+			<div class="g-bottombar-icons">
+				<!-- Theme picker: a palette dropdown listing every registered theme
+				     (Carbon/Cream built-ins + any pluggable ones). initThemePicker
+				     (grimoire.js) applies the pick live (massSetTheme), notifies the
+				     canvas graph via the grimoire:theme event, and persists it via
+				     api/settings. The gear's Theme select stays hidden since this covers
+				     it. Checked state is seeded here for first paint and synced on select. -->
+				<sl-dropdown id="g-theme-picker" placement="top-start" hoist>
+					<sl-icon-button slot="trigger" class="g-foot-btn" name="palette" title="Theme"></sl-icon-button>
+					<sl-menu>
+						for _, ti := range uikit.Themes() {
+							<sl-menu-item type="checkbox" value={ string(ti.Name) } checked?={ string(ti.Name) == theme }>{ ti.Label }</sl-menu-item>
+						}
+					</sl-menu>
+				</sl-dropdown>
+				@templ.Raw(settingsHTML)
+				if st.HasVault {
+					@vaultMenu(st)
+				}
+				<sl-icon-button id="g-shortcuts-btn" class="g-foot-btn" name="keyboard" title="Keyboard shortcuts (?)"></sl-icon-button>
+				<sl-icon-button id="g-open-graph" class="g-foot-btn" name="diagram-3" title="Similarity graph"></sl-icon-button>
+			</div>
+			<!-- Input: an auto-growing textarea (one line at rest, expands up to a cap
+			     then scrolls). Enter searches; Shift+Enter inserts a newline. -->
+			<div class="g-input-row">
+				<sl-textarea
+					id="g-query-input"
+					size="small"
+					rows="1"
+					resize="auto"
+					style="flex:1"
+					placeholder="Search your notes…  (Shift+Enter for a new line)"
+				></sl-textarea>
+				<sl-button id="g-search-btn" size="small" variant="primary" data-attr:loading="$gSearchBusy">Search</sl-button>
+			</div>
+		</div>
+
+		<!-- Hidden trigger: slider/toggle changes click it so JS reloads the graph
+		     with the current mode + $gGraphK / $gGraphMinSim values. -->
+		<button id="g-graph-reload" style="display:none"></button>
+
+		<!-- Delete confirmation for a note or a folder. Deleting touches the real
+		     vault on disk; JS sets the label, the message, and the target path
+		     (a folder delete is recursive, so its message warns about contents). -->
+		<sl-dialog id="g-delete-dialog" label="Delete" class="mass-dialog">
+			<span id="g-delete-body"></span>
+			<sl-button id="g-delete-cancel" slot="footer" variant="default">Cancel</sl-button>
+			<sl-button id="g-delete-confirm" slot="footer" variant="danger">Delete</sl-button>
+		</sl-dialog>
+
+
+		<!-- Keyboard shortcuts reference, opened from the sidebar header (or "?"). -->
+		<sl-dialog id="g-shortcuts-dialog" label="Keyboard shortcuts" class="mass-dialog">
+			@shortcutsDialog()
+		</sl-dialog>
+
+		@templ.Raw(script())
+	</div>
+}
+
+// Hit is one search/source result for display.
+type Hit struct {
+	Path    string
+	Heading string
+	Text    string
+}
+
+// SearchTurn is the shell appended when a search runs: a query bubble and a
+// results block (showing the streaming dots) that SearchResults fills once the
+// hits are ready.
+templ SearchTurn(seq string, query string) {
+	<div class="g-turn">
+		<div class="g-bubble g-bubble-user">{ query }</div>
+		<div id={ fmt.Sprintf("g-results-%s", seq) }>
+			<div class="g-dots"><span></span><span></span><span></span></div>
+		</div>
+	</div>
+}
+
+// SearchResults renders the ranked hits into a search turn's results block.
+templ SearchResults(hits []Hit) {
+	if len(hits) == 0 {
+		<div class="g-muted">No matches.</div>
+	}
+	for _, h := range hits {
+		<div class="g-hit">
+			@previewLink(h.Path, h.Heading, sourceLabel(h))
+			<div class="g-hit-text">{ snippet(h.Text) }</div>
+		</div>
+	}
+}
+
+// RunPanel replaces a code block's output panel (outer) with a fresh, visible
+// running state: the un-hidden panel with a running header (spinner) and an empty
+// body. Patched in when a run starts — this clears any prior output and reveals
+// the panel. Output chunks are appended into the body; the header is replaced by
+// the status footer when the block finishes (clearing the spinner).
+templ RunPanel(blockID, lang string) {
+	<div class={ "g-code-output" } id={ "g-code-output-" + blockID }>
+		<span class="g-run-time" id={ "g-run-time-" + blockID }></span>
+		<div class="g-run-head" id={ "g-run-head-" + blockID }>
+			<sl-spinner class="g-run-spinner"></sl-spinner>
+			<span>Running { lang }…</span>
+		</div>
+		<div class="g-run-body" id={ "g-run-body-" + blockID }></div>
+		<span class="g-run-controls">
+			<span class="g-run-save" id={ "g-run-save-" + blockID }></span>
+			@runDeleteBtn(blockID)
+		</span>
+	</div>
+}
+
+// RunPanelEmpty collapses a block's output panel back to the empty, hidden state —
+// used when its saved output is removed, so the panel disappears until the next
+// run. Mirrors the no-output panel the renderer emits for a never-run block.
+templ RunPanelEmpty(blockID string) {
+	<div class="g-code-output" id={ "g-code-output-" + blockID } hidden></div>
+}
+
+// runDeleteBtn is the per-block "remove output" trash, shown in the panel's
+// corner controls whenever the panel has output. Clicking removes the block's
+// saved result and collapses the panel.
+templ runDeleteBtn(blockID string) {
+	<button type="button" class="g-run-del-btn" title="Remove this output" aria-label="Remove this output" data-g-block={ blockID }>
+		<sl-icon name="trash"></sl-icon>
+	</button>
+}
+
+// RunSaveState fills a panel's save slot (#g-run-save-<id>). A first-ever run is
+// saved automatically, so its slot stays empty (nothing to save). A later run
+// over an already-saved block is unsaved: the slot shows a single save icon
+// pinned to the panel's bottom-right corner that commits the shown output as the
+// new saved result. Patched in when a run finishes; rendered empty for a
+// re-hydrated (already-saved) block.
+templ RunSaveState(blockID string, saved bool) {
+	<span class="g-run-save" id={ "g-run-save-" + blockID }>
+		if !saved {
+			<button type="button" class="g-run-discard-btn" title="Discard — drop this run and keep the saved output" aria-label="Discard this output" data-g-block={ blockID }>
+				<sl-icon name="arrow-counterclockwise"></sl-icon>
+			</button>
+			<button type="button" class="g-run-save-btn" title="Unsaved — click to keep this output when you reopen the note" aria-label="Save this output" data-g-block={ blockID }>
+				<sl-icon name="floppy"></sl-icon>
+			</button>
+		}
+	</span>
+}
+
+// RunResultPanel paints a block's panel from its last persisted run, so
+// reopening a note shows the previous output without re-running. It mirrors the
+// shape a live run leaves behind: the top-right run time, the status footer (in
+// place of the running header), and the saved output items in the body. Rendered
+// server-side into the note on open (not streamed), so it carries the final
+// state directly rather than the spinner.
+templ RunResultPanel(blockID string, res RunResult) {
+	<div class={ "g-code-output" } id={ "g-code-output-" + blockID }>
+		@RunTime(blockID, res.RanAt)
+		@RunStatus(blockID, res.ExitCode, res.DurMS, res.Kernel)
+		<div class="g-run-body" id={ "g-run-body-" + blockID }>
+			for _, it := range res.Items {
+				@runItem(it)
+			}
+		</div>
+		<span class="g-run-controls">
+			<span class="g-run-save" id={ "g-run-save-" + blockID }></span>
+			@runDeleteBtn(blockID)
+		</span>
+	</div>
+}
+
+// runItem renders one output item by its MIME type. Text (today's only kind) is
+// an inline span like a streamed chunk; images and HTML render once a kernel
+// emits them — same persisted shape, no schema change. An unknown type falls back
+// to showing the data as text so nothing is silently dropped.
+templ runItem(it RunItem) {
+	switch it.MIME {
+		case MIMEPNG:
+			<img class="g-run-img" src={ "data:" + MIMEPNG + ";base64," + it.Data } alt="run output"/>
+		case MIMESVG:
+			@templ.Raw(it.Data)
+		case MIMEHTML:
+			@templ.Raw(it.Data)
+		default:
+			<span class="g-run-out">{ it.Data }</span>
+	}
+}
+
+// RunPanelMessage replaces the output panel (outer) with a single muted message —
+// used when a block can't run (no kernel, or the interpreter isn't installed)
+// rather than streaming output.
+templ RunPanelMessage(blockID, message string) {
+	<div class={ "g-code-output" } id={ "g-code-output-" + blockID }>
+		<div class="g-muted">{ message }</div>
+	</div>
+}
+
+// RunChunk is one piece of streamed output, appended to the panel body. stdout
+// and stderr are merged in write order by the runner, so chunks are shown as one
+// stream. Whitespace is preserved by CSS (the body is pre-wrap); templ escapes the
+// text.
+templ RunChunk(text string) {
+	<span class="g-run-out">{ text }</span>
+}
+
+// RunStatus replaces the running header (#g-run-head-<id>) when a block finishes:
+// a tick or cross with the exit code and duration, then the kernel that ran it,
+// clearing the spinner. A zero exit reads as success.
+templ RunStatus(blockID string, code, durMS int, kernel string) {
+	<div class={ "g-run-status", templ.KV("g-run-fail", code != 0) } id={ "g-run-head-" + blockID }>
+		if code == 0 {
+			<sl-icon name="check-lg"></sl-icon>
+		} else {
+			<sl-icon name="x-lg"></sl-icon>
+		}
+		<span>exit { strconv.Itoa(code) } · { strconv.Itoa(durMS) } ms</span>
+		if kernel != "" {
+			<span class="g-run-kernel">· { kernel }</span>
+		}
+	</div>
+}
+
+// RunTime replaces the panel's top-right time slot (#g-run-time-<id>) when a
+// block finishes, showing when it ran as a short relative label ("just now", "2h
+// ago", then a calendar date once it's old). The full timestamp is in the
+// tooltip. Matches the relative/absolute date pattern used in the preview header
+// and session list.
+templ RunTime(blockID string, at time.Time) {
+	<span class="g-run-time" id={ "g-run-time-" + blockID } title={ FullDate(at) }>{ RelativeDate(at) }</span>
+}
+
+// previewLink is a clickable source label that opens the note preview. The JS
+// preview navigator (initPreview) delegates clicks via the data-note attribute,
+// so opening here goes through the same history stack as wikilink clicks. When
+// the result came from a specific section, data-heading carries that heading so
+// the preview scrolls to it.
+templ previewLink(path, heading, label string) {
+	<button type="button" class="g-hit-src g-preview-link" data-note={ path } data-heading={ heading }>{ label }</button>
+}
+
+// Preview renders a note for the preview panel: an always-editable properties
+// panel (like Obsidian's Properties — no edit mode, changes auto-save), then the
+// Markdown body as HTML. Always renders, even with no properties, so a note
+// without frontmatter can still have some added.
+templ Preview(source, notePath string) {
+	{{ props, rawBody, bodyHTML := RenderNote(source, notePath) }}
+	<div id="g-props" class="g-props">
+		<div class="g-props-list">
+			for _, p := range props {
+				@propRow(p)
+			}
+		</div>
+		<button type="button" class="g-props-add">
+			<sl-icon name="plus-lg"></sl-icon>
+			Add property
+		</button>
+	</div>
+	<!-- Raw Markdown body, stashed for the editor to load (a textarea preserves
+	     it verbatim, newlines and all). -->
+	<textarea id="g-raw-body" hidden>{ rawBody }</textarea>
+	@templ.Raw(bodyHTML)
+}
+
+// NoteDates is the open note's modification and (where the OS exposes it) creation
+// date, shown in the preview header beside the title. Patched into #g-preview-dates
+// per preview; each date has a precise tooltip and a zero time is omitted, so a
+// platform without a birth time simply shows "Modified".
+templ NoteDates(modified, created time.Time) {
+	<span id="g-preview-dates" class="g-preview-dates">
+		if !modified.IsZero() {
+			<span title={ "Modified " + FullDate(modified) }>Modified { RelativeDate(modified) }</span>
+		}
+		if !created.IsZero() {
+			<span title={ "Created " + FullDate(created) }>Created { AbsoluteDate(created) }</span>
+		}
+	</span>
+}
+
+// propRow is one editable property: a type icon, an editable key, value chips
+// (list) or a single editable value (scalar), and an add-value input. Mutations
+// are auto-saved by initProps. A multi-value property always shows chips so tags
+// stay list-like; a single value shows one chip too (uniform, simplest).
+templ propRow(p Property) {
+	<div class="g-prop" data-key={ p.Key }>
+		<sl-icon name={ propIcon(p.Key) } class="g-prop-icon"></sl-icon>
+		<input class="g-prop-key" value={ p.Key } spellcheck="false"/>
+		<div class="g-prop-vals">
+			for _, v := range p.Values {
+				@propChip(v)
+			}
+			<input class="g-prop-addval" placeholder="add value…" spellcheck="false"/>
+		</div>
+		<sl-icon-button class="g-prop-del" name="x" title="Remove property"></sl-icon-button>
+	</div>
+}
+
+// propChip is one removable value, carrying its text in data-val.
+templ propChip(v string) {
+	<span class="g-chip" data-val={ v }>
+		<span class="g-chip-text">{ v }</span>
+		<button type="button" class="g-chip-del" title="Remove">×</button>
+	</span>
+}
+
+// Notice is a short muted message (an error or empty-state line) patched into a
+// turn or the preview panel.
+templ Notice(msg string) {
+	<div class="g-muted">{ msg }</div>
+}
+
+// shortcut is one keyboard shortcut: the keys to press and what it does. Keys is
+// a sequence of tokens rendered as <kbd> chips joined by "+"; a token of "then"
+// renders as a separator for two-step shortcuts (e.g. Esc then Esc).
+type shortcut struct {
+	Keys []string
+	Desc string
+}
+
+// shortcutGroup is a titled set of related shortcuts in the reference dialog.
+type shortcutGroup struct {
+	Title string
+	Items []shortcut
+}
+
+// shortcutGroups is the canonical list shown in the keyboard-shortcuts dialog.
+// Keep it in sync with the handlers in grimoire.js.
+var shortcutGroups = []shortcutGroup{
+	{"General", []shortcut{
+		{[]string{"Ctrl", "B"}, "Collapse / expand the sidebar"},
+		{[]string{"?"}, "Show this shortcuts list"},
+	}},
+	{"Search", []shortcut{
+		{[]string{"Enter"}, "Search your notes"},
+		{[]string{"Shift", "Enter"}, "New line in the query"},
+	}},
+	{"Tabs", []shortcut{
+		{[]string{"Ctrl", "N"}, "New session (or note, on the Files tab)"},
+		{[]string{"Ctrl", "W"}, "Close the focused tab"},
+		{[]string{"Ctrl", "Tab"}, "Next tab"},
+		{[]string{"Ctrl", "Shift", "Tab"}, "Previous tab"},
+		{[]string{"Double-click"}, "Pin a preview tab (keep it open)"},
+		{[]string{"Right-click"}, "Close-tabs menu (others / left / right / all)"},
+	}},
+	{"Note preview", []shortcut{
+		{[]string{"Ctrl", "F"}, "Find in the note"},
+		{[]string{"Enter"}, "Next match (in find)"},
+		{[]string{"Shift", "Enter"}, "Previous match (in find)"},
+		{[]string{"Esc"}, "Close the find bar"},
+	}},
+	{"Lists (Sessions / Files)", []shortcut{
+		{[]string{"Click"}, "Preview the note or session (reuses one preview tab)"},
+		{[]string{"Double-click"}, "Open it in its own (pinned) tab"},
+		{[]string{"Right-click"}, "Rename the note, folder, or session"},
+		{[]string{"↑"}, "Move selection up"},
+		{[]string{"↓"}, "Move selection down"},
+		{[]string{"Enter"}, "Open the selected note or session (pinned)"},
+		{[]string{"→"}, "Expand the selected folder"},
+		{[]string{"←"}, "Collapse the selected folder"},
+		{[]string{"Ctrl", "Click"}, "Add / remove from a multi-selection"},
+		{[]string{"Shift", "Click"}, "Select a range"},
+		{[]string{"Shift", "↑ / ↓"}, "Extend the multi-selection"},
+		{[]string{"Ctrl", "A"}, "Select all in the list"},
+		{[]string{"Delete"}, "Delete the selection (or hovered row)"},
+		{[]string{"Esc"}, "Drop the selection"},
+	}},
+	{"Editing", []shortcut{
+		{[]string{"Ctrl", "S"}, "Save the note body"},
+		{[]string{"Esc"}, "Cancel editing"},
+		{[]string{"Ctrl", "Z"}, "Undo a property change"},
+		{[]string{"Ctrl", "Y"}, "Redo a property change"},
+	}},
+}
+
+// shortcutsDialog lists the app's keyboard shortcuts, grouped by area. On macOS
+// the JS swaps "Ctrl" chips for "⌘" so the chips match the real modifier.
+templ shortcutsDialog() {
+	<div class="g-shortcuts">
+		for _, g := range shortcutGroups {
+			<div class="g-shortcuts-group">
+				<div class="g-label">{ g.Title }</div>
+				for _, s := range g.Items {
+					<div class="g-shortcut">
+						<span class="g-shortcut-keys">
+							for i, k := range s.Keys {
+								if k == "then" {
+									<span class="g-shortcut-then">then</span>
+								} else {
+									if i > 0 && s.Keys[i-1] != "then" {
+										<span class="g-shortcut-plus">+</span>
+									}
+									<kbd class="g-kbd">{ k }</kbd>
+								}
+							}
+						</span>
+						<span class="g-shortcut-desc">{ s.Desc }</span>
+					</div>
+				}
+			</div>
+		}
+	</div>
+}
+
+// EmptyConversation is the prompt for a fresh or empty session. It hides as soon
+// as the session has content (gHasContent), so a turn appended after it doesn't
+// leave the prompt sitting above the conversation.
+templ EmptyConversation() {
+	<div class="g-empty" data-show="!$gHasContent">
+		<sl-icon name="book-half" style="font-size:2rem;color:var(--mass-text-muted);opacity:0.5"></sl-icon>
+		<div class="g-empty-title">Search your notes</div>
+		<div class="g-muted" style="font-size:0.85rem">Search the notes in your vault.</div>
+	</div>
+}
+
+// vaultMenu is the Vault settings dropdown in the bottom bar — vault path,
+// models, and the index. It mirrors the SDK gear menu's shell (an anchored
+// sl-dropdown panel, same surface/width/spacing) so the two read as one family
+// rather than a dropdown next to a modal. Shoelace opens it on the trigger
+// click, so the controls keep their existing ids/handlers (initVault).
+templ vaultMenu(st State) {
+	<sl-dropdown id="g-vault-menu" placement="bottom-end" hoist>
+		<sl-icon-button id="g-vault-btn" slot="trigger" class="g-foot-btn" name="hdd-stack" title="Vault settings"></sl-icon-button>
+		<div class="g-menu-panel">
+			<div>
+				<span class="g-label">Vault</span>
+				<!-- The bound vault is swapped in-process: switching picks a folder and
+				     binds it to this running instance (the page reloads into it); closing
+				     returns to the empty state. -->
+				<div id="g-vault-current" class="g-vault-current">{ st.Vault }</div>
+				<sl-button id="g-vault-switch" size="small" variant="default" style="width:100%;margin-top:0.35rem">Switch vault…</sl-button>
+				<sl-button id="g-vault-close" size="small" variant="default" style="width:100%;margin-top:0.35rem">Close vault</sl-button>
+			</div>
+			<!-- Each model select loads its option list on init (so the saved value's
+			     label shows) and on open; sl-change writes the signal and posts. No
+			     JS — Datastar owns the value via the sl-change event. -->
+			<div>
+				<span class="g-label">Embedding model</span>
+				<sl-select id="g-model-select" placeholder="Select…" size="small" clearable autocomplete="off" value={ st.EmbedModel } data-init="@get('api/models/render')" data-on:sl-show="@get('api/models/render')" data-on:sl-change="$gModel = evt.target.value; @post('api/model')"></sl-select>
+			</div>
+			<div>
+				<span class="g-label">PDF model</span>
+				<sl-select id="g-convert-model-select" placeholder="Select…" size="small" clearable autocomplete="off" value={ st.ConvertModel } data-init="@get('api/convert-models/render')" data-on:sl-show="@get('api/convert-models/render')" data-on:sl-change="$gConvertModel = evt.target.value; @post('api/convert-model')"></sl-select>
+				<div class="flex items-center justify-between" style="margin-top:0.35rem">
+					<span class="g-muted" style="font-size:0.72rem">Resolution (MP)</span>
+					<sl-input
+						id="g-convert-res-input"
+						type="number"
+						size="small"
+						min="0.1"
+						max="8"
+						step="0.1"
+						style="width:4rem"
+						value={ megapixels(st.ConvertMaxPixels) }
+						data-on:sl-change="$gConvertRes = evt.target.value; @post('api/convert-resolution')"
+						title="Imported PDF pages are downscaled to at most this many megapixels before the PDF model reads them. The default matches the model's training resolution — lower is faster, higher keeps fine print readable."
+					></sl-input>
+				</div>
+				<div class="flex items-center justify-between" style="margin-top:0.35rem">
+					<span class="g-muted" style="font-size:0.72rem">Timeout (min)</span>
+					<sl-input
+						id="g-convert-timeout-input"
+						type="number"
+						size="small"
+						min="1"
+						max="120"
+						step="1"
+						style="width:4rem"
+						value={ fmt.Sprint(st.ConvertPageTimeoutMin) }
+						data-on:sl-change="$gConvertTimeout = evt.target.value; @post('api/convert-timeout')"
+						title="How long one PDF page may take to convert before it is cancelled and the page fails. Raise it for slow hardware or very dense pages."
+					></sl-input>
+				</div>
+			</div>
+			<div>
+				<div class="flex items-center justify-between">
+					<span class="g-label" style="margin:0">Index</span>
+					<span class="g-muted" style="font-size:0.72rem"><span data-text="$gChunkCount"></span> chunks</span>
+				</div>
+				<div class="flex items-center justify-between" style="margin-top:0.35rem">
+					<span class="g-muted" style="font-size:0.72rem">Concurrency</span>
+					<sl-input
+						id="g-concurrency-input"
+						type="number"
+						size="small"
+						min="1"
+						max="32"
+						style="width:4rem"
+						value={ fmt.Sprint(st.IndexConcurrency) }
+						data-on:sl-change="$gConcurrency = evt.target.value; @post('api/concurrency')"
+						title="How many notes are indexed at once — applies to reindex, drag-drop import, and external file changes"
+					></sl-input>
+				</div>
+				<sl-button size="small" variant="primary" style="width:100%;margin-top:0.35rem" data-attr:loading="$gBusy" data-on:click="@post('action/reindex')" title="Re-embed every note from scratch. Indexing is automatic — use this only to rebuild, e.g. after changing the embedding model.">Reindex vault</sl-button>
+				<div class="g-status" data-show="$gStatus !== ''" data-text="$gStatus"></div>
+			</div>
+		</div>
+	</sl-dropdown>
+}
+
+// vaultEmptyState covers the workspace when no vault is bound: a prompt to open
+// one, plus the vaults Grimoire already knows about as a quick-pick list. Opening
+// any of them (or picking a new folder) binds it to this running instance and the
+// page reloads into it — handled by initVault in grimoire.js, which posts to
+// api/open-vault and reloads on success.
+templ vaultEmptyState(recents []VaultRef) {
+	<div id="g-vault-empty" class="g-vault-empty">
+		<sl-icon name="book-half" style="font-size:2.4rem;color:var(--mass-accent);opacity:0.8"></sl-icon>
+		<div class="g-vault-empty-title">Open a vault</div>
+		<div class="g-muted" style="font-size:0.85rem">Choose a folder of Markdown notes to open as a vault.</div>
+		<sl-button id="g-vault-empty-open" size="medium" variant="primary" style="margin-top:0.9rem">Open a vault folder…</sl-button>
+		if len(recents) > 0 {
+			<div class="g-vault-recents">
+				<div class="g-label" style="margin-bottom:0.35rem">Recent vaults</div>
+				for _, v := range recents {
+					<button type="button" class="g-vault-recent" data-vault-path={ v.Path } title={ v.Path }>
+						<sl-icon name="folder2" style="font-size:1rem;color:var(--mass-text-muted)"></sl-icon>
+						<span class="g-vault-recent-name">{ v.Name }</span>
+						<span class="g-vault-recent-path g-muted">{ v.Path }</span>
+					</button>
+				}
+			</div>
+		}
+	</div>
+}
+
+// FileNode is one entry in the vault file tree for display: a folder (with
+// Children), an openable note (IsNote), or a non-note file shown for context.
+type FileNode struct {
+	Name     string
+	Path     string
+	IsDir    bool
+	IsNote   bool
+	Tags     []string
+	Aliases  []string
+	Children []FileNode
+}
+
+// FileTree renders the vault folder tree like Obsidian's explorer: every folder
+// (native <details>, collapsing without JS) and every file. Notes are preview
+// links (data-note); non-note files show greyed and aren't clickable. Rendered
+// into #g-files.
+templ FileTree(nodes []FileNode) {
+	if len(nodes) == 0 {
+		<div class="g-muted" style="padding:0.5rem">This vault is empty.</div>
+	}
+	for _, n := range nodes {
+		if n.IsDir {
+			<details class="g-tree-folder">
+				// Rows are driven by mouse and arrow-key nav (Enter/Delete), not Tab, so
+				// the summary and its hover buttons stay out of the focus order.
+				<summary class="g-tree-row g-tree-folder-row" data-folder={ n.Path } data-name={ n.Name } tabindex="-1" draggable="true">
+					<sl-icon name="chevron-right" class="g-tree-caret"></sl-icon>
+					<sl-icon name="folder" class="g-tree-icon"></sl-icon>
+					<span class="g-tree-name">{ n.Name }</span>
+					<sl-icon-button class="g-row-action g-tree-add g-tree-add-note" name="file-earmark-plus" title="New note here" tabindex="-1"></sl-icon-button>
+					<sl-icon-button class="g-row-action g-tree-add g-tree-add-folder" name="folder-plus" title="New folder here" tabindex="-1"></sl-icon-button>
+					<sl-icon-button class="g-row-action g-tree-add g-tree-del-folder" name="trash" title="Delete folder" tabindex="-1"></sl-icon-button>
+				</summary>
+				<div class="g-tree-children">
+					@FileTree(n.Children)
+				</div>
+			</details>
+		} else if n.IsNote {
+			<div class="g-tree-row g-tree-note g-preview-link" data-note={ n.Path } data-name={ n.Name } data-tags={ strings.Join(n.Tags, " ") } data-aliases={ strings.Join(n.Aliases, " ") } tabindex="-1" draggable="true">
+				<span class="g-tree-caret"></span>
+				<sl-icon name="file-earmark-text" class="g-tree-icon"></sl-icon>
+				<span class="g-tree-name">{ n.Name }</span>
+				<sl-icon-button class="g-row-action g-tree-del" name="trash" title="Delete note" tabindex="-1"></sl-icon-button>
+			</div>
+		} else {
+			<div class="g-tree-row g-tree-other" data-name={ n.Name }>
+				<span class="g-tree-caret"></span>
+				<sl-icon name="file-earmark" class="g-tree-icon"></sl-icon>
+				<span class="g-tree-name">{ n.Name }</span>
+			</div>
+		}
+	}
+}
+
+// TrashItem is one soft-deleted item shown in the Files tab's Trash browser: the
+// id that addresses it, the path it was deleted from, the path it currently lives
+// at in the trash (for previewing a note in place — it's a real note row), its
+// display name, whether it is a folder (trashed as a unit; not previewable), and
+// when it was deleted.
+type TrashItem struct {
+	TrashID      string
+	OriginalPath string
+	TrashPath    string
+	Name         string
+	IsDir        bool
+	DeletedAt    time.Time
+}
+
+// TrashBrowser renders the trash into #g-files in place of the vault tree (the
+// same file view "opened in a special folder"): one row per deleted note — a real
+// note row (g-tree-note + data-note) so preview, open-pinned, multi-select and
+// keyboard nav all work on it — plus per-row restore and delete-forever controls.
+// The controls post directly with the trash id inlined into the URL, so there's no
+// client signal to race (the first click always carries the id). An empty trash
+// shows a muted placeholder.
+templ TrashBrowser(items []TrashItem) {
+	if len(items) == 0 {
+		<div class="g-trash-empty-msg g-muted">Trash is empty.</div>
+	}
+	for _, it := range items {
+		// A note is a real note row (g-tree-note + data-note) so the file view's
+		// preview, open-pinned, multi-select and keyboard nav all work on it —
+		// data-note is its in-trash path, so previewing reads it in place. A folder
+		// (trashed as a unit) isn't previewable, so its row carries no data-note.
+		// data-trash-id keys the restore/delete actions on both.
+		<div
+			class={ "g-trash-row g-tree-row", templ.KV("g-tree-note g-preview-link", !it.IsDir) }
+			if !it.IsDir {
+				data-note={ it.TrashPath }
+			}
+			data-name={ it.Name }
+			data-trash-id={ it.TrashID }
+			title={ "Deleted from " + it.OriginalPath }
+			tabindex="-1"
+		>
+			<span class="g-tree-caret"></span>
+			if it.IsDir {
+				<sl-icon name="folder" class="g-tree-icon"></sl-icon>
+			} else {
+				<sl-icon name="file-earmark-text" class="g-tree-icon"></sl-icon>
+			}
+			<span class="g-trash-name g-tree-name">{ it.Name }</span>
+			if !it.DeletedAt.IsZero() {
+				<span class="g-trash-date" title={ FullDate(it.DeletedAt) }>{ RelativeDate(it.DeletedAt) }</span>
+			}
+			<sl-icon-button class="g-row-action g-trash-restore" name="arrow-counterclockwise" title="Restore"
+				data-on:click={ "@post('api/trash/restore-ui?id=" + it.TrashID + "')" } tabindex="-1"></sl-icon-button>
+			<sl-icon-button class="g-row-action g-trash-del" name="trash" title="Delete permanently" data-trash-name={ it.Name }
+				data-on:click={ "@post('api/trash/delete-ui?id=" + it.TrashID + "')" } tabindex="-1"></sl-icon-button>
+		</div>
+	}
+}
+
+// Session is one session thread in the sidebar list.
+type Session struct {
+	ID        int64
+	Title     string
+	CreatedAt time.Time
+	UpdatedAt time.Time // last use: bumped on every turn.
+}
+
+// SessionList renders the sidebar history; the active session is highlighted.
+// Each row carries its open URL (data-open-url) and id/title; JS single-clicks to
+// preview, double-clicks to open pinned, right-clicks to rename inline, and the ×
+// deletes (with confirmation).
+// A muted "last used" line sits under the title; the created date is in its tooltip.
+templ SessionList(sessions []Session, active int64) {
+	for _, se := range sessions {
+		<div
+			class={ "g-session", templ.KV("g-session-active", se.ID == active) }
+			data-id={ fmt.Sprint(se.ID) }
+			data-title={ se.Title }
+			data-open-url={ fmt.Sprintf("api/sessions/%d/open", se.ID) }
+			tabindex="-1"
+		>
+			<div class="g-session-main">
+				<span class="g-session-title">{ se.Title }</span>
+				if !se.UpdatedAt.IsZero() {
+					<span class="g-session-meta" title={ "Created " + FullDate(se.CreatedAt) }>
+						last used { RelativeDate(se.UpdatedAt) }
+					</span>
+				}
+			</div>
+			<sl-icon-button
+				class="g-session-del"
+				name="x"
+				title="Delete session"
+				style="font-size:0.85rem"
+				tabindex="-1"
+			></sl-icon-button>
+		</div>
+	}
+}
+
+// Turn is one persisted search rendered when a session is opened: its id (so a
+// turn can be removed from history via right-click), the query, and its ranked
+// result cards (label + snippet).
+type Turn struct {
+	ID    int64
+	Query string
+	Hits  []Hit
+}
+
+// ConversationPanel is the whole #g-conversation element holding a session's
+// turns. Patched with replace mode (not morph) when switching sessions, so the
+// new turns swap in cleanly on the first click — morphing structurally different
+// children left the panel stale until a second patch.
+templ ConversationPanel(turns []Turn) {
+	<div id="g-conversation">
+		@Conversation(turns)
+	</div>
+}
+
+// Conversation renders a session's saved searches: each turn shows the query and
+// its ranked result cards (label + snippet), static (no streaming dots).
+templ Conversation(turns []Turn) {
+	if len(turns) == 0 {
+		@EmptyConversation()
+	}
+	for _, t := range turns {
+		<div class="g-turn" data-turn-id={ strconv.FormatInt(t.ID, 10) }>
+			<div class="g-bubble g-bubble-user">{ t.Query }</div>
+			@SearchResults(t.Hits)
+		</div>
+	}
+}
+
+// ModelOption is one entry in a model dropdown.
+type ModelOption struct {
+	ID       string
+	Selected bool
+}
+
+// ModelOptions renders the <sl-option> list patched into #g-model-select.
+templ ModelOptions(models []ModelOption) {
+	for _, m := range models {
+		<sl-option value={ m.ID } selected?={ m.Selected }>{ m.ID }</sl-option>
+	}
+}

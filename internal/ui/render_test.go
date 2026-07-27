@@ -1,0 +1,468 @@
+package ui
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestSourceLabel(t *testing.T) {
+	tests := []struct {
+		hit  Hit
+		want string
+	}{
+		{Hit{Path: "a.md", Heading: "Intro"}, "a.md › Intro"},
+		{Hit{Path: "b.md"}, "b.md"},
+	}
+	for _, tc := range tests {
+		require.Equal(t, tc.want, sourceLabel(tc.hit))
+	}
+}
+
+func TestSnippet(t *testing.T) {
+	require.Equal(t, "short", snippet("  short  "))
+
+	long := strings.Repeat("x", 500)
+	out := snippet(long)
+	require.LessOrEqual(t, len(out), 244) // 240 + ellipsis bytes.
+	require.True(t, strings.HasSuffix(out, "…"))
+}
+
+func TestRenderMarkdown(t *testing.T) {
+	stubKernelResolver(t) // make go/bash blocks runnable so run buttons render.
+	tests := []struct {
+		name, in string
+		contains []string
+	}{
+		{"heading", "# Title", []string{"<h1", "Title</h1>"}},
+		{"emphasis", "a **bold** word", []string{"<strong>bold</strong>"}},
+		{"table", "| a | b |\n|---|---|\n| 1 | 2 |", []string{"<table>", "<td>1</td>"}},
+		{"raw html is dropped", "<script>alert(1)</script>", nil},
+		{"wikilink", "see [[My Note]]", []string{`href="` + NoteLinkScheme + `My%20Note"`, ">My Note</a>"}},
+		{"wikilink with alias", "see [[My Note|the note]]", []string{`href="` + NoteLinkScheme + `My%20Note"`, ">the note</a>"}},
+		{
+			"callout with title",
+			"> [!note] Visa\n> Blue card required.",
+			[]string{`class="g-callout g-callout-note"`, `name="pencil"`, ">Visa</span>", "Blue card required."},
+		},
+		{
+			"callout without title defaults to the type",
+			"> [!warning]\n> Heads up.",
+			[]string{"g-callout-warning", `name="exclamation-triangle"`, ">Warning</span>"},
+		},
+		{
+			"unknown callout type gets a default icon",
+			"> [!whatever] X\n> body",
+			[]string{"g-callout-whatever", `name="info-circle"`},
+		},
+		{"plain blockquote is not a callout", "> just a quote", []string{"<blockquote>"}},
+		{
+			"relative image src points at the vault-file route",
+			"![alt](attachments/pic.png)",
+			[]string{`src="` + VaultFileRoute + `attachments/pic.png"`},
+		},
+		{"absolute image src is left alone", "![](https://x.com/a.png)", []string{`src="https://x.com/a.png"`}},
+		{
+			"fenced code with a language is syntax-highlighted and tagged for running",
+			"```go\nfunc main() {}\n```",
+			[]string{`class="chroma" data-lang="go"`, `<span class="kd">func</span>`, `class="g-code-run"`},
+		},
+		{
+			"language aliases resolve (py)",
+			"```py\nimport os\n```",
+			[]string{`data-lang="py"`, `<span class="kn">import</span>`},
+		},
+		{
+			"fenced code without a language is plain and not runnable",
+			"```\nplain text\n```",
+			[]string{`<pre class="chroma">plain text`},
+		},
+		{
+			"plain code block is wrapped with a copy button only",
+			"```\nx\n```",
+			[]string{`<div class="g-code-block"><pre class="chroma">`, `class="g-code-copy"`},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out := RenderMarkdown(tc.in)
+			for _, want := range tc.contains {
+				require.Contains(t, out, want)
+			}
+			// goldmark's safe default never emits raw HTML, so a note can't
+			// inject markup into the preview.
+			require.NotContains(t, out, "<script>")
+		})
+	}
+}
+
+func TestWrapCodeBlocks(t *testing.T) {
+	tests := []struct {
+		name, in string
+		contains []string
+		absent   []string
+	}{
+		{
+			"a single pre is wrapped and gets a button",
+			"<p>x</p><pre><code>a</code></pre>",
+			[]string{`<div class="g-code-block"><pre><code>a</code></pre><sl-icon-button class="g-code-copy"`, "<p>x</p>"},
+			nil,
+		},
+		{
+			"each pre is wrapped independently",
+			"<pre>a</pre><pre>b</pre>",
+			[]string{`<div class="g-code-block"><pre>a</pre>`, `<div class="g-code-block"><pre>b</pre>`},
+			nil,
+		},
+		{
+			"html without a pre is untouched",
+			"<p>no code here</p>",
+			[]string{"<p>no code here</p>"},
+			[]string{"g-code-block"},
+		},
+		{
+			"a language block gets run + run-above buttons, an output panel and a block id",
+			`<pre class="chroma" data-lang="bash">echo hi</pre>`,
+			[]string{
+				`<div class="g-code-block" data-g-block="0">`,
+				`class="g-code-run"`,
+				`class="g-code-run-above"`,
+				`id="g-code-output-0"`,
+			},
+			nil,
+		},
+		{
+			"a plain block gets no run button",
+			"<pre>plain</pre>",
+			[]string{`<div class="g-code-block"><pre>plain</pre>`},
+			[]string{"g-code-run", "g-code-output"},
+		},
+		{
+			"block ids increment across blocks",
+			`<pre data-lang="bash">a</pre><pre data-lang="sh">b</pre>`,
+			[]string{`data-g-block="0"`, `data-g-block="1"`, `id="g-code-output-0"`, `id="g-code-output-1"`},
+			nil,
+		},
+	}
+	// A block is only runnable when a kernel claims its language, which the
+	// resolver reports. Treat the languages used above as runnable.
+	stubKernelResolver(t)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out := wrapCodeBlocks(tc.in, nil)
+			for _, want := range tc.contains {
+				require.Contains(t, out, want)
+			}
+			for _, no := range tc.absent {
+				require.NotContains(t, out, no)
+			}
+		})
+	}
+}
+
+// stubKernelResolver installs a resolver that treats common code languages as
+// runnable (returning a label/version) and everything else as not, restoring the
+// previous value when the test ends.
+func stubKernelResolver(t *testing.T) {
+	t.Helper()
+	prev := KernelResolver
+	t.Cleanup(func() { KernelResolver = prev })
+	runnable := map[string]bool{"go": true, "golang": true, "bash": true, "sh": true, "shell": true}
+	KernelResolver = func(lang, family, version string) (string, string, bool) {
+		if !runnable[lang] {
+			return "", "", false
+		}
+		if family != "" {
+			return family, version, true
+		}
+		return lang, version, true
+	}
+}
+
+func TestWrapCodeBlocksKernelOverride(t *testing.T) {
+	stubKernelResolver(t)
+	in := `<pre class="chroma" data-lang="go">a</pre><pre class="chroma" data-lang="go">b</pre>`
+	// Only the first block has an override; the second must not get the attributes.
+	out := wrapCodeBlocks(in, []blockFence{{Family: "go", Version: "1.21"}, {}})
+	require.Contains(t, out, `data-g-block="0" data-g-kernel="go" data-g-version="1.21"`)
+	require.Contains(t, out, `data-g-block="1">`)
+	require.NotContains(t, out, `data-g-block="1" data-g-kernel`)
+}
+
+func TestBlockKernels(t *testing.T) {
+	src := "```go {kernel=go} {version=1.21}\nx\n```\n\n```go\ny\n```\n\n```bash\nz\n```\n"
+	require.Equal(t, []blockFence{{Family: "go", Version: "1.21"}, {}, {}}, blockKernels(src))
+}
+
+func TestBlockSources(t *testing.T) {
+	// blockSources returns each fenced block's raw source in document order, the
+	// same text the app hashes for the run-result key — so re-hydration looks a
+	// block's stored output up under the right key. The fence's trailing newline is
+	// kept (matching the app's extractCodeBlocks); BlockHash normalizes it.
+	src := "# N\n\n```go\nfmt.Println(1)\n```\n\n```bash\necho hi\n```\n"
+	require.Equal(t, []string{"fmt.Println(1)\n", "echo hi\n"}, blockSources(src))
+}
+
+// stubRunResultLoader installs a loader returning res for blocks whose source is
+// in want, and a miss otherwise; restores the previous loader when the test ends.
+func stubRunResultLoader(t *testing.T, want map[string]RunResult) {
+	t.Helper()
+	prev := RunResultLoader
+	t.Cleanup(func() { RunResultLoader = prev })
+	RunResultLoader = func(_, code string) (RunResult, bool) {
+		r, ok := want[code]
+		return r, ok
+	}
+}
+
+func TestRenderNoteBodyRehydratesStoredOutput(t *testing.T) {
+	stubKernelResolver(t)
+	// Block one has a stored result; block two doesn't.
+	stubRunResultLoader(t, map[string]RunResult{
+		"fmt.Println(1)\n": {
+			Items:    []RunItem{{MIME: MIMEText, Data: "1\n"}},
+			ExitCode: 0,
+			DurMS:    7,
+			Kernel:   "Go",
+			RanAt:    time.Unix(1_700_000_000, 0),
+		},
+	})
+
+	src := "```go\nfmt.Println(1)\n```\n\n```go\nfmt.Println(2)\n```\n"
+	out := RenderNoteBody(src, "n.md")
+
+	// Block 0 re-hydrates: a visible panel carrying the saved output, exit status,
+	// duration, and kernel — not the empty hidden placeholder.
+	require.Contains(t, out, `id="g-code-output-0"`)
+	require.Contains(t, out, "1\n", "saved output is rendered into the panel")
+	require.Contains(t, out, "exit 0", "the status footer is rebuilt from the stored result")
+	require.Contains(t, out, "7 ms")
+	require.Contains(t, out, "Go", "the kernel that ran it is shown")
+	require.NotContains(t, out, `id="g-code-output-0" hidden`, "a hydrated panel isn't hidden")
+
+	// Block 1 had no stored result: its panel is the empty, hidden placeholder.
+	require.Contains(t, out, `id="g-code-output-1" hidden`)
+}
+
+func TestRenderNoteBodyWithoutPathDoesNotRehydrate(t *testing.T) {
+	stubKernelResolver(t)
+	// Even with a loader installed, an empty note path means no re-hydration (the
+	// caller didn't know which note it was), so every panel is the empty placeholder.
+	stubRunResultLoader(t, map[string]RunResult{
+		"fmt.Println(1)\n": {Items: []RunItem{{MIME: MIMEText, Data: "1\n"}}},
+	})
+	out := RenderNoteBody("```go\nfmt.Println(1)\n```\n", "")
+	require.Contains(t, out, `id="g-code-output-0" hidden`)
+	require.NotContains(t, out, ">1\n<")
+}
+
+func TestRunResultPanelRendersItemsByMIME(t *testing.T) {
+	// The panel renders each output item by its MIME type: text inline, an image as
+	// a data-URI <img>. This is the seam a future plotting kernel slots into with no
+	// schema change.
+	res := RunResult{
+		Items: []RunItem{
+			{MIME: MIMEText, Data: "plotting…\n"},
+			{MIME: MIMEPNG, Data: "QUJD"}, // base64 of "ABC".
+		},
+		ExitCode: 0,
+		RanAt:    time.Unix(1_700_000_000, 0),
+	}
+	out := runResultPanelHTML("0", res)
+	require.Contains(t, out, "plotting…", "text items render inline")
+	require.Contains(t, out, `src="data:`+MIMEPNG+`;base64,QUJD"`, "image items render as a data URI")
+}
+
+func TestTrashBrowserRendersNoteRows(t *testing.T) {
+	var buf strings.Builder
+	items := []TrashItem{
+		{TrashID: "id1", OriginalPath: "Folder/Gone.md", TrashPath: ".trash/id1/Folder/Gone.md", Name: "Gone", DeletedAt: time.Unix(1_700_000_000, 0)},
+	}
+	require.NoError(t, TrashBrowser(items).Render(context.Background(), &buf))
+	out := buf.String()
+	require.Contains(t, out, "Gone")
+	// Real note rows so the file view's preview/select/nav work on them.
+	require.Contains(t, out, "g-tree-note", "trash rows are note rows")
+	require.Contains(t, out, `data-note=".trash/id1/Folder/Gone.md"`, "data-note is the in-trash path (read in place)")
+	require.Contains(t, out, `data-trash-id="id1"`, "the trash id keys the restore/delete actions")
+	require.Contains(t, out, `data-name="Gone"`, "name for the trash filter")
+	// Per-row controls post with the id inlined — no client signal to race.
+	require.Contains(t, out, "api/trash/restore-ui?id=id1")
+	require.Contains(t, out, "api/trash/delete-ui?id=id1")
+
+	// An empty trash shows the placeholder, not rows.
+	buf.Reset()
+	require.NoError(t, TrashBrowser(nil).Render(context.Background(), &buf))
+	require.Contains(t, buf.String(), "Trash is empty")
+}
+
+func TestWrapCodeBlocksKernelBadge(t *testing.T) {
+	// The resolver receives (lang, family, version) and returns the label + version
+	// shown on the block. ok=false omits the badge (an unrunnable language).
+	KernelResolver = func(lang, family, version string) (string, string, bool) {
+		if lang != "go" {
+			return "", "", false
+		}
+		if family == "yaegi" {
+			return "Go (yaegi) 0.16.1", "0.16.1", true
+		}
+		return "Go 1.26.3", "1.26.3", true
+	}
+	t.Cleanup(func() { KernelResolver = nil })
+
+	in := `<pre class="chroma" data-lang="go">a</pre>` +
+		`<pre class="chroma" data-lang="go">b</pre>` +
+		`<pre class="chroma" data-lang="text">c</pre>`
+	out := wrapCodeBlocks(in, []blockFence{{}, {Family: "yaegi"}, {}})
+
+	// The badge text is the label (which already carries the version); no tooltip.
+	require.Contains(t, out, `<span class="g-code-kernel">Go 1.26.3</span>`)
+	require.Contains(t, out, `<span class="g-code-kernel">Go (yaegi) 0.16.1</span>`)
+	// The text block isn't runnable, so it gets no badge.
+	require.Equal(t, 2, strings.Count(out, "g-code-kernel"))
+}
+
+func TestWrapCodeBlocksNoBadgeWithoutResolver(t *testing.T) {
+	KernelResolver = nil
+	out := wrapCodeBlocks(`<pre class="chroma" data-lang="go">a</pre>`, nil)
+	require.NotContains(t, out, "g-code-kernel")
+}
+
+func TestPropIcon(t *testing.T) {
+	tests := []struct {
+		key, want string
+	}{
+		{"tags", "tags"},
+		{"aliases", "signpost-split"},
+		{"title", "type"},
+		{"date", "calendar"},
+		{"created", "calendar"},
+		{"updated", "calendar"},
+		{"modified", "calendar"},
+		{"Tags", "tags"}, // case-insensitive
+		{"unknown", "text-left"},
+		{"", "text-left"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.key, func(t *testing.T) {
+			require.Equal(t, tc.want, propIcon(tc.key))
+		})
+	}
+}
+
+func TestResolveImageSrcs(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{"relative", `<img src="a.png">`, `<img src="` + VaultFileRoute + `a.png">`},
+		{"relative with subdir", `<img src="attachments/a.png">`, `<img src="` + VaultFileRoute + `attachments/a.png">`},
+		{"http left alone", `<img src="http://x/a.png">`, `<img src="http://x/a.png">`},
+		{"https left alone", `<img src="https://x/a.png">`, `<img src="https://x/a.png">`},
+		{"data uri left alone", `<img src="data:image/png;base64,AAAA">`, `<img src="data:image/png;base64,AAAA">`},
+		{"rooted path left alone", `<img src="/a.png">`, `<img src="/a.png">`},
+		{"already routed left alone", `<img src="` + VaultFileRoute + `a.png">`, `<img src="` + VaultFileRoute + `a.png">`},
+		{"empty src left alone", `<img src="">`, `<img src="">`},
+		{"non-img untouched", `<a src="a.png">`, `<a src="a.png">`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, resolveImageSrcs(tc.in))
+		})
+	}
+}
+
+func TestRenderNote(t *testing.T) {
+	t.Run("splits frontmatter from body", func(t *testing.T) {
+		props, raw, html := RenderNote("---\ntitle: Hello\ntags: [a, b]\n---\n# Body\n", "")
+		require.NotEmpty(t, props)
+		var keys []string
+		for _, p := range props {
+			keys = append(keys, p.Key)
+		}
+		require.Contains(t, keys, "title")
+		require.Contains(t, keys, "tags")
+		require.Contains(t, raw, "# Body")
+		require.NotContains(t, raw, "title: Hello") // frontmatter stripped from the body
+		require.Contains(t, html, "<h1")
+	})
+
+	t.Run("no frontmatter yields no props and the full body", func(t *testing.T) {
+		props, raw, html := RenderNote("# Just a body\n", "")
+		require.Empty(t, props)
+		require.Contains(t, raw, "# Just a body")
+		require.Contains(t, html, "Just a body</h1>")
+	})
+}
+
+func TestRenderFullPageThemePicker(t *testing.T) {
+	// The picker lists every registered theme; without LoadThemes only the two
+	// built-ins are present, which is enough to assert normalization and checking.
+	tests := []struct {
+		name        string
+		theme       string
+		wantChecked string // the theme name whose menu item must be checked
+	}{
+		{"built-in dark checks Carbon", "dark", "dark"},
+		{"built-in light checks Cream", "light", "light"},
+		{"unknown theme normalizes to dark", "does-not-exist", "dark"},
+		{"empty theme normalizes to dark", "", "dark"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			page := RenderFullPage(tc.theme, "info", State{})
+
+			// Both built-in themes appear as picker items with their labels.
+			require.Contains(t, page, `value="dark"`)
+			require.Contains(t, page, `value="light"`)
+			require.Contains(t, page, "Carbon")
+			require.Contains(t, page, "Cream")
+
+			// The normalized theme's item is the checked one.
+			checked := `<sl-menu-item type="checkbox" value="` + tc.wantChecked + `" checked>`
+			require.Contains(t, page, checked)
+
+			// The appTheme signal is seeded with the normalized name, never the raw
+			// unknown value.
+			require.Contains(t, page, `data-bind="appTheme" value="`+tc.wantChecked+`"`)
+			if tc.theme != "" && tc.theme != tc.wantChecked {
+				require.NotContains(t, page, `value="`+tc.theme+`"`)
+			}
+		})
+	}
+}
+
+func TestRenderPageVersion(t *testing.T) {
+	// The rendered value marker; it never appears in the page's CSS, so its
+	// absence is a real "no version line".
+	const marker = `<span class="g-version-value">`
+
+	tests := []struct {
+		name    string
+		version string
+		want    string // rendered value, or "" when the line must be dropped
+	}{
+		{"unstamped build shows dev verbatim", "dev", "dev"},
+		{"git describe sha", "9e33402", "9e33402"},
+		{"dirty tree keeps the suffix", "9e33402-dirty", "9e33402-dirty"},
+		{"markup in the version is escaped", `<b>x`, "&lt;b&gt;x"},
+		{"empty version drops the line", "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			page := RenderPage("dark", "info", State{Version: tc.version})
+
+			require.Contains(t, page, `id="app-grimoire"`) // the page renders either way
+			if tc.want == "" {
+				require.NotContains(t, page, marker)
+				return
+			}
+			require.Contains(t, page, marker+tc.want+`</span>`)
+			// It closes the gear menu: after the connection section, the last item
+			// of the settings dropdown.
+			require.Less(t, strings.Index(page, "MASS connection"), strings.Index(page, marker))
+		})
+	}
+}
