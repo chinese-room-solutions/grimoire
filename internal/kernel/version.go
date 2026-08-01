@@ -5,11 +5,11 @@ import (
 	"strings"
 )
 
-// compareVersions orders two dotted version strings (e.g. "1.21", "1.9",
+// CompareVersions orders two dotted kernel version strings (e.g. "1.21", "1.9",
 // "0.16.1") by segment: each dot-separated segment is compared numerically when
 // both sides are numeric (so "1.21" > "1.9"), else lexically. A missing trailing
 // segment counts as 0 ("1.2" < "1.2.1"). Returns -1, 0, or +1.
-func compareVersions(a, b string) int {
+func CompareVersions(a, b string) int {
 	as, bs := strings.Split(a, "."), strings.Split(b, ".")
 	n := max(len(as), len(bs))
 	for i := 0; i < n; i++ {

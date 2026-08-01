@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -475,6 +477,8 @@ func TestIsTransportError(t *testing.T) {
 // been applied before its response was lost, and the API has no idempotency key.
 // The exit codes are asserted on the mutating side, where the new error lands.
 func TestCLIRespawnRetriesOnlyReadOnlyVerbs(t *testing.T) {
+	importSrc := filepath.Join(t.TempDir(), "im.md")
+	require.NoError(t, os.WriteFile(importSrc, []byte("# x"), 0o644))
 	cases := []struct {
 		name    string
 		args    []string
@@ -500,6 +504,14 @@ func TestCLIRespawnRetriesOnlyReadOnlyVerbs(t *testing.T) {
 		{"trash restore", []string{"trash", "restore", "1"}, true},
 		{"trash delete", []string{"trash", "delete", "1"}, true},
 		{"trash empty", []string{"trash", "empty"}, true},
+		{"import", []string{"import", importSrc}, true},
+		{"reindex", []string{"reindex"}, true},
+		{"kernel list", []string{"kernel", "list"}, false},
+		{"kernel install", []string{"kernel", "install", "grimoire-kernel-go"}, true},
+		{"kernel remove", []string{"kernel", "remove", "go", "1.26"}, true},
+		{"theme list", []string{"theme", "list"}, false},
+		{"theme install", []string{"theme", "install", "theme-neon"}, true},
+		{"theme remove", []string{"theme", "remove", "neon"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

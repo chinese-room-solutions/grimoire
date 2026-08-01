@@ -79,10 +79,17 @@ const (
 
 // Service is Grimoire's stateful core. Safe for concurrent use.
 type Service struct {
-	client    *GatewayClient
-	configDir string // the vault's durable data dir (config, sessions, runs, UI state).
-	cacheDir  string // the vault's cache dir: per-model index files only (purgeable).
-	logger    zerolog.Logger
+	client        *GatewayClient
+	configDir     string // the vault's durable data dir (config, sessions, runs, UI state).
+	cacheDir      string // the vault's cache dir: per-model index files only (purgeable).
+	sharedKernels string // the app-level kernels dir every vault shares ("" = none).
+	registryURL   string // the kernel package index (grimoire-registry index.yml); "" = installs disabled.
+
+	// themeRegistryURL is the theme package index (mass-registry index.yml —
+	// themes are shared with MASS); "" = theme installs disabled. Set once via
+	// SetThemeRegistryURL right after New, before the service takes requests.
+	themeRegistryURL string
+	logger           zerolog.Logger
 
 	// embedGate caps concurrent embed calls across every indexing path (reindex,
 	// import, watcher), sized by the IndexConcurrency setting and resized live.
@@ -109,6 +116,17 @@ type Service struct {
 	// calls (reindexing runs outside it).
 	writeMu sync.Mutex
 
+	// resolveMu guards ResolveNote's cached vault walk. resolveNotes holds the
+	// vault's Markdown note paths (vault-relative, slash-form, in the walk's
+	// lexical order); nil means the next resolve rebuilds it. Every operation
+	// that adds, removes, or moves vault files — and the watcher, on external
+	// Markdown events — calls invalidateResolveCache. resolveGen is bumped on
+	// each invalidation so a rebuild racing one discards its now-stale walk
+	// instead of caching it. The walk itself never runs under a lock.
+	resolveMu    sync.Mutex
+	resolveNotes []string
+	resolveGen   uint64
+
 	mu            sync.Mutex
 	cfg           appconfig.Config
 	store         *store.Store
@@ -124,6 +142,10 @@ type Service struct {
 	// kernels runs code blocks through pluggable, out-of-process kernels, one
 	// per note so a note's blocks share a shell session. nil if discovery failed.
 	kernels *kernel.Manager
+	// kernelMu serializes kernel installs/removes and the registry reload that
+	// follows, so two writers can't interleave on the shared kernels dir. It is
+	// never held across a registry fetch or artifact download.
+	kernelMu sync.Mutex
 
 	// pendingRuns holds blocks whose latest run hasn't been saved over the stored
 	// result, keyed by notePath\x00blockHash. A re-run of a block that already has
@@ -137,18 +159,23 @@ type Service struct {
 // New builds the service for one vault. configDir is that vault's durable data
 // dir (which holds its sessions, run results, and UI state); cacheDir is where
 // its per-model vector index files live (a purgeable cache); vault is the
-// absolute path to its note folder, fixed for the service's lifetime. The
-// session history and UI state are opened here; the index opens once a model is
-// set.
-func New(client *GatewayClient, configDir, cacheDir, vault string, logger zerolog.Logger) *Service {
+// absolute path to its note folder, fixed for the service's lifetime;
+// sharedKernels is the app-level kernels dir every vault shares ("" to scan
+// none); registryURL is the resolved kernel package index ("" disables
+// registry-backed installs and listings — the caller applies the app-config
+// default, so a blank here is deliberate, e.g. in tests). The session history
+// and UI state are opened here; the index opens once a model is set.
+func New(client *GatewayClient, configDir, cacheDir, vault, sharedKernels, registryURL string, logger zerolog.Logger) *Service {
 	cfg := appconfig.Load(configDir)
 	cfg.Vault = vault // the vault is owned by the data dir, not the config file.
 	s := &Service{
-		client:    client,
-		configDir: configDir,
-		cacheDir:  cacheDir,
-		logger:    logger.With().Str("component", "app").Logger(),
-		cfg:       cfg,
+		client:        client,
+		configDir:     configDir,
+		cacheDir:      cacheDir,
+		sharedKernels: sharedKernels,
+		registryURL:   registryURL,
+		logger:        logger.With().Str("component", "app").Logger(),
+		cfg:           cfg,
 	}
 	s.embedGate = newGate(effectiveConcurrency(s.cfg.IndexConcurrency))
 	if sess, err := session.Open(filepath.Join(configDir, "sessions.db")); err != nil {
@@ -166,7 +193,7 @@ func New(client *GatewayClient, configDir, cacheDir, vault string, logger zerolo
 	} else {
 		s.runs = rr
 	}
-	if reg, err := kernel.NewRegistry(configDir, s.logger); err != nil {
+	if reg, err := kernel.NewRegistry(configDir, sharedKernels, s.logger); err != nil {
 		s.logger.Warn().Err(err).Msg("could not load code-block kernels; running blocks disabled")
 	} else {
 		s.kernels = kernel.NewManager(reg, s.logger)
@@ -742,6 +769,7 @@ func (s *Service) CreateNote(ctx context.Context, rel string) (string, error) {
 	if err := f.Close(); err != nil {
 		return "", ctxerr.With(fmt.Errorf("creating note: %w", err), map[string]any{"note": rel})
 	}
+	s.invalidateResolveCache()
 	s.reindexNote(rel)
 	return filepath.ToSlash(rel), nil
 }
@@ -830,6 +858,7 @@ func (s *Service) ImportNote(ctx context.Context, name string, content []byte, p
 		if cerr != nil {
 			return "", ctxerr.With(fmt.Errorf("writing note: %w", cerr), map[string]any{"note": rel})
 		}
+		s.invalidateResolveCache()
 		// Index synchronously, unlike an editor save: the user is waiting on the
 		// import, and the caller reads the chunk count right after to refresh the UI
 		// — a background reindex would leave the new note unsearchable and the count
@@ -961,7 +990,9 @@ func (s *Service) DeleteFolder(ctx context.Context, rel string) error {
 		return err
 	}
 	s.writeMu.Lock()
-	if err := os.RemoveAll(clean); err != nil {
+	err = os.RemoveAll(clean)
+	s.invalidateResolveCache() // even a failed RemoveAll may have deleted notes.
+	if err != nil {
 		s.writeMu.Unlock()
 		return ctxerr.With(fmt.Errorf("deleting folder: %w", err), map[string]any{"folder": rel})
 	}
@@ -999,6 +1030,7 @@ func (s *Service) RenameFolder(ctx context.Context, oldRel, newRel string) (stri
 	if err := os.Rename(oldClean, newClean); err != nil {
 		return "", ctxerr.With(fmt.Errorf("renaming folder: %w", err), map[string]any{"from": oldRel, "to": newRel})
 	}
+	s.invalidateResolveCache()
 	s.reindexVault()
 	return filepath.ToSlash(newRel), nil
 }
@@ -1016,6 +1048,7 @@ func (s *Service) DeleteNote(ctx context.Context, rel string) error {
 		s.writeMu.Unlock()
 		return ctxerr.With(fmt.Errorf("deleting note: %w", err), map[string]any{"note": rel})
 	}
+	s.invalidateResolveCache()
 	if s.runs != nil {
 		if err := s.runs.DeleteNote(rel); err != nil {
 			s.logger.Warn().Err(err).Str("note", rel).Msg("deleting note run results")
@@ -1069,6 +1102,7 @@ func (s *Service) renameNoteFile(oldRel, newRel, oldClean, newClean string) erro
 	if err := os.Rename(oldClean, newClean); err != nil {
 		return ctxerr.With(fmt.Errorf("renaming note: %w", err), map[string]any{"from": oldRel, "to": newRel})
 	}
+	s.invalidateResolveCache()
 	if s.runs != nil {
 		// Move cached output to the new path, keyed the same way the renderer looks
 		// it up (the vault-relative slash path).
@@ -1086,6 +1120,15 @@ func ensureMarkdownExt(rel string) string {
 		return rel
 	}
 	return rel + ".md"
+}
+
+// trimMarkdownExt drops a Markdown extension (".md" or ".markdown", any case)
+// from a note name; other names pass through unchanged.
+func trimMarkdownExt(name string) string {
+	if isMarkdownName(name) {
+		return strings.TrimSuffix(name, filepath.Ext(name))
+	}
+	return name
 }
 
 // reindexNote re-embeds a single edited note in the background, so a save returns
@@ -1175,8 +1218,11 @@ const (
 
 // ResolveNote maps a wikilink target to a vault-relative note path, matching
 // Obsidian: a target may be a bare note name ("My Note"), a name with an alias
-// ("My Note|shown"), or a relative path; the ".md" extension is optional. The
-// first note whose path or basename matches (case-insensitively) wins.
+// ("My Note|shown"), or a relative path; the Markdown extension (".md" or
+// ".markdown") is optional. The first note whose path or basename matches
+// (case-insensitively) wins, in the vault walk's lexical order. It is a hot
+// path (wikilink rendering, the resolve API/CLI), so it scans the cached walk
+// rather than the disk.
 func (s *Service) ResolveNote(target string) (string, bool) {
 	s.mu.Lock()
 	vault := s.cfg.Vault
@@ -1190,7 +1236,7 @@ func (s *Service) ResolveNote(target string) (string, bool) {
 		name = name[:i]
 	}
 	name = strings.TrimSpace(name)
-	name = strings.TrimSuffix(name, ".md")
+	name = trimMarkdownExt(name)
 	if name == "" {
 		return "", false
 	}
@@ -1200,28 +1246,62 @@ func (s *Service) ResolveNote(target string) (string, bool) {
 		wantBase = wantBase[i+1:]
 	}
 
-	var found string
-	if err := filepath.WalkDir(vault, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || found != "" {
-			return nil
+	for _, rel := range s.notePaths(vault) {
+		slash := strings.ToLower(rel)
+		if trimMarkdownExt(slash) == wantPath || trimMarkdownExt(filepath.Base(slash)) == wantBase {
+			return rel, true
 		}
-		if !strings.EqualFold(filepath.Ext(path), ".md") {
+	}
+	return "", false
+}
+
+// notePaths returns the vault's Markdown note paths (vault-relative, slash-form,
+// in WalkDir's lexical order), rebuilding the cached list when it has been
+// invalidated. The walk runs without any lock held; if an invalidation lands
+// mid-walk, the walk's result is returned to the caller but not cached — the
+// path change that invalidated may postdate what the walk saw.
+func (s *Service) notePaths(vault string) []string {
+	s.resolveMu.Lock()
+	cached, gen := s.resolveNotes, s.resolveGen
+	s.resolveMu.Unlock()
+	if cached != nil {
+		return cached
+	}
+
+	paths := []string{}
+	if err := filepath.WalkDir(vault, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !isMarkdownName(path) {
 			return nil
 		}
 		rel, rerr := filepath.Rel(vault, path)
 		if rerr != nil {
 			return nil
 		}
-		slash := strings.ToLower(filepath.ToSlash(rel))
-		base := strings.TrimSuffix(filepath.Base(slash), ".md")
-		if strings.TrimSuffix(slash, ".md") == wantPath || base == wantBase {
-			found = filepath.ToSlash(rel)
-		}
+		paths = append(paths, filepath.ToSlash(rel))
 		return nil
 	}); err != nil {
 		s.logger.Warn().Err(err).Msg("walking vault to resolve note")
 	}
-	return found, found != ""
+
+	s.resolveMu.Lock()
+	if s.resolveGen == gen {
+		s.resolveNotes = paths
+	}
+	s.resolveMu.Unlock()
+	return paths
+}
+
+// invalidateResolveCache drops ResolveNote's cached note list; the next resolve
+// re-walks the vault. Every path that creates, deletes, renames, or moves files
+// in the vault calls it — including trash moves and restores, since the trash
+// lives inside the vault — as does the watcher when a Markdown file changes
+// externally. A briefly-stale cache is tolerable (the same TOCTOU as walking on
+// every call); a missed invalidation is not.
+func (s *Service) invalidateResolveCache() {
+	s.resolveMu.Lock()
+	s.resolveNotes = nil
+	s.resolveGen++
+	s.resolveMu.Unlock()
 }
 
 // TreeNode is one entry in the vault file tree: a folder (with children), a

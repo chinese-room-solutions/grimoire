@@ -14,6 +14,7 @@ import (
 
 	"github.com/KernelPryanic/golog"
 	grimoireapp "github.com/chinese-room-solutions/grimoire/internal/app"
+	"github.com/chinese-room-solutions/grimoire/internal/appconfig"
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
 	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
 	openai "github.com/chinese-room-solutions/llama-cpp-openai-client-go"
@@ -97,7 +98,22 @@ func startBackend(logger zerolog.Logger, vault string, idleTimeout time.Duration
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 
-	holder := &serviceHolder{logger: logger, client: client, port: port}
+	// The shared kernels dir spans every vault; a failure to create it degrades
+	// to per-vault kernels only, it never blocks startup.
+	sharedKernels, err := vaultdir.KernelsDir()
+	if err != nil {
+		logger.Warn().Err(err).Msg("resolving shared kernels dir; only per-vault kernels will load")
+		sharedKernels = ""
+	}
+	// Where kernel packages come from: the app-level config's registry_url (in
+	// grimoire.json next to the SDK's config.json), defaulting to the public
+	// grimoire-registry — resolved once at startup, like MASS does.
+	appCfg := appconfig.LoadApp(appDir)
+	holder := &serviceHolder{
+		logger: logger, client: client, port: port,
+		sharedKernels: sharedKernels, registryURL: appCfg.RegistryURLOrDefault(),
+		themeRegistryURL: appCfg.ThemeRegistryURLOrDefault(),
+	}
 	settings := masgui.NewSettings(appDir, logger)
 
 	// The GUI routes depend on the bound vault, so they are rebuilt on every swap;
@@ -136,7 +152,9 @@ func startBackend(logger zerolog.Logger, vault string, idleTimeout time.Duration
 	}
 	// When an idle timeout is set (the CLI's on-demand `serve` path), shut the
 	// backend down after a quiet spell so a headless instance doesn't linger once
-	// the agent stops calling it. Each request resets the countdown.
+	// the agent stops calling it. A request holds the countdown for as long as it
+	// runs (a reindex can outlive the window), and it restarts when the last
+	// in-flight request ends.
 	var idle *idleTracker
 	if idleTimeout > 0 {
 		idle = newIdleTracker(idleTimeout, func() {

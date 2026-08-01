@@ -36,6 +36,33 @@ func TestIdleTrackerResetOnRequest(t *testing.T) {
 	require.Eventually(t, fired.Load, time.Second, 5*time.Millisecond)
 }
 
+// TestIdleTrackerHeldByInFlightRequest guards the long-call case (a forced
+// reindex runs minutes against the on-demand backend's 2-minute window): the
+// countdown must not fire while a request is in flight, and restarts once the
+// last one ends.
+func TestIdleTrackerHeldByInFlightRequest(t *testing.T) {
+	var fired atomic.Bool
+	tr := newIdleTracker(30*time.Millisecond, func() { fired.Store(true) })
+	defer tr.stop()
+	release := make(chan struct{})
+	handler := tr.wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/reindex", nil))
+	}()
+
+	// Hold the request across several idle windows.
+	time.Sleep(120 * time.Millisecond)
+	require.False(t, fired.Load(), "an in-flight request must hold the backend alive")
+
+	close(release)
+	<-done
+	require.Eventually(t, fired.Load, time.Second, 5*time.Millisecond,
+		"the countdown restarts once the last request ends")
+}
+
 func TestIdleTrackerStopPreventsFiring(t *testing.T) {
 	var fired atomic.Bool
 	tr := newIdleTracker(20*time.Millisecond, func() { fired.Store(true) })

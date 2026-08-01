@@ -116,30 +116,366 @@
   // live via the SDK's window.massSetTheme, persists it through the api/settings
   // endpoint, and syncs the menu's checkmarks. This is Grimoire's only theme
   // control — the gear dropdown's Theme select is hidden.
-  function initThemePicker() {
-    var picker = getEl("g-theme-picker");
-    if (!picker) return;
-    var menu = picker.querySelector("sl-menu");
-    if (!menu) return;
-    menu.addEventListener("sl-select", function (evt) {
-      var next = evt.detail.item.value;
-      if (!next) return;
-      setSignal("appTheme", next);
-      if (window.massSetTheme) window.massSetTheme(next);
+  // The palette dropdown's last row isn't a theme: it opens the Extensions
+  // dialog on the Themes tab. Kept in sync with ui.ThemeBrowseValue.
+  var THEME_BROWSE = "__browse";
+
+  var themePicker = (function () {
+    function menu() {
+      var picker = getEl("g-theme-picker");
+      return picker ? picker.querySelector("sl-menu") : null;
+    }
+    function rows() {
+      var m = menu();
+      return m ? Array.prototype.slice.call(m.querySelectorAll('sl-menu-item[type="checkbox"]')) : [];
+    }
+
+    // Apply a theme live, persist it, and sync the menu's single checkmark. The
+    // one path every theme switch goes through — the picker and an Extensions
+    // install alike.
+    function apply(name) {
+      if (!name) return;
+      // $gTheme drives the theme-reactive markup (the Extensions dialog's
+      // active check data-shows against it).
+      setSignal("gTheme", name);
+      if (window.massSetTheme) window.massSetTheme(name);
       // Keep a single item checked (checkbox items toggle independently otherwise).
-      menu.querySelectorAll("sl-menu-item").forEach(function (item) {
-        item.checked = item.value === next;
-      });
+      rows().forEach(function (item) { item.checked = item.value === name; });
       // Notify modules that cache theme colours (e.g. the canvas graph) so they
       // re-read the new palette — the CSS-var switch alone doesn't reach a canvas.
-      document.dispatchEvent(new CustomEvent("grimoire:theme", { detail: { theme: next } }));
+      document.dispatchEvent(new CustomEvent("grimoire:theme", { detail: { theme: name } }));
       fetch("api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appTheme: next }),
+        body: JSON.stringify({ appTheme: name }),
       }).catch(function () { /* persistence is best-effort. */ });
-    });
-  }
+    }
+
+    // Add a freshly installed theme to the dropdown without a page reload, so
+    // the picker matches the registry the moment the install lands. The row goes
+    // before the divider that separates the themes from the "Browse themes…" row.
+    function add(name, label) {
+      var m = menu();
+      if (!m || !name) return;
+      if (rows().some(function (item) { return item.value === name; })) return;
+      var item = document.createElement("sl-menu-item");
+      item.setAttribute("type", "checkbox");
+      // setAttribute, not .value: Shoelace doesn't reflect the property back to
+      // the attribute, and the row must match the same selectors as a
+      // server-rendered one before the custom element upgrades.
+      item.setAttribute("value", name);
+      item.textContent = label || name;
+      var divider = m.querySelector("sl-divider");
+      if (divider) m.insertBefore(item, divider);
+      else m.appendChild(item);
+    }
+
+    // Drop a removed theme's row. Removing the theme in use leaves the page on a
+    // stylesheet that no longer exists, so fall back to the first remaining one.
+    function remove(name) {
+      var all = rows();
+      var gone = null;
+      all.forEach(function (item) { if (item.value === name) gone = item; });
+      if (!gone) return;
+      var wasActive = gone.checked;
+      gone.remove();
+      if (wasActive) {
+        var next = rows()[0];
+        if (next) apply(next.value);
+      }
+    }
+
+    function init() {
+      var m = menu();
+      if (!m) return;
+      m.addEventListener("sl-select", function (evt) {
+        var next = evt.detail.item.value;
+        if (!next) return;
+        if (next === THEME_BROWSE) { extensions.open("ext-themes"); return; }
+        apply(next);
+      });
+    }
+
+    return { init: init, apply: apply, add: add, remove: remove };
+  })();
+
+  // Extensions dialog: one overlay browsing and managing the installable extras
+  // — themes and kernels — reached from the bottom bar's puzzle icon or the
+  // palette dropdown's "Browse themes…" row. Each tab's rows are server-rendered
+  // fragments; the single search box filters the visible tab client-side, and
+  // each section shows one window of matching rows at a time behind its own
+  // "Show More" row.
+  var extensions = (function () {
+    // Each tab's list-render trigger, by panel name. A tab is fetched when it is
+    // first shown and re-fetched after every install or remove.
+    var TRIGGERS = {
+      "ext-themes": "g-ext-themes-trigger",
+      "ext-kernels": "g-ext-kernels-trigger",
+    };
+
+    // Rows one "Show More" click adds, and the current window per section (keyed
+    // panel id + section index, so a re-render keeps each section where it was).
+    var EXT_PAGE = 5;
+    var windows = {};
+
+    function eachSection(fn) {
+      document.querySelectorAll("#g-extensions-dialog .g-ext-panel").forEach(function (panel) {
+        panel.querySelectorAll(".g-ext-section").forEach(function (section, i) {
+          fn(section, panel.id + ":" + i);
+        });
+      });
+    }
+
+    // Show the rows matching the filter up to each section's window, hide the
+    // rest, and trail a "Show More" row while any are held back. Both tabs are
+    // walked: a hidden panel's rows cost nothing to touch and stay correct when
+    // the tab is shown.
+    //
+    // Runs from a MutationObserver on the panels, so it must be idempotent in
+    // its DOM writes — it only adds or removes the "Show More" row when that
+    // row's presence actually has to change, and a no-op pass queues no further
+    // mutations.
+    function applyFilter() {
+      var input = getEl("g-ext-filter");
+      var q = input ? input.value : "";
+      eachSection(function (section, key) {
+        var limit = windows[key] || EXT_PAGE;
+        var shown = 0;
+        var held = 0;
+        section.querySelectorAll(".g-ext-row").forEach(function (row) {
+          var match = matchesFilter(row.getAttribute("data-g-ext-filter") || "", q);
+          if (match && shown < limit) {
+            shown++;
+            row.hidden = false;
+            return;
+          }
+          if (match) held++;
+          row.hidden = true;
+        });
+        showMoreRow(section, key, held > 0);
+      });
+    }
+
+    // Add or drop a section's "Show More" row. The row is client-side because
+    // the window is: the server sends every row and this decides what fits.
+    function showMoreRow(section, key, wanted) {
+      var row = section.querySelector(".g-ext-more");
+      if (!wanted) {
+        if (row) row.remove();
+        return;
+      }
+      if (row) return;
+      var icon = document.createElement("sl-icon");
+      icon.setAttribute("slot", "prefix");
+      icon.setAttribute("name", "chevron-down");
+      var btn = document.createElement("sl-button");
+      btn.setAttribute("size", "small");
+      btn.setAttribute("variant", "text");
+      btn.appendChild(icon);
+      btn.appendChild(document.createTextNode("Show More"));
+      btn.addEventListener("click", function () {
+        windows[key] = (windows[key] || EXT_PAGE) + EXT_PAGE;
+        applyFilter();
+      });
+      row = document.createElement("div");
+      row.className = "g-ext-more";
+      row.appendChild(btn);
+      section.appendChild(row);
+    }
+
+    // Rewind every section to its first window. A fresh search (or a fresh open)
+    // starts at the top rather than inside someone else's paging.
+    function resetWindows() {
+      windows = {};
+    }
+
+    // Fetch a tab's list. Datastar owns the request (the trigger is a hidden
+    // @get button), so the response patches the panel with no JSON to parse.
+    function load(panel) {
+      var trigger = getEl(TRIGGERS[panel]);
+      if (trigger) trigger.click();
+    }
+
+    function activePanel() {
+      var tabs = getEl("g-ext-tabs");
+      var active = tabs ? tabs.querySelector("sl-tab[active]") : null;
+      return active ? active.getAttribute("panel") : "ext-themes";
+    }
+
+    function open(panel) {
+      var dialog = getEl("g-extensions-dialog");
+      if (!dialog) return;
+      var tabs = getEl("g-ext-tabs");
+      if (tabs && panel && typeof tabs.show === "function") tabs.show(panel);
+      resetWindows();
+      dialog.show();
+      load(panel || activePanel());
+    }
+
+    // Call the JSON API a row's button addresses (the same endpoints the CLI
+    // uses) and re-render that tab. Returns the decoded body, or null on failure.
+    function call(kind, action, body) {
+      return fetch("api/v1/" + kind + "/" + action, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; });
+    }
+
+    // Install: a theme joins the palette dropdown but is NOT applied — the user
+    // activates it explicitly (row click or palette) when they want it.
+    function install(btn) {
+      var kind = btn.getAttribute("data-g-kind");
+      var id = btn.getAttribute("data-g-id");
+      btn.loading = true;
+      call(kind, "install", { name: btn.getAttribute("data-g-pkg") }).then(function (res) {
+        btn.loading = false;
+        if (!res) return;
+        if (kind === "theme") {
+          themePicker.add(id, res.label || id);
+        } else {
+          // The backend resolves the new kernel immediately; re-render the open
+          // note so its blocks pick up their Run buttons.
+          offers = null;
+          refreshPreview();
+        }
+        load(activePanel());
+      });
+    }
+
+    // ── Point-of-use kernel install ──────────────────────────────────
+    // A code block whose language nothing can run is a dead end. When the
+    // registry offers a kernel for that language, the block gets an inline
+    // install button instead: install, re-render the note, run the block.
+
+    var offers = null; // family → {pkg, version}, fetched once per session.
+
+    function kernelOffers() {
+      if (offers) return offers;
+      offers = fetch("api/v1/kernel/list")
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (res) {
+          var byFamily = {};
+          ((res && res.available) || []).forEach(function (p) {
+            if (!p.installed) byFamily[(p.family || "").toLowerCase()] = p;
+          });
+          return byFamily;
+        })
+        .catch(function () { return {}; }); // offline: no offers, message stands.
+      return offers;
+    }
+
+    // Fill every empty install slot the open note left behind. Slots whose
+    // language the registry can't serve stay empty (and hidden by CSS).
+    function fillInstallSlots() {
+      var slots = document.querySelectorAll(".g-code-install:empty");
+      if (!slots.length) return;
+      kernelOffers().then(function (byFamily) {
+        slots.forEach(function (slot) {
+          var pkg = byFamily[(slot.getAttribute("data-g-lang") || "").toLowerCase()];
+          if (!pkg || slot.firstChild) return;
+          var btn = document.createElement("sl-button");
+          btn.className = "g-code-install-btn";
+          btn.setAttribute("size", "small");
+          btn.setAttribute("variant", "primary");
+          btn.setAttribute("data-g-pkg", pkg.name);
+          btn.textContent = "Install " + pkg.family + " kernel (" + pkg.version + ")";
+          slot.appendChild(btn);
+        });
+      });
+    }
+
+    function refreshPreview() {
+      if (!getSignal("gPreviewPath")) return;
+      var trigger = getEl("g-preview-trigger");
+      if (trigger) trigger.click();
+    }
+
+    // Install the kernel this block needs, re-render the note so the block
+    // becomes runnable, then run it — the click finishes what it started.
+    function installForBlock(btn) {
+      var block = btn.closest(".g-code-block");
+      var id = block ? block.getAttribute("data-g-block") : null;
+      btn.loading = true;
+      call("kernel", "install", { name: btn.getAttribute("data-g-pkg") }).then(function (res) {
+        btn.loading = false;
+        if (!res) return;
+        offers = null;
+        refreshPreview();
+        if (id === null) return;
+        whenPresent('.g-code-block[data-g-block="' + id + '"] .g-code-run', function (run) { run.click(); });
+      });
+    }
+
+    // Wait for an SSE-patched element to land, then act on it. Capped so a
+    // re-render that never produces the button can't leave a timer running.
+    function whenPresent(sel, fn, tries) {
+      var el = document.querySelector(sel);
+      if (el) { fn(el); return; }
+      if ((tries || 0) >= 50) return;
+      setTimeout(function () { whenPresent(sel, fn, (tries || 0) + 1); }, 100);
+    }
+
+    function remove(btn) {
+      var kind = btn.getAttribute("data-g-kind");
+      var id = btn.getAttribute("data-g-id");
+      var body = kind === "kernel"
+        ? { family: id, version: btn.getAttribute("data-g-version") }
+        : { name: id };
+      btn.loading = true;
+      call(kind, "remove", body).then(function (res) {
+        btn.loading = false;
+        if (!res) return;
+        if (kind === "theme") themePicker.remove(id);
+        load(activePanel());
+      });
+    }
+
+
+    function init() {
+      var btn = getEl("g-extensions-btn");
+      if (btn) btn.addEventListener("click", function () { open(null); });
+      var input = getEl("g-ext-filter");
+      if (input) input.addEventListener("sl-input", function () { resetWindows(); applyFilter(); });
+      var tabs = getEl("g-ext-tabs");
+      if (tabs) tabs.addEventListener("sl-tab-show", function (evt) { load(evt.detail.name); });
+      // Rows are replaced wholesale by each list render, so re-apply the current
+      // filter whenever they change — otherwise a fresh render shows every row.
+      document.querySelectorAll("#g-extensions-dialog .g-ext-panel").forEach(function (panel) {
+        new MutationObserver(applyFilter).observe(panel, { childList: true, subtree: true });
+      });
+      var dialog = getEl("g-extensions-dialog");
+      if (dialog) dialog.addEventListener("click", function (e) {
+        var add = e.target.closest(".g-ext-install");
+        if (add) { install(add); return; }
+        var del = e.target.closest(".g-ext-remove");
+        if (del) { remove(del); return; }
+        // The rest of an installed theme row activates it — same path as the
+        // palette. The button branches above keep Remove clicks out. The row's
+        // check follows by itself: it data-shows against $gTheme.
+        var row = e.target.closest("[data-g-activate]");
+        if (row) themePicker.apply(row.getAttribute("data-g-activate"));
+      });
+
+      // The install CTA lives inside note content, which is patched in per
+      // preview and per failed run — so watch the preview body and delegate the
+      // click on document rather than binding per block.
+      var body = getEl("g-preview-body");
+      if (body) {
+        new MutationObserver(fillInstallSlots).observe(body, { childList: true, subtree: true });
+        fillInstallSlots();
+      }
+      document.addEventListener("click", function (e) {
+        var cta = e.target.closest(".g-code-install-btn");
+        if (!cta) return;
+        e.stopPropagation();
+        installForBlock(cta);
+      });
+    }
+
+    return { init: init, open: open };
+  })();
 
   // Search: read the query box, push it into the gQuery signal (same proven path
   // as vault Save), bump gSeq so this turn gets fresh element ids, then fire the
@@ -4109,7 +4445,8 @@
   function init() {
     confirmDelete.init();
     initVault();
-    initThemePicker();
+    themePicker.init();
+    extensions.init();
     initTrashMode();
     initSearch();
     initSidebarCollapse();

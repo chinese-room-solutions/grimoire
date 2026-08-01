@@ -116,6 +116,14 @@ func applyFlags(c *collected, installDir, scope string, perUser bool) error {
 func runWizard(tag string) int {
 	fields := buildFields(loadPrefill())
 
+	// One screen session for the whole wizard, like the C++ worker's outer
+	// term::Screen: without it every form→phase→result transition flashes the
+	// operator's PRIMARY screen back for a moment, and Konsole drapes whatever
+	// text selection sits there over the next view's content. leaveSummary
+	// releases early so the exit trace lands on the restored terminal.
+	releaseScreen = tui.HoldScreen()
+	defer releaseScreen()
+
 	for {
 		res, err := tui.RunForm(tui.FormSpec{
 			BannerArt: grimoireArt,
@@ -139,6 +147,7 @@ func runWizard(tag string) int {
 			ResizeOnEnter: runtime.GOOS == "windows" || runtime.GOOS == "darwin",
 		})
 		if err != nil {
+			releaseScreen() // the message belongs on the operator's own screen
 			fmt.Fprintln(os.Stderr, "setup:", err)
 			return 1
 		}
@@ -147,6 +156,7 @@ func runWizard(tag string) int {
 		// rather than falling through and treating it as a completed Install
 		// (which, on Declined, flashes the window closed).
 		if res.Declined || res.Cancelled {
+			releaseScreen() // the notice belongs on the operator's own screen
 			return runLinearFallback(tag)
 		}
 

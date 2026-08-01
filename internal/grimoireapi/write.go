@@ -10,6 +10,7 @@ import (
 
 	"github.com/chinese-room-solutions/grimoire/internal/app"
 	"github.com/chinese-room-solutions/grimoire/internal/frontmatter"
+	"github.com/chinese-room-solutions/grimoire/internal/index"
 )
 
 const rfc3339 = time.RFC3339
@@ -137,6 +138,87 @@ func toProperties(props map[string][]string) []frontmatter.Property {
 		out = append(out, frontmatter.Property{Key: k, Values: props[k]})
 	}
 	return out
+}
+
+// ImportResult is one file's outcome in an import batch: the submitted file
+// name, the vault-relative path of the note it became, or the error that kept
+// it out. A batch carries one entry per file, in submission order — a failed
+// file never aborts the others.
+type ImportResult struct {
+	Name  string `json:"name"`            // the submitted file name.
+	Path  string `json:"path,omitempty"`  // created note's vault-relative path; empty on failure.
+	Error string `json:"error,omitempty"` // what kept the file out; empty on success.
+}
+
+// ImportNote converts one foreign file into a Markdown note at the vault root.
+// The name's extension picks the converter: .md/.markdown/.txt/extension-less
+// content is kept verbatim, .html/.htm converts locally, .docx/.odt through the
+// office converter (embedded images land in the attachments folder), and .pdf
+// through the gateway's vision model (app.ErrNoConvertModel when none is
+// configured); anything else is app.ErrUnsupportedImport. A name collision gets
+// a " (n)" suffix rather than failing. Indexing the new note is best-effort —
+// an index failure (e.g. no gateway) leaves the note on disk and is not an
+// error. Returns the created note's ref.
+func (a *API) ImportNote(ctx context.Context, name string, content []byte) (NoteRef, error) {
+	svc, err := a.service()
+	if err != nil {
+		return NoteRef{}, err
+	}
+	written, err := svc.ImportNote(ctx, name, content, "")
+	if err != nil {
+		return NoteRef{}, err
+	}
+	return NoteRef{Name: baseName(written), Path: written}, nil
+}
+
+// ReindexResult reports one index pass: how many notes were (re)embedded,
+// skipped as unchanged, pruned as deleted from the vault, and how many chunks
+// were embedded this run. Failed > 0 marks a partial pass — those notes stayed
+// unindexed while the rest landed — with the retained per-note errors in
+// Message. A partial pass is a result, not an error.
+type ReindexResult struct {
+	Indexed int    `json:"indexed"`
+	Skipped int    `json:"skipped"`
+	Pruned  int    `json:"pruned"`
+	Chunks  int    `json:"chunks"`
+	Failed  int    `json:"failed"`
+	Message string `json:"message,omitempty"`
+}
+
+// Reindex syncs the vault into the search index: incremental by default
+// (unchanged notes are skipped by content hash), force re-embeds every note (a
+// full rebuild, e.g. after an embedding-model change). It blocks until the
+// pass completes — minutes on a large vault. The error is reserved for a pass
+// that produced nothing (no vault or model bound, store unavailable,
+// cancelled); per-note failures ride in the result instead.
+func (a *API) Reindex(ctx context.Context, force bool) (ReindexResult, error) {
+	svc, err := a.service()
+	if err != nil {
+		return ReindexResult{}, err
+	}
+	stats, err := svc.Reindex(ctx, nil, force)
+	return toReindexResult(stats, err)
+}
+
+// toReindexResult folds a sync's stats and error into the transport result: a
+// *index.SyncError is a partial pass (folded into Failed/Message), anything
+// else a total failure.
+func toReindexResult(stats index.Stats, err error) (ReindexResult, error) {
+	var partial *index.SyncError
+	if err != nil && !errors.As(err, &partial) {
+		return ReindexResult{}, err
+	}
+	res := ReindexResult{
+		Indexed: stats.Indexed,
+		Skipped: stats.Skipped,
+		Pruned:  stats.Pruned,
+		Chunks:  stats.Chunks,
+	}
+	if partial != nil {
+		res.Failed = partial.Failed
+		res.Message = partial.Error()
+	}
+	return res, nil
 }
 
 // RenameResult is a rename's outcome: the note at its new path, plus — when

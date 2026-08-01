@@ -8,8 +8,8 @@ require (
 	github.com/KernelPryanic/golog v1.2.0
 	github.com/a-h/templ v0.3.1020
 	github.com/alecthomas/chroma/v2 v2.2.0
-	github.com/chinese-room-solutions/llama-cpp-openai-client-go v0.0.0-20260727121416-6ac4b1b252e4
-	github.com/chinese-room-solutions/mass-sdk v0.0.0-20260727121409-d07e73806029
+	github.com/chinese-room-solutions/llama-cpp-openai-client-go v0.1.0
+	github.com/chinese-room-solutions/mass-sdk v0.1.0
 	github.com/chinese-room-solutions/pdf v0.0.0-20260714203006-68e8f72db629
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/klippa-app/go-pdfium v1.18.0
@@ -29,6 +29,7 @@ require (
 	fyne.io/systray v1.12.0 // indirect
 	github.com/CAFxX/httpcompression v0.0.9 // indirect
 	github.com/JohannesKaufmann/dom v0.3.1 // indirect
+	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/a-h/parse v0.0.0-20250122154542-74294addb73e // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect

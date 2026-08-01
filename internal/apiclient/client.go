@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -200,6 +201,122 @@ func (c *Client) RenameNote(ctx context.Context, from, to string, overwrite bool
 	body := map[string]any{"from": from, "to": to, "overwrite": overwrite}
 	var out grimoireapi.RenameResult
 	err := c.sendJSON(ctx, http.MethodPost, "/note/rename", body, &out)
+	return out, err
+}
+
+// ImportFile is one file for Import: the name whose extension picks the
+// server-side converter, and a reader over its bytes.
+type ImportFile struct {
+	Name    string
+	Content io.Reader
+}
+
+// Import sends foreign files to be converted into Markdown notes, streaming
+// their bytes as multipart/form-data (no file is buffered whole client-side).
+// The returned error covers request-level failures only; a per-file failure
+// (unsupported type, missing convert model) rides inside its result's Error,
+// one entry per file in submission order, and doesn't stop the other files.
+func (c *Client) Import(ctx context.Context, files []ImportFile) ([]grimoireapi.ImportResult, error) {
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	// The writer feeds the request body as the transport consumes it. It exits
+	// when every file is copied, a source read fails, or the request aborts
+	// (which breaks the pipe and fails the next write).
+	go func() {
+		for _, f := range files {
+			part, err := mw.CreateFormFile("file", f.Name)
+			if err != nil {
+				pw.CloseWithError(err)
+				return
+			}
+			if _, err := io.Copy(part, f.Content); err != nil {
+				pw.CloseWithError(fmt.Errorf("reading %s: %w", f.Name, err))
+				return
+			}
+		}
+		pw.CloseWithError(mw.Close())
+	}()
+	resp, err := c.do(ctx, http.MethodPost, "/import", pr, http.Header{"Content-Type": {mw.FormDataContentType()}})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if err := errorFor(resp); err != nil {
+		return nil, err
+	}
+	var out struct {
+		Results []grimoireapi.ImportResult `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return out.Results, nil
+}
+
+// Reindex syncs the vault into the search index; force re-embeds every note.
+// The call blocks until the pass completes — minutes on a large vault. The
+// shared http.Client carries no timeout and this method adds no deadline of
+// its own, so the pass can take as long as it needs; bound it via ctx if you
+// must. A partial pass (some notes failed) is a success with Failed > 0, not
+// an error.
+func (c *Client) Reindex(ctx context.Context, force bool) (grimoireapi.ReindexResult, error) {
+	var out grimoireapi.ReindexResult
+	err := c.sendJSON(ctx, http.MethodPost, "/reindex", map[string]any{"force": force}, &out)
+	return out, err
+}
+
+// KernelList returns the kernels installed for the vault and, when the
+// registry is reachable, the installable packages it offers (the result's
+// Warning says why Available is missing or stale otherwise).
+func (c *Client) KernelList(ctx context.Context) (grimoireapi.KernelListResult, error) {
+	var out grimoireapi.KernelListResult
+	err := c.getJSON(ctx, "/kernel/list", nil, &out)
+	return out, err
+}
+
+// KernelInstall installs a registry kernel package into the shared kernels
+// dir. version "" picks the package's newest. An already-installed
+// family/version is a 409 APIError; an unknown package or version a 404.
+func (c *Client) KernelInstall(ctx context.Context, name, version string) (grimoireapi.KernelInstallResult, error) {
+	body := map[string]any{"name": name, "version": version}
+	var out grimoireapi.KernelInstallResult
+	err := c.sendJSON(ctx, http.MethodPost, "/kernel/install", body, &out)
+	return out, err
+}
+
+// ThemeList returns the registered themes and, when the registry was
+// reachable, the theme packages it offers (a registry failure degrades to the
+// result's Warning field).
+func (c *Client) ThemeList(ctx context.Context) (grimoireapi.ThemeListResult, error) {
+	var out grimoireapi.ThemeListResult
+	err := c.getJSON(ctx, "/theme/list", nil, &out)
+	return out, err
+}
+
+// ThemeInstall installs a registry theme package into the shared themes dir,
+// live. version "" means the package's newest; reinstalling overwrites.
+func (c *Client) ThemeInstall(ctx context.Context, name, version string) (grimoireapi.ThemeInstallResult, error) {
+	body := map[string]string{"name": name, "version": version}
+	var out grimoireapi.ThemeInstallResult
+	err := c.sendJSON(ctx, http.MethodPost, "/theme/install", body, &out)
+	return out, err
+}
+
+// ThemeRemove removes an installed pluggable theme by id. Built-ins are
+// refused (400); an unknown id is 404.
+func (c *Client) ThemeRemove(ctx context.Context, name string) (grimoireapi.ThemeRemoveResult, error) {
+	body := map[string]string{"name": name}
+	var out grimoireapi.ThemeRemoveResult
+	err := c.sendJSON(ctx, http.MethodPost, "/theme/remove", body, &out)
+	return out, err
+}
+
+// KernelRemove removes an installed kernel version from the shared kernels
+// dir. Builtins and vault-dir kernels are refused (400); not installed is 404.
+func (c *Client) KernelRemove(ctx context.Context, family, version string) (grimoireapi.KernelRemoveResult, error) {
+	body := map[string]any{"family": family, "version": version}
+	var out grimoireapi.KernelRemoveResult
+	err := c.sendJSON(ctx, http.MethodPost, "/kernel/remove", body, &out)
 	return out, err
 }
 

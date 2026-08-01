@@ -2,33 +2,58 @@
 
 Grimoire runs fenced code blocks through **kernels** — out-of-process runners
 discovered from manifest files, a lightweight take on Jupyter kernelspecs. Every
-kernel's source lives in this directory. A kernel is identified by its folder: it
-lives at `<family>/<version>/`, so a family (e.g. `go`) can have several installed
-versions side by side. The `bash` kernel (`bash/5/`) is **built in**: it's
+kernel is identified by its folder: it lives at `<family>/<version>/`, so a
+family (e.g. `go`) can have several installed versions side by side. This
+directory holds only the `bash` kernel (`bash/5/`), which is **built in**:
 embedded into the binary and materialized into every vault on startup, so it
-always works with zero setup. The rest (`go/`, `yaegi/`, `python/`) are
-**installable** — added by dropping the family folder into a vault's kernels dir
-rather than by rebuilding Grimoire — and double as reference examples of the
-kernel contract.
+always works with zero setup — and doubles as the reference example of the
+kernel contract. The installable kernels live in dedicated repos —
+[grimoire-kernel-go](https://github.com/chinese-room-solutions/grimoire-kernel-go),
+[grimoire-kernel-yaegi](https://github.com/chinese-room-solutions/grimoire-kernel-yaegi),
+[grimoire-kernel-python](https://github.com/chinese-room-solutions/grimoire-kernel-python)
+— and are published as packages through
+[grimoire-registry](https://github.com/chinese-room-solutions/grimoire-registry).
 
 ## How discovery works
 
-On startup Grimoire scans `{vault-config-dir}/kernels/<family>/<version>/` for
-`*.kernel.yaml` manifests and indexes each by the fenced-code languages it claims.
-A kernel's identity — its family and version — comes from that path, not the YAML.
-The config dir is per-vault:
+On startup Grimoire scans two roots for `<family>/<version>/*.kernel.yaml`
+manifests and indexes each kernel by the fenced-code languages it claims. A
+kernel's identity — its family and version — comes from that path, not the YAML.
 
-- **Windows:** `%LOCALAPPDATA%\grimoire\vaults\<vault-hash>\kernels\`
-- **Linux:** `~/.local/share/grimoire/vaults/<vault-hash>/kernels/` (XDG)
-- **macOS:** `~/Library/Application Support/grimoire/vaults/<vault-hash>/kernels/`
+1. The **per-vault** kernels dir, `{vault-config-dir}/kernels/`:
+   - **Windows:** `%LOCALAPPDATA%\grimoire\vaults\<vault-hash>\kernels\`
+   - **Linux:** `~/.local/share/grimoire/vaults/<vault-hash>/kernels/` (XDG)
+   - **macOS:** `~/Library/Application Support/grimoire/vaults/<vault-hash>/kernels/`
+2. The **shared** app-level kernels dir every vault sees,
+   `{user-config-dir}/grimoire/kernels/` (e.g. `~/.local/share/grimoire/kernels/`
+   on Linux).
+
+When both hold the same `<family>/<version>`, the per-vault copy wins — so a
+vault can pin or patch a kernel without touching the shared install.
 
 ## Installing a kernel
 
-Copy the kernel's family folder into that `kernels/` directory, preserving its
-`<family>/<version>/` nesting. For the Go kernel:
+The easy way is the registry: each kernel repo publishes a deterministic zip
+(its `make package`) listed in
+[grimoire-registry](https://github.com/chinese-room-solutions/grimoire-registry),
+and the CLI installs it into the shared dir with a sha256-verified download —
+usable immediately, no restart:
 
 ```sh
-cp -r kernels/go "<vault-config-dir>/kernels/"
+grimoire kernel install grimoire-kernel-go   # or @VERSION to pin
+grimoire kernel list
+grimoire kernel remove go 1.26
+```
+
+Manually: copy a kernel's version dir into either `kernels/` directory,
+preserving the `<family>/<version>/` nesting — the shared dir to install for
+every vault, the per-vault dir to scope (or override) it for one. For the Go
+kernel (whose repo holds `1.26/` at its root):
+
+```sh
+git clone https://github.com/chinese-room-solutions/grimoire-kernel-go
+mkdir -p "<user-config-dir>/grimoire/kernels/go"
+cp -r grimoire-kernel-go/1.26 "<user-config-dir>/grimoire/kernels/go/"
 ```
 
 Restart Grimoire (or reopen the vault) and `go`/`golang` blocks become runnable.
@@ -53,7 +78,10 @@ the code, and emits NDJSON events (`output`, then a terminal `exit` or `error`).
 One runner process is kept alive per note so blocks share session state like
 notebook cells.
 
-## Kernels here
+## Published kernels
+
+Each in its own repo (`grimoire-kernel-<family>`), installable via the
+registry:
 
 - **go** — the default Go kernel, via the real toolchain (`go run`). Each block is
   compiled and run as a complete, self-contained program — no shared state between

@@ -89,6 +89,9 @@ func (s *Service) onWatchEvent(w *fsnotify.Watcher, e fsnotify.Event, pending ma
 		return
 	}
 	if rel, ok := s.vaultRel(e.Name); ok {
+		// An external change may have added, moved, or removed a note under the
+		// resolver's cached walk.
+		s.invalidateResolveCache()
 		pending[rel] = time.Now()
 	}
 }
@@ -130,6 +133,9 @@ func (s *Service) rewatch(w *fsnotify.Watcher, prev string) string {
 	if vault == prev {
 		return prev
 	}
+	// The watch target changed (first bind, or a future in-place vault switch):
+	// whatever walk the resolver cached belongs to the old target.
+	s.invalidateResolveCache()
 	for _, p := range w.WatchList() {
 		_ = w.Remove(p)
 	}

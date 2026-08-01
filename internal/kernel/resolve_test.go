@@ -31,7 +31,7 @@ func regOf(ms ...*Manifest) *Registry {
 			if ms[i].Family != ms[j].Family {
 				return ms[i].Family < ms[j].Family
 			}
-			return compareVersions(ms[i].Version, ms[j].Version) > 0
+			return CompareVersions(ms[i].Version, ms[j].Version) > 0
 		})
 	}
 	return &Registry{byLang: byLang, byFamily: byFamily}
@@ -90,7 +90,10 @@ func TestScanKeepsAllVersionsNewestFirst(t *testing.T) {
 	writeKernel(t, root, "go", "1.21", "go")
 	writeKernel(t, root, "yaegi", "0.16.1", "go")
 
-	byLang, byFamily := scan(root, zerolog.Nop())
+	byLang := map[string][]*Manifest{}
+	byFamily := map[string][]*Manifest{}
+	scanInto(root, vaultSource, map[string]bool{}, byLang, byFamily, zerolog.Nop())
+	sortIndexes(byLang, byFamily)
 	require.Len(t, byFamily["go"], 2, "both go versions kept")
 	require.Equal(t, "1.21", byFamily["go"][0].Version, "newest first: 1.21 > 1.9")
 	require.Equal(t, "1.9", byFamily["go"][1].Version)

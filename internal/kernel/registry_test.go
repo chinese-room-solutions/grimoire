@@ -3,6 +3,7 @@ package kernel
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -11,7 +12,7 @@ import (
 
 func TestNewRegistryMaterializesAndFindsBash(t *testing.T) {
 	dir := t.TempDir()
-	reg, err := NewRegistry(dir, zerolog.Nop())
+	reg, err := NewRegistry(dir, "", zerolog.Nop())
 	require.NoError(t, err)
 
 	// The built-in bash kernel's files are written under kernels/bash/<version>/.
@@ -47,7 +48,7 @@ func TestNewRegistryOverwritesBuiltinButKeepsUserKernel(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(bashManifest), 0o755))
 	require.NoError(t, os.WriteFile(bashManifest, []byte("language: tampered\n"), 0o644))
 
-	reg, err := NewRegistry(dir, zerolog.Nop())
+	reg, err := NewRegistry(dir, "", zerolog.Nop())
 	require.NoError(t, err)
 
 	// Built-in restored.
@@ -61,4 +62,84 @@ func TestNewRegistryOverwritesBuiltinButKeepsUserKernel(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "ruby", r.Family)
 	require.Equal(t, "3.2", r.Version)
+}
+
+// TestNewRegistrySharedDir proves the app-level shared dir is scanned in
+// addition to the per-vault dir, with per-vault entries winning on a
+// family/version collision and sources stamped per origin.
+func TestNewRegistrySharedDir(t *testing.T) {
+	tests := []struct {
+		name       string
+		vault      map[string]string // family/version → language, in the vault kernels dir.
+		shared     map[string]string // family/version → language, in the shared dir.
+		lookup     string
+		wantLang   string
+		wantSource Source
+	}{
+		{
+			name:       "shared-only kernel is discovered",
+			shared:     map[string]string{"go/1.26": "go"},
+			lookup:     "go",
+			wantLang:   "go",
+			wantSource: SourceShared,
+		},
+		{
+			name:       "vault copy shadows shared same family/version",
+			vault:      map[string]string{"go/1.26": "vaultgo"},
+			shared:     map[string]string{"go/1.26": "sharedgo"},
+			lookup:     "vaultgo",
+			wantLang:   "vaultgo",
+			wantSource: SourceVault,
+		},
+		{
+			name:       "builtin keeps its source label",
+			shared:     map[string]string{"go/1.26": "go"},
+			lookup:     "bash",
+			wantLang:   "bash",
+			wantSource: SourceBuiltin,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configDir, sharedDir := t.TempDir(), t.TempDir()
+			for key, lang := range tt.vault {
+				family, version, _ := strings.Cut(key, "/")
+				writeKernel(t, filepath.Join(configDir, "kernels"), family, version, lang)
+			}
+			for key, lang := range tt.shared {
+				family, version, _ := strings.Cut(key, "/")
+				writeKernel(t, sharedDir, family, version, lang)
+			}
+			reg, err := NewRegistry(configDir, sharedDir, zerolog.Nop())
+			require.NoError(t, err)
+			m, ok := reg.Lookup(tt.lookup)
+			require.True(t, ok, "lookup %q", tt.lookup)
+			require.Equal(t, tt.wantSource, m.Source)
+			require.Equal(t, strings.ToLower(tt.wantLang), m.Match[0])
+		})
+	}
+}
+
+// TestRegistryInstalled lists the effective kernel set — the vault winner on a
+// collision, sorted by family then newest version first.
+func TestRegistryInstalled(t *testing.T) {
+	configDir, sharedDir := t.TempDir(), t.TempDir()
+	writeKernel(t, filepath.Join(configDir, "kernels"), "go", "1.26", "vaultgo")
+	writeKernel(t, sharedDir, "go", "1.26", "sharedgo") // shadowed by the vault copy.
+	writeKernel(t, sharedDir, "go", "1.21", "oldgo")
+	writeKernel(t, sharedDir, "python", "3", "python")
+
+	reg, err := NewRegistry(configDir, sharedDir, zerolog.Nop())
+	require.NoError(t, err)
+
+	var got []string
+	for _, m := range reg.Installed() {
+		got = append(got, m.Family+"@"+m.Version+":"+string(m.Source))
+	}
+	require.Equal(t, []string{
+		"bash@5:builtin",
+		"go@1.26:vault",
+		"go@1.21:shared",
+		"python@3:shared",
+	}, got)
 }

@@ -23,7 +23,7 @@ func newBashService(t *testing.T, note, content string) *Service {
 	}
 	vault := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(vault, note), []byte(content), 0o644))
-	s := New(nil, t.TempDir(), t.TempDir(), vault, zerolog.Nop())
+	s := New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
 	t.Cleanup(func() { _ = s.Close() })
 	require.NotNil(t, s.kernels, "kernels should be available")
 	return s

@@ -16,7 +16,7 @@ import (
 // bound to a fresh temp vault and config dir (so kernels materialize there).
 func newRunMux(t *testing.T) *http.ServeMux {
 	t.Helper()
-	svc := app.New(nil, t.TempDir(), t.TempDir(), t.TempDir(), zerolog.Nop())
+	svc := app.New(nil, t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), "", zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /action/run-block", runBlockHandler(svc, zerolog.Nop()))
@@ -40,9 +40,11 @@ func TestRunBlockUnknownLanguage(t *testing.T) {
 	rec := postSignals(t, mux, "/action/run-block",
 		`{"gNotePath":"n.md","gRunLang":"cobol","gRunCode":"x","gRunBlock":"0"}`)
 	require.Equal(t, http.StatusOK, rec.Code)
-	// The panel is targeted and a no-kernel notice is patched in.
+	// The panel is targeted and a no-kernel notice is patched in, alongside the
+	// slot the webview fills with an install CTA when the registry has a kernel.
 	require.Contains(t, rec.Body.String(), "g-code-output-0")
 	require.Contains(t, rec.Body.String(), "No kernel for language: cobol")
+	require.Contains(t, rec.Body.String(), `class="g-code-install" data-g-lang="cobol"`)
 }
 
 func TestRunBlockMissingCodeIsNoOp(t *testing.T) {
@@ -77,7 +79,7 @@ func TestCloseNoteReturns204(t *testing.T) {
 // (unsaved) runs along with its kernel session, so a stale unsaved result can't
 // silently reattach when the note is reopened.
 func TestCloseNoteDropsPendingRuns(t *testing.T) {
-	svc := app.New(nil, t.TempDir(), t.TempDir(), t.TempDir(), zerolog.Nop())
+	svc := app.New(nil, t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), "", zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/note/close", closeNoteHandler(svc, zerolog.Nop()))

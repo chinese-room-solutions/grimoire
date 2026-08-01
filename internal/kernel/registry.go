@@ -28,11 +28,35 @@ var builtins = []builtin{
 	{family: "bash", version: "5", manifest: "bash.kernel.yaml", runner: "bash.sh"},
 }
 
+// isBuiltin reports whether family@version is one of the kernels shipped in the
+// binary (and re-materialized on every start).
+func isBuiltin(family, version string) bool {
+	for _, b := range builtins {
+		if b.family == family && b.version == version {
+			return true
+		}
+	}
+	return false
+}
+
 const (
 	kernelsDir  = "kernels"
 	runnerPerm  = 0o755
 	kernelPerm  = 0o644
 	kernelDperm = 0o755
+)
+
+// Source says where an installed kernel was discovered: shipped in the binary
+// (builtin), the app-level shared kernels dir every vault sees (shared), or the
+// vault's own kernels dir (vault). On a family/version collision vault beats
+// shared; builtins live in the vault dir (materialized there) so they take the
+// same precedence.
+type Source string
+
+const (
+	SourceBuiltin Source = "builtin"
+	SourceShared  Source = "shared"
+	SourceVault   Source = "vault"
 )
 
 // Registry holds the kernels discovered for a vault. A language may be claimed by
@@ -48,17 +72,37 @@ type Registry struct {
 	byFamily map[string][]*Manifest
 }
 
-// NewRegistry materializes the built-in kernels under configDir/kernels and scans
-// that directory for manifests, building the kernel index. Built-in files are
-// overwritten on every start (they're ours, so a runner fix ships with the
-// binary); user-authored kernel directories are left untouched.
-func NewRegistry(configDir string, logger zerolog.Logger) (*Registry, error) {
+// NewRegistry materializes the built-in kernels under configDir/kernels and
+// scans two roots for manifests: that per-vault directory, then sharedDir — the
+// app-level kernels dir every vault shares ("" to scan none, e.g. in tests). On
+// a family/version collision the vault entry wins over the shared one. Built-in
+// files are overwritten on every start (they're ours, so a runner fix ships with
+// the binary); user-authored kernel directories are left untouched.
+func NewRegistry(configDir, sharedDir string, logger zerolog.Logger) (*Registry, error) {
 	root := filepath.Join(configDir, kernelsDir)
 	if err := materializeBuiltins(root); err != nil {
 		return nil, fmt.Errorf("materializing built-in kernels: %w", err)
 	}
-	byLang, byFamily := scan(root, logger)
+	byLang := map[string][]*Manifest{}
+	byFamily := map[string][]*Manifest{}
+	seen := map[string]bool{}
+	// Vault first: a family/version it holds shadows the shared copy.
+	scanInto(root, vaultSource, seen, byLang, byFamily, logger)
+	if sharedDir != "" {
+		scanInto(sharedDir, func(string, string) Source { return SourceShared }, seen, byLang, byFamily, logger)
+	}
+	sortIndexes(byLang, byFamily)
 	return &Registry{byLang: byLang, byFamily: byFamily}, nil
+}
+
+// vaultSource labels a kernel found in the vault's own kernels dir: a
+// materialized builtin keeps its builtin identity, anything else is
+// vault-managed.
+func vaultSource(family, version string) Source {
+	if isBuiltin(family, version) {
+		return SourceBuiltin
+	}
+	return SourceVault
 }
 
 // Resolve picks the kernel to run a block in, from a per-block {kernel=FAMILY}
@@ -143,21 +187,24 @@ func writeEmbedded(rel, name, dst string, perm os.FileMode) error {
 	return fsutil.WriteFileAtomic(dst, data, perm)
 }
 
-// scan walks the two-level kernels/<family>/<version>/*.kernel.yaml layout and
-// builds the language and family indexes. Identity is the path: a manifest at
-// <family>/<version>/ becomes that kernel. All kernels are kept; each index is
-// sorted so the newest version of the first family claiming a language is first.
-// A (family,version) seen twice is a misconfiguration — the first wins, the
-// duplicate is logged. A bad manifest is logged and skipped, never fatal.
-func scan(root string, logger zerolog.Logger) (byLang, byFamily map[string][]*Manifest) {
-	byLang = map[string][]*Manifest{}
-	byFamily = map[string][]*Manifest{}
-	seen := map[string]bool{} // "family@version" already indexed.
-
+// scanInto walks one root's two-level <family>/<version>/*.kernel.yaml layout
+// and accumulates the language and family indexes. Identity is the path: a
+// manifest at <family>/<version>/ becomes that kernel, stamped with
+// sourceFor(family, version). A (family,version) already in seen is skipped —
+// so an earlier root's entry (the vault's) shadows a later one's (the shared
+// dir's), and a duplicate within a root is a logged misconfiguration. A bad
+// manifest is logged and skipped, never fatal; a root that doesn't exist yet
+// contributes nothing.
+func scanInto(
+	root string, sourceFor func(family, version string) Source,
+	seen map[string]bool, byLang, byFamily map[string][]*Manifest, logger zerolog.Logger,
+) {
 	families, err := os.ReadDir(root)
 	if err != nil {
-		logger.Warn().Err(err).Msg("could not read kernels dir; no kernels available")
-		return byLang, byFamily
+		if !os.IsNotExist(err) {
+			logger.Warn().Err(err).Str("dir", root).Msg("could not read kernels dir")
+		}
+		return
 	}
 	for _, fam := range families {
 		if !fam.IsDir() {
@@ -182,10 +229,11 @@ func scan(root string, logger zerolog.Logger) (byLang, byFamily map[string][]*Ma
 					continue
 				}
 				if seen[m.Name()] {
-					logger.Warn().Str("kernel", m.Name()).Str("manifest", path).
-						Msg("duplicate kernel version; keeping the first")
+					logger.Debug().Str("kernel", m.Name()).Str("manifest", path).
+						Msg("kernel version already indexed; keeping the earlier one")
 					continue
 				}
+				m.Source = sourceFor(family, version)
 				seen[m.Name()] = true
 				byFamily[family] = append(byFamily[family], m)
 				for _, lang := range m.Match {
@@ -194,21 +242,40 @@ func scan(root string, logger zerolog.Logger) (byLang, byFamily map[string][]*Ma
 			}
 		}
 	}
+}
+
+// sortIndexes orders the accumulated indexes: each family's versions newest
+// first, and a language's kernels grouped by family (name order) with versions
+// newest-first — so the first entry is the newest version of the first family.
+func sortIndexes(byLang, byFamily map[string][]*Manifest) {
 	for family := range byFamily {
 		sortByVersionDesc(byFamily[family])
 	}
-	// A language's kernels: grouped by family (name order), each family's versions
-	// newest-first — so the first entry is the newest version of the first family.
 	for lang := range byLang {
 		ms := byLang[lang]
 		sort.SliceStable(ms, func(i, j int) bool {
 			if ms[i].Family != ms[j].Family {
 				return ms[i].Family < ms[j].Family
 			}
-			return compareVersions(ms[i].Version, ms[j].Version) > 0
+			return CompareVersions(ms[i].Version, ms[j].Version) > 0
 		})
 	}
-	return byLang, byFamily
+}
+
+// Installed returns every discovered kernel — builtin, shared, and vault, the
+// per-vault winner on any collision — sorted by family then newest version
+// first, for listings.
+func (r *Registry) Installed() []*Manifest {
+	families := make([]string, 0, len(r.byFamily))
+	for family := range r.byFamily {
+		families = append(families, family)
+	}
+	sort.Strings(families)
+	var out []*Manifest
+	for _, family := range families {
+		out = append(out, r.byFamily[family]...)
+	}
+	return out
 }
 
 // loadFrom reads and decodes one manifest, stamping its path-derived identity.
@@ -230,6 +297,6 @@ func loadFrom(path, dir, family, version string, logger zerolog.Logger) *Manifes
 // sortByVersionDesc orders a family's manifests newest version first.
 func sortByVersionDesc(ms []*Manifest) {
 	sort.SliceStable(ms, func(i, j int) bool {
-		return compareVersions(ms[i].Version, ms[j].Version) > 0
+		return CompareVersions(ms[i].Version, ms[j].Version) > 0
 	})
 }

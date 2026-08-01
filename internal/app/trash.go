@@ -177,6 +177,7 @@ func (s *Service) trashMove(rel, src string, isDir bool) (trashID string, err er
 	if err := os.Rename(src, dest); err != nil {
 		return "", ctxerr.With(fmt.Errorf("trashing: %w", err), map[string]any{"item": rel})
 	}
+	s.invalidateResolveCache()
 	if s.runs != nil {
 		// The item's cached run output is keyed by its live path(s); it's no longer
 		// there, so drop it (a restore re-runs blocks if wanted).
@@ -354,6 +355,7 @@ func (s *Service) restoreTrashFile(trashID string) (destRel string, isDir bool, 
 	if err := os.Rename(src, dest); err != nil {
 		return "", false, ctxerr.With(fmt.Errorf("restoring: %w", err), map[string]any{"item": destRel})
 	}
+	s.invalidateResolveCache()
 	if err := s.removeTrashID(trashID); err != nil {
 		s.logger.Warn().Err(err).Str("trashID", trashID).Msg("cleaning emptied trash slot")
 	}
@@ -405,7 +407,9 @@ func (s *Service) removeTrashID(trashID string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.RemoveAll(idRoot); err != nil {
+	err = os.RemoveAll(idRoot)
+	s.invalidateResolveCache() // even a failed RemoveAll may have deleted notes.
+	if err != nil {
 		return ctxerr.With(fmt.Errorf("removing from trash: %w", err), map[string]any{"trashID": trashID})
 	}
 	return nil
@@ -418,7 +422,9 @@ func (s *Service) EmptyTrash(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := os.RemoveAll(root); err != nil {
+	err = os.RemoveAll(root)
+	s.invalidateResolveCache() // even a failed RemoveAll may have deleted notes.
+	if err != nil {
 		return ctxerr.With(fmt.Errorf("emptying trash: %w", err), nil)
 	}
 	return nil

@@ -32,6 +32,9 @@ may take a few seconds while its index opens.
 - Every other command prints a human-readable table/line by default.
 - Add `--json` to get the raw API shape for any command when you need to parse
   the result programmatically. Do not parse the human tables.
+- `--json` and `--vault` are **global** flags — put them before the verb
+  (`grimoire --json note get PATH`). Trailing them is a usage error (exit `2`).
+  A verb's own flags may trail its arguments (`grimoire search "q" -k 5`).
 
 ## Editing
 
@@ -45,12 +48,50 @@ may take a few seconds while its index opens.
 - `resolve TARGET` turns a wikilink or bare note name into a note path before you
   assume one.
 
+## Importing foreign files
+
+`import FILE...` converts local files into Markdown notes at the vault root
+(one line per file: `name<TAB>created path`, or `name<TAB>error: …`):
+
+- `.md`/`.markdown`/`.txt`, `.html`, `.docx`/`.odt` convert locally — no
+  gateway needed.
+- `.pdf` needs the convert (vision) model configured in the app's Vault menu;
+  without it the file fails with "no PDF conversion model selected".
+- One bad file doesn't stop the rest; if any file failed the exit code is 1 —
+  read the table to see which.
+- A name collision gets a ` (1)` suffix instead of overwriting.
+
 ## Search
 
 `search QUERY [-k N]` runs hybrid (keyword + vector) retrieval. It needs a
 reachable MASS gateway for embeddings — set `GRIMOIRE_GATEWAY_URL` (default
 `http://localhost:3455/mass.llama-cpp`). Without a working gateway, search fails
 with an error (exit 1); reading and editing notes do not need the gateway.
+
+## Reindexing
+
+`reindex [--force]` syncs the vault into the search index. It embeds, so it
+needs the gateway (like search). Default is incremental — only changed notes
+re-embed; `--force` re-embeds everything (use after an embedding-model change),
+which can run minutes on a large vault — the command waits. A partial pass
+(some notes failed, the rest indexed) prints the stats to stdout, the failure
+summary to stderr, and exits 1. You rarely need this: edits, imports, and
+external changes index automatically.
+
+## Code kernels
+
+Fenced code blocks in notes run through installable kernels. `kernel list`
+prints the installed set (`family version language source`, where source is
+`builtin`/`shared`/`vault`) and the registry's installable packages; a
+`registry unreachable` warning on stderr means the available rows are missing
+or cached — the installed rows are always current. `kernel install
+NAME[@VERSION]` (e.g. `grimoire-kernel-go`) installs a package into the shared
+kernels dir, usable immediately by every vault; already installed exits 4,
+unknown package 3. `kernel remove FAMILY VERSION` removes a shared kernel;
+`theme list|install NAME[@VERSION]|remove NAME` manages UI themes the same
+way (reinstall = update, no conflict; built-in themes can't be removed);
+builtins and vault-dir kernels are refused (exit 1) — the latter are managed as
+folders in the vault's own kernels dir, not through the CLI.
 
 ## Destructive operations
 
@@ -76,5 +117,8 @@ grimoire vault tree
 grimoire resolve "Meeting Notes"
 grimoire folder create archive/2026
 grimoire trash list
+grimoire import notes.docx paper.pdf     # pdf needs the convert model
+grimoire reindex --force                 # full re-embed; needs the gateway
+grimoire kernel install grimoire-kernel-go   # make ```go blocks runnable
 grimoire screenshot -o /tmp/app.png        # GUI window only
 ```

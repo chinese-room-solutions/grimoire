@@ -146,6 +146,20 @@ func TestWrapCodeBlocks(t *testing.T) {
 			[]string{`data-g-block="0"`, `data-g-block="1"`, `id="g-code-output-0"`, `id="g-code-output-1"`},
 			nil,
 		},
+		{
+			// No kernel claims cobol, so the block can't run — but it names a
+			// language, so it carries the slot the install CTA fills.
+			"an unrunnable language block carries an install slot",
+			`<pre data-lang="cobol">DISPLAY 1</pre>`,
+			[]string{`data-g-block="0"`, `class="g-code-install" data-g-lang="cobol"`},
+			[]string{"g-code-run", "g-code-output"},
+		},
+		{
+			"a plain block carries no install slot",
+			"<pre>plain</pre>",
+			[]string{`<div class="g-code-block"><pre>plain</pre>`},
+			[]string{"g-code-install"},
+		},
 	}
 	// A block is only runnable when a kernel claims its language, which the
 	// resolver reports. Treat the languages used above as runnable.
@@ -465,4 +479,79 @@ func TestRenderPageVersion(t *testing.T) {
 			require.Less(t, strings.Index(page, "MASS connection"), strings.Index(page, marker))
 		})
 	}
+}
+
+// TestRenderFullPageExtensionsWindow pins the Extensions dialog's paging and
+// sizing contract, which is split between the page CSS and the page script:
+// each tab is two content-sized grid rows that only split the panel evenly when
+// both overflow (so a short section hands its unused height to the other and
+// the dialog shrinks back to content), each section scrolls on its own, and the
+// script windows the rows behind a "Show More" row.
+func TestRenderFullPageExtensionsWindow(t *testing.T) {
+	page := RenderFullPage("dark", "info", State{})
+
+	require.Contains(t, page, ".g-ext-panel{display:grid;grid-template-rows:minmax(0,auto) minmax(0,auto)")
+	require.Contains(t, page, "align-content:start")
+	require.Contains(t, page, "max-height:max-content")
+	require.Contains(t, page, ".g-ext-section{display:flex;flex-direction:column;min-height:0")
+	require.Contains(t, page, ".g-ext-rows{display:flex;flex-direction:column;gap:0.25rem;min-height:0;overflow-y:auto}")
+	require.Contains(t, page, ".g-ext-more{text-align:center}")
+
+	require.Contains(t, page, "var EXT_PAGE = 5;")
+	require.Contains(t, page, `"Show More"`)
+	require.Contains(t, page, `icon.setAttribute("name", "chevron-down")`)
+}
+
+// TestExtensionListStructure pins the markup the dialog's windowing script
+// walks: one .g-ext-section per list, each holding its rows in a single
+// .g-ext-rows box (the element that scrolls) so the script can window a
+// section's rows and append its "Show More" row beside them.
+func TestExtensionListStructure(t *testing.T) {
+	var buf strings.Builder
+	err := ExtensionList(ExtensionSections{
+		Kind:      ExtKindTheme,
+		Installed: []ExtensionItem{{ID: "dark", Label: "Carbon", Meta: "dark", Locked: "built-in"}},
+		Available: []ExtensionItem{{ID: "neon", Package: "theme-neon", Label: "Neon", Meta: "0.1.0"}},
+	}).Render(context.Background(), &buf)
+	require.NoError(t, err)
+	out := buf.String()
+
+	require.Equal(t, 2, strings.Count(out, `class="g-ext-section"`))
+	require.Equal(t, 2, strings.Count(out, `class="g-ext-rows"`))
+	require.Equal(t, 2, strings.Count(out, `data-g-ext-filter=`))
+	// Every row carries the lowercased haystack the filter matches against.
+	require.Contains(t, out, `data-g-ext-filter="carbon dark dark"`)
+	require.Contains(t, out, `data-g-ext-filter="neon neon 0.1.0"`)
+	// Installed theme rows are the activation surface: the click target attr,
+	// the activatable class, and the (initially hidden) active check.
+	require.Contains(t, out, `data-g-activate="dark"`)
+	require.Contains(t, out, "g-ext-activatable")
+	require.Contains(t, out, `class="g-ext-check"`)
+	// Available rows are not activatable.
+	require.NotContains(t, out, `data-g-activate="neon"`)
+}
+
+// TestExtensionRowRemoveShapes pins Remove to the same compact icon button on
+// both tabs.
+func TestExtensionRowRemoveShapes(t *testing.T) {
+	render := func(kind string, it ExtensionItem) string {
+		var buf strings.Builder
+		require.NoError(t, ExtensionList(ExtensionSections{
+			Kind:      kind,
+			Installed: []ExtensionItem{it},
+		}).Render(context.Background(), &buf))
+		return buf.String()
+	}
+
+	theme := render(ExtKindTheme, ExtensionItem{ID: "neon", Label: "Neon"})
+	require.Contains(t, theme, "circle")
+	require.Contains(t, theme, `variant="danger"`)
+	require.Contains(t, theme, `content="Remove"`)
+
+	kernel := render(ExtKindKernel, ExtensionItem{ID: "go", Label: "Go", Version: "1.0.0"})
+	require.Contains(t, kernel, "circle")
+	require.Contains(t, kernel, `variant="danger"`)
+	require.Contains(t, kernel, `content="Remove"`)
+	require.Contains(t, kernel, `data-g-version="1.0.0"`)
+	require.NotContains(t, kernel, "data-g-activate")
 }

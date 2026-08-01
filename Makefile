@@ -1,4 +1,4 @@
-.PHONY: build build-debug build-setup package run lint test templ icon clean help
+.PHONY: build build-debug build-setup package run lint test e2e templ icon clean help
 
 # VERSION is git-describe (tag/commit/dirty), baked into both the app and the
 # installer via -ldflags. No hardcoded version.
@@ -93,6 +93,12 @@ lint:
 test:
 	go test ./...
 
+# Browser smoke tests over the served UI. Behind the e2e build tag so `make
+# test` stays fast; needs a local chromedriver + Chrome/Chromium (skips cleanly
+# when missing). Local-only by design — not wired into CI.
+e2e: build
+	go test -tags e2e ./test/e2e -count=1 -v
+
 clean:
 	rm -rf bin/ dist/
 
@@ -102,4 +108,5 @@ help:
 	@echo "    build        Build the Grimoire GUI app ($(BIN))"
 	@echo "    build-setup  Build the terminal installer ($(SETUP_BIN))"
 	@echo "    package      Build the single-file self-extracting installer in $(DIST_DIR)/"
+	@echo "    e2e          Browser smoke tests (needs local chromedriver + Chrome)"
 	@echo "    run / lint / test / templ / icon / clean"

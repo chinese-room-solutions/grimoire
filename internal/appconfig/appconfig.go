@@ -104,6 +104,59 @@ func Load(dir string) Config {
 	return cfg
 }
 
+// DefaultRegistryURL is the raw index.yml of the public grimoire-registry —
+// the package index holding installable kernels — fetched off its default
+// branch when registry_url is unset. Mirrors how MASS defaults its own
+// registry URL.
+const DefaultRegistryURL = "https://raw.githubusercontent.com/chinese-room-solutions/grimoire-registry/main/index.yml"
+
+// DefaultThemeRegistryURL is the raw index.yml of the public mass-registry —
+// where theme packages live. Themes are SDK-level artifacts shared with MASS
+// (one themes dir, both apps), so their index is MASS's, not grimoire-registry.
+const DefaultThemeRegistryURL = "https://raw.githubusercontent.com/chinese-room-solutions/mass-registry/main/index.yml"
+
+// App is the app-level (vault-independent) config Grimoire owns, stored as
+// grimoire.json under the app dir (vaultdir.AppDir) — next to the SDK's shared
+// config.json, the same mechanism that makes theme and log level app-wide.
+type App struct {
+	// RegistryURL overrides where installable kernel packages are discovered:
+	// the URL of a grimoire-registry index.yml. Empty means DefaultRegistryURL.
+	RegistryURL string `json:"registry_url,omitempty"`
+	// ThemeRegistryURL overrides where installable theme packages are
+	// discovered. Empty means DefaultThemeRegistryURL (the mass-registry).
+	ThemeRegistryURL string `json:"theme_registry_url,omitempty"`
+}
+
+// RegistryURLOrDefault resolves the configured kernel registry index URL,
+// falling back to the public grimoire-registry.
+func (a App) RegistryURLOrDefault() string {
+	if a.RegistryURL != "" {
+		return a.RegistryURL
+	}
+	return DefaultRegistryURL
+}
+
+// ThemeRegistryURLOrDefault resolves the configured theme registry index URL,
+// falling back to the public mass-registry.
+func (a App) ThemeRegistryURLOrDefault() string {
+	if a.ThemeRegistryURL != "" {
+		return a.ThemeRegistryURL
+	}
+	return DefaultThemeRegistryURL
+}
+
+// LoadApp reads the app-level config from dir (vaultdir.AppDir), returning a
+// zero App if absent or corrupt.
+func LoadApp(dir string) App {
+	var cfg App
+	data, err := os.ReadFile(filepath.Join(dir, fileName))
+	if err != nil {
+		return cfg
+	}
+	_ = json.Unmarshal(data, &cfg)
+	return cfg
+}
+
 // Save writes the config to dir.
 func Save(dir string, cfg Config) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")

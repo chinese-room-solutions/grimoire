@@ -26,7 +26,7 @@ func newVaultMux(t *testing.T) (*http.ServeMux, *string) {
 			return svc, nil
 		},
 		func(_ context.Context, vault string) error {
-			s := app.New(nil, t.TempDir(), t.TempDir(), vault, zerolog.Nop())
+			s := app.New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
 			t.Cleanup(func() { _ = s.Close() })
 			bound = vault
 			svc = s

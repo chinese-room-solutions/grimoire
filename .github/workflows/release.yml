@@ -1,9 +1,12 @@
 name: release
 
-# On a version tag (or manual dispatch), build the Grimoire binary natively on
-# each target OS and attach the archives to a single GitHub Release.
-# Linux needs the GTK/WebKit dev headers (webview_go CGO); Windows ships the
-# pure-Go webview2 binary (no extra DLLs).
+# On a version tag, build the Grimoire binary natively on each target OS and
+# attach the archives to a single GitHub Release. Windows ships the pure-Go
+# webview2 binary (no extra DLLs); Linux/macOS link mass-sdk/webview (CGO)
+# against GTK3 + WebKitGTK 4.1 on the host.
+#
+# workflow_dispatch runs the same builds as a dry run — every job except
+# `publish`, which is tag-gated (softprops needs a tag ref to attach to).
 
 on:
   push:
@@ -11,6 +14,12 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+
+# Never let two releases of the same tag interleave uploads; unlike ci.yml, an
+# in-flight release is not safe to cancel — it may have published assets.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   GOPRIVATE: github.com/chinese-room-solutions/*
@@ -26,7 +35,10 @@ jobs:
         # version — stable names keep releases/latest/download/ links evergreen
         # (the website and READMEs hardcode them).
         include:
-          - os: ubuntu-latest
+          # Pinned, not -latest: GUI deps are provisioned per-image, so a silent
+          # image migration is a silent build change. The Linux binary itself is
+          # built in a container, not on this image — see the build step.
+          - os: ubuntu-24.04
             label: linux-amd64
             asset: grimoire_linux_amd64
           - os: windows-latest
@@ -36,35 +48,67 @@ jobs:
             label: macos-arm64
             asset: grimoire_darwin_arm64
     steps:
+      # Full history, not a shallow clone: `make package` stamps the version from
+      # `git describe --tags`, which needs the tags present — including on
+      # dispatch dry runs, where no tag ref is checked out.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # Linux builds in a container with its own Go, so only the host-built
+      # targets need a toolchain here.
       - uses: actions/setup-go@v7
+        if: runner.os != 'Linux'
         with:
           go-version-file: go.mod
           check-latest: true
       - name: Configure private module access
         shell: bash
         run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
-      - name: Install Linux GUI deps (cached)
+      # The GUI binary links GTK/WebKit dynamically against the host's system
+      # libs, so the build host's glibc becomes the floor for every user. Built
+      # on the 24.04 runner that floor is 2.39, which excludes Ubuntu 22.04 and
+      # Debian 12; built in ubuntu:22.04 the binary tops out at GLIBC_2.34, so
+      # Debian 12 and RHEL 9 work too. Jammy is as far back as we can go —
+      # webkit2gtk-4.1 does not exist before it (focal has only the retired
+      # 4.0), and our cgo requires 4.1.
+      - name: Build + package (Linux, in ubuntu:22.04 for an old-glibc floor)
         if: runner.os == 'Linux'
-        uses: awalsh128/cache-apt-pkgs-action@v1
-        with:
-          packages: libgtk-3-dev libwebkit2gtk-4.1-dev
-          version: 1.0
-      - name: Alias webkit2gtk pkg-config 4.0 -> 4.1
-        if: runner.os == 'Linux'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          # webview_go hardcodes pkg-config webkit2gtk-4.0, but Ubuntu 24.04
-          # ships only 4.1 (API-compatible). Alias the .pc files, in the dir
-          # where the 4.1 ones actually live, so cgo resolves.
-          pcdir=$(pkg-config --variable=pcfiledir webkit2gtk-4.1)
-          sudo ln -sf "$pcdir/webkit2gtk-4.1.pc" "$pcdir/webkit2gtk-4.0.pc"
-          sudo ln -sf "$pcdir/javascriptcoregtk-4.1.pc" "$pcdir/javascriptcoregtk-4.0.pc"
+          # Match the toolchain to go.mod rather than pinning a second version here.
+          govers="$(sed -n 's/^go //p' go.mod)"
+          docker run --rm -v "$PWD:/src" -w /src \
+            -e GOPRIVATE -e GH_PAT -e GOVERS="$govers" \
+            -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            ubuntu:22.04 bash -euo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              # A bare base image lacks things the runner images happen to ship:
+              # g++ (mass-sdk vendors webview.h, which is C++), and
+              # squashfs-tools/desktop-file-utils/file/zsync for appimagetool.
+              apt-get install -y -qq --no-install-recommends \
+                ca-certificates curl git gcc g++ make pkg-config \
+                libgtk-3-dev libwebkit2gtk-4.1-dev \
+                squashfs-tools desktop-file-utils file zsync
+              curl -fsSL "https://go.dev/dl/go${GOVERS}.linux-amd64.tar.gz" | tar -C /usr/local -xz
+              export PATH="/usr/local/go/bin:${PATH}"
+              # The bind-mounted checkout is owned by the runner user, not root.
+              git config --global --add safe.directory /src
+              git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+              pkg-config --print-errors --exists gtk+-3.0 webkit2gtk-4.1
+              make package
+              # Hand the tree back, or the Archive step below cannot move the
+              # root-owned outputs out of bin/ and dist/.
+              chown -R "${HOST_UID}:${HOST_GID}" /src
+            '
       - name: Build
+        if: runner.os != 'Linux'
         run: make build
-      # Installer wizard (grimoire-setup): .AppImage on Linux, ditto-zipped
-      # .app on macOS, console .exe on Windows. The bundlers self-fetch
-      # appimagetool, so no extra CI deps.
+      # Installer wizard (grimoire-setup): ditto-zipped .app on macOS, console
+      # .exe on Windows. The bundlers self-fetch their tools, so no extra CI deps.
       - name: Package installer
+        if: runner.os != 'Linux'
         run: make package
       - name: Archive
         shell: bash
@@ -91,16 +135,31 @@ jobs:
 
   publish:
     needs: build
-    runs-on: ubuntu-latest
+    # Tag-gated: a workflow_dispatch run is a build dry run, with no tag for the
+    # release to attach to. Without this the whole run ends red on success.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
+      # download-artifact nests each matrix leg in its own directory, so flatten
+      # first and checksum exactly what gets uploaded.
+      - name: Collect assets and checksum them
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name 'grimoire_*' -o -name 'grimoire-setup_*' \) \
+            -exec mv -t release {} +
+          cd release
+          sha256sum grimoire_* grimoire-setup_* > SHA256SUMS
+          cat SHA256SUMS
       - uses: softprops/action-gh-release@v3
         with:
-          files: |
-            artifacts/**/*.tar.gz
-            artifacts/**/*.zip
-            artifacts/**/*.AppImage
-            artifacts/**/*.exe
+          files: release/*
           generate_release_notes: true
+          # Missing assets are a failed release, not a partial one.
+          fail_on_unmatched_files: true
+          # Published by hand once the asset list looks right: the website and
+          # READMEs hardcode releases/latest/download/ links, so whatever goes
+          # live is instantly what every user downloads.
+          draft: true

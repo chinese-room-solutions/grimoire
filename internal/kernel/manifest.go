@@ -43,6 +43,7 @@ type Manifest struct {
 
 	Family  string // toolchain family, the parent folder (e.g. "go").
 	Version string // version, the leaf folder (e.g. "1.21").
+	Source  Source // where the kernel was discovered (builtin/shared/vault).
 	dir     string
 }
 

@@ -82,7 +82,7 @@ func TestPageHandlerSeedsConnection(t *testing.T) {
 func TestTrashRestoreHandlerReadsQueryID(t *testing.T) {
 	vault := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "n.md"), []byte("# keep"), 0o644))
-	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, zerolog.Nop())
+	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 
 	id, trashed, err := svc.RemoveNote(context.Background(), "n.md", false, false)
@@ -104,7 +104,7 @@ func TestTrashManyHandlers(t *testing.T) {
 	for _, n := range []string{"a.md", "b.md", "c.md"} {
 		require.NoError(t, os.WriteFile(filepath.Join(vault, n), []byte("# "+n), 0o644))
 	}
-	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, zerolog.Nop())
+	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	ids := map[string]string{}
 	for _, n := range []string{"a.md", "b.md", "c.md"} {

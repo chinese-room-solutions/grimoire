@@ -291,11 +291,19 @@ func wrapCodeBlocksWithRuns(rendered string, overrides []blockFence, sources []s
 		if lang != "" && KernelResolver != nil {
 			label, _, runnable = KernelResolver(lang, ov.Family, ov.Version)
 		}
+		id := strconv.Itoa(i)
 		if !runnable {
-			return `<div class="g-code-block">` + block + copyBtn + `</div>`
+			if lang == "" {
+				return `<div class="g-code-block">` + block + copyBtn + `</div>`
+			}
+			// Dead end: the block names a language nothing here can run. Leave a
+			// slot the webview fills with an install CTA when the registry offers
+			// a kernel for it (the extensions module in grimoire.js); no match leaves
+			// it empty, and CSS hides it.
+			return `<div class="g-code-block" data-g-block="` + id + `">` + block + copyBtn +
+				installSlot(lang) + `</div>`
 		}
 
-		id := strconv.Itoa(i)
 		// The override is carried to the run path as data attributes so a run
 		// reproduces the same resolution the badge shows.
 		kernelAttr := ""
@@ -324,6 +332,17 @@ func wrapCodeBlocksWithRuns(rendered string, overrides []blockFence, sources []s
 		}
 		return `<div class="g-code-block" data-g-block="` + id + `"` + kernelAttr + `>` + block + badge + runAboveBtn + runBtn + copyBtn + panel + `</div>`
 	})
+}
+
+// installSlot is the placeholder the point-of-use kernel install CTA renders
+// into. Whether a kernel package exists for a language is a registry question,
+// so it can't be answered per note render without a network call per note — the
+// webview asks once per session and fills the slots it can.
+func installSlot(lang string) string {
+	if lang == "" {
+		return ""
+	}
+	return `<span class="g-code-install" data-g-lang="` + html.EscapeString(lang) + `"></span>`
 }
 
 // runResultPanelHTML renders a block's persisted run into the output-panel markup
@@ -446,6 +465,9 @@ type State struct {
 	// the page paints the graph overlay open (the g-graph-open class) on first
 	// render instead of the empty prompt — no flash, no JS-timing race on restore.
 	GraphOpen bool
+	// Theme is the resolved active theme name, set by RenderFullPage — it seeds
+	// the $gTheme signal.
+	Theme string
 	// TrashMode is the soft-delete policy for the Settings control: "all" (trash
 	// every delete), "agents" (trash only AI-agent deletes), or "off"
 	// (permanent for everyone).
@@ -510,6 +532,9 @@ func initialSignals(st State) string {
 		"gRunVersion": "",
 		// Trash setting: seeded so the control reflects the persisted mode.
 		"gTrashMode": st.TrashMode,
+		// The active theme. Theme-reactive markup (the Extensions dialog's
+		// active check) data-shows against it; themePicker.apply updates it.
+		"gTheme": st.Theme,
 	}
 	b, err := json.Marshal(sig)
 	if err != nil {
@@ -677,6 +702,41 @@ var styleBlock = `<style>
 #app-grimoire .g-shortcut-desc{font-size:0.85rem;color:var(--mass-text)}
 #app-grimoire .g-shortcut-plus,#app-grimoire .g-shortcut-then{font-size:0.72rem;color:var(--mass-text-muted)}
 #app-grimoire .g-kbd{font-family:var(--sl-font-mono,monospace);font-size:0.72rem;line-height:1;padding:0.2rem 0.4rem;border:1px solid var(--mass-border);border-bottom-width:2px;border-radius:4px;background:var(--mass-bg-panel);color:var(--mass-text);white-space:nowrap}
+/* Extensions dialog: Themes / Kernels, each an Installed section above an
+   Available one. Rows are a name + a meta chip + a right-aligned action.
+   A tab is two content-sized grid rows that split the panel evenly only when
+   both overflow: each section grows to its own content, whatever one section
+   doesn't fill goes to the other, and past the ceiling the sections scroll
+   independently. max-content lets a short tab shrink the dialog back instead of
+   holding the full height, and align-content:start stops the tracks stretching
+   to fill it. */
+#app-grimoire .g-ext-filter{display:block;margin-bottom:0.6rem}
+#app-grimoire .g-ext-tabs sl-tab-panel::part(base){padding:0.75rem 0 0}
+#app-grimoire .g-ext-panel{display:grid;grid-template-rows:minmax(0,auto) minmax(0,auto);align-content:start;gap:0.9rem;min-height:11rem;height:60vh;max-height:max-content}
+#app-grimoire .g-ext-section{display:flex;flex-direction:column;min-height:0;gap:0.35rem}
+#app-grimoire .g-ext-section>.g-label{margin-bottom:0}
+#app-grimoire .g-ext-rows{display:flex;flex-direction:column;gap:0.25rem;min-height:0;overflow-y:auto}
+#app-grimoire .g-ext-more{text-align:center}
+#app-grimoire .g-ext-row{display:flex;align-items:center;gap:0.6rem;padding:0.35rem 0.5rem;border:1px solid var(--mass-border);border-radius:0.35rem;background:var(--mass-bg-panel)}
+#app-grimoire .g-ext-row[hidden]{display:none}
+/* Installed theme rows activate on click (grimoire.js delegates it). */
+#app-grimoire .g-ext-activatable{cursor:pointer;transition:border-color 120ms}
+#app-grimoire .g-ext-activatable:hover{border-color:var(--sl-color-primary-500)}
+#app-grimoire .g-ext-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:0.1rem}
+#app-grimoire .g-ext-line{display:flex;align-items:center;gap:0.6rem}
+#app-grimoire .g-ext-desc{font-size:0.72rem;color:var(--mass-text-muted)}
+#app-grimoire .g-ext-check{color:var(--sl-color-primary-600);font-size:0.85rem}
+#app-grimoire .g-ext-name{font-size:0.85rem;color:var(--mass-text)}
+#app-grimoire .g-ext-meta{font-size:0.68rem;color:var(--mass-text-muted);padding:0.05rem 0.35rem;border:1px solid var(--mass-border);border-radius:999px;white-space:nowrap}
+#app-grimoire .g-ext-actions{margin-left:auto;display:flex;align-items:center;gap:0.4rem}
+#app-grimoire .g-ext-builtin{display:inline-flex;align-items:center;gap:0.25rem;font-size:0.7rem;color:var(--mass-text-muted)}
+#app-grimoire .g-ext-note,#app-grimoire .g-ext-warning{font-size:0.75rem;color:var(--mass-text-muted)}
+#app-grimoire .g-ext-warning{color:var(--mass-warning,var(--mass-text-muted))}
+/* Point-of-use kernel install: the CTA replacing a code block's dead end when
+   the registry offers a kernel for its language. Hidden until JS finds a match. */
+#app-grimoire .g-code-install:empty{display:none}
+#app-grimoire .g-code-install{display:block;margin-top:0.35rem}
+
 /* Shared bottom bar: full-width strip below the body. App icon buttons sit on
    the left, the search input row fills the rest on the right. */
 /* align-items:flex-end so as the textarea grows multiline, the icon buttons and
@@ -1000,8 +1060,12 @@ var styleBlock = `<style>
 #app-grimoire .g-graph.g-graph-blank:not(.g-graph-loading) .g-graph-empty{display:flex}
 /* Loading overlay: centred animated dots shown while the graph fetches + lays
    out (the store opens lazily on a cold start). Plain CSS — no Shoelace spinner,
-   so it always paints; the accent dots read clearly on the empty dark canvas. */
-#app-grimoire .g-graph-loading{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:0.75rem;color:var(--mass-text);font-size:0.85rem;pointer-events:none}
+   so it always paints; the accent dots read clearly on the empty dark canvas.
+   Scoped to the panel INSIDE the graph: g-graph-loading doubles as the state
+   class on #g-graph itself, and unscoped this rule dragged its pointer-events:
+   none onto the whole overlay — leaving the graph close button dead (clicks fell
+   through to the search bar behind it) for as long as a load was in flight. */
+#app-grimoire .g-graph .g-graph-loading{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:0.75rem;color:var(--mass-text);font-size:0.85rem;pointer-events:none}
 #app-grimoire .g-graph.g-graph-loading .g-graph-loading{display:flex}
 #app-grimoire .g-graph-dots{display:flex;gap:0.45rem}
 #app-grimoire .g-graph-dots span{width:0.55rem;height:0.55rem;border-radius:50%;background:var(--mass-accent);animation:g-graph-dot 1s ease-in-out infinite}
@@ -1311,6 +1375,9 @@ func trashModeSelect(mode string) string {
 // settings.
 func RenderFullPage(theme, logLevel string, st State) string {
 	name := uikit.ParseTheme(theme)
+	// The resolved theme seeds the $gTheme signal, so theme-reactive markup
+	// (the Extensions dialog's active check) is correct on first render.
+	st.Theme = string(name)
 	return uikit.Layout(appTitle, RenderPage(string(name), logLevel, st), name)
 }
 

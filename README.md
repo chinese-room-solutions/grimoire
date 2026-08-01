@@ -30,6 +30,8 @@ OS).
 ```sh
 make run       # build and launch the desktop app
 make package   # build the installer into dist/
+make e2e       # browser smoke tests over the served UI (needs a local
+               # chromedriver + Chrome/Chromium; skips cleanly without them)
 ```
 
 ## First run
@@ -67,10 +69,55 @@ grimoire [--vault PATH] [--json] <command> [args]
 | **resolve** | `resolve TARGET` (a wikilink or bare name → a note path) |
 | **folder** | `folder create PATH` · `folder delete PATH [--permanent]` · `folder rename FROM TO` |
 | **trash** | `trash list` · `trash restore ID` · `trash delete ID` · `trash empty` |
+| **import** | `import FILE...` (convert foreign files into notes) |
+| **reindex** | `reindex [--force]` (sync the vault into the search index) |
+| **kernel** | `kernel list` · `kernel install NAME[@VERSION]` · `kernel remove FAMILY VERSION` |
+| **theme** | `theme list` · `theme install NAME[@VERSION]` · `theme remove NAME` |
 | **screenshot** | `screenshot [-o out.png]` (GUI window only) |
 
 `note create` / `note update` take the body from `--content S`, `-f FILE`, or
 stdin.
+
+`import` converts `.md`/`.markdown`/`.txt`, `.html`, and `.docx`/`.odt` files
+locally (no gateway needed); `.pdf` goes through the convert (vision) model
+picked in the app's Vault menu. A file that can't convert is reported on its
+own line without stopping the others (exit `1` if any failed).
+
+`reindex` embeds, so it needs the gateway: incremental by default (unchanged
+notes are skipped by content hash), `--force` re-embeds every note — a full
+rebuild that can run minutes on a large vault; the call waits for it. Notes
+that fail don't abort the pass: their summary goes to stderr and the exit code
+is `1`, while the rest are indexed.
+
+`kernel` manages the code kernels fenced blocks run in (see
+[kernels/README.md](kernels/README.md)). `kernel list` shows what's installed —
+family, version, language, and source (`builtin`, `shared`, or `vault`) — plus
+the packages the registry offers; if the registry is unreachable the installed
+list still prints, with a warning on stderr. `kernel install
+grimoire-kernel-go` downloads the package (sha256-verified) and installs it
+into the **shared** kernels dir (`<user-config>/grimoire/kernels/`), live for
+every vault at once — no restart needed; `@VERSION` pins a version, otherwise
+the newest installs. `kernel remove FAMILY VERSION` deletes a shared kernel;
+builtins and kernels placed in a vault's own kernels dir are refused (manage
+the latter on disk). Packages come from the
+[grimoire-registry](https://github.com/chinese-room-solutions/grimoire-registry)
+index; point `registry_url` in `<user-config>/grimoire/app/grimoire.json` at
+your own index to override it:
+
+```json
+{ "registry_url": "https://example.com/my-index.yml" }
+```
+
+`theme` manages the UI themes shared across the MASS family: a theme is one
+self-describing `.css` in the shared themes dir (`<user-config>/mass/themes/`)
+that both Grimoire and MASS load. `theme list` shows what's registered plus the
+registry's packages; `theme install theme-NAME` downloads (sha256-verified),
+validates, and registers the theme live — reinstalling updates it; `theme
+remove NAME` deletes a pluggable theme (built-ins refused). Theme packages
+come from the
+[mass-registry](https://github.com/chinese-room-solutions/mass-registry) index
+(themes are shared artifacts, unlike kernels); override with
+`theme_registry_url` in the same `grimoire.json`.
 
 ### Vault targeting
 
@@ -81,7 +128,8 @@ vault list` prints the vaults Grimoire knows about (a `*` marks the current one)
 Each command reaches its vault's backend on a loopback port. If none is running,
 the CLI **spawns a headless backend on demand** (no window), serves the call, and
 leaves it warm for follow-ups; that backend **self-retires after ~2 minutes of
-inactivity**. A vault already open in the GUI is reused, so the CLI never blocks
+inactivity** (a request in flight counts as activity for its whole duration, so
+a minutes-long `reindex --force` isn't cut off). A vault already open in the GUI is reused, so the CLI never blocks
 you from opening it yourself — but `screenshot` needs a GUI window and fails
 against a headless backend.
 
@@ -89,6 +137,11 @@ against a headless backend.
 
 Human-readable tables by default; `note get` prints the note's **raw Markdown**.
 Pass `--json` for the raw API shape, for piping into `jq` or another program.
+
+`--json` and `--vault` are global flags: they go **before** the verb
+(`grimoire --json vault list`). A verb's own flags may trail its arguments
+(`grimoire search "index rebuild" -k 5`), but a trailing global flag is a usage
+error (exit `2`).
 
 Exit codes let a script branch on the outcome kind:
 

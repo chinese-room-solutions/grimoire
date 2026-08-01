@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/KernelPryanic/ctxerr"
@@ -210,7 +211,7 @@ func ignoreExit(err error) error {
 // a note's blocks so blocks on the same kernel share shell state. It is safe for
 // concurrent use.
 type Manager struct {
-	reg    *Registry
+	reg    atomic.Pointer[Registry] // swapped by SetRegistry after an install/remove.
 	logger zerolog.Logger
 
 	mu       sync.Mutex
@@ -219,16 +220,29 @@ type Manager struct {
 
 // NewManager builds a Manager over a registry.
 func NewManager(reg *Registry, logger zerolog.Logger) *Manager {
-	return &Manager{
-		reg:      reg,
+	m := &Manager{
 		logger:   logger.With().Str("component", "kernel").Logger(),
 		sessions: map[string]*Session{},
 	}
+	m.reg.Store(reg)
+	return m
+}
+
+// SetRegistry swaps the kernel index a rescan produced (after an install or
+// remove), so newly added kernels resolve without a restart. Live sessions keep
+// running — a swap changes what future runs resolve to, never what's running.
+func (m *Manager) SetRegistry(reg *Registry) {
+	m.reg.Store(reg)
+}
+
+// Registry returns the current kernel index.
+func (m *Manager) Registry() *Registry {
+	return m.reg.Load()
 }
 
 // Has reports whether a kernel claims the given language.
 func (m *Manager) Has(lang string) bool {
-	_, ok := m.reg.Lookup(lang)
+	_, ok := m.Registry().Lookup(lang)
 	return ok
 }
 
@@ -238,7 +252,7 @@ func (m *Manager) Has(lang string) bool {
 // false when nothing resolves (no kernel for the language, or an unknown family/
 // version override). version is the resolved kernel's version.
 func (m *Manager) ResolveInfo(lang, family, version string) (label, resolvedVersion string, ok bool) {
-	man, ok := m.reg.Resolve(lang, family, version)
+	man, ok := m.Registry().Resolve(lang, family, version)
 	if !ok {
 		return "", "", false
 	}
@@ -253,7 +267,7 @@ func (m *Manager) ResolveInfo(lang, family, version string) (label, resolvedVers
 // isn't installed. If the kernel died, the dead session is dropped so a later run
 // respawns.
 func (m *Manager) Run(ctx context.Context, notePath, lang, family, version, code string, emit func(Event)) error {
-	man, ok := m.reg.Resolve(lang, family, version)
+	man, ok := m.Registry().Resolve(lang, family, version)
 	if !ok {
 		if family != "" {
 			return fmt.Errorf("%w: %s", ErrNoKernel, family)

@@ -2,12 +2,14 @@ package grimoireapi
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/chinese-room-solutions/grimoire/internal/app"
+	"github.com/chinese-room-solutions/grimoire/internal/index"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,6 +28,91 @@ func TestCreateNote(t *testing.T) {
 	note, err = api.CreateNote(context.Background(), "Folder/New.md", "# Replaced\n", true)
 	require.NoError(t, err)
 	require.Contains(t, note.Content, "# Replaced")
+}
+
+// TestImportNote covers the API import op over a service with no gateway
+// configured: .md and .txt convert locally, and the post-write indexing failure
+// (no store/embedder) is best-effort — the import still succeeds. Conversion
+// details (html/docx/pdf, collisions) are the service's tests.
+func TestImportNote(t *testing.T) {
+	tests := []struct {
+		name     string
+		file     string
+		content  string
+		wantPath string
+		wantName string
+	}{
+		{"markdown kept verbatim", "Read Me.md", "# Hi\n", "Read Me.md", "Read Me"},
+		{"txt becomes md", "plain.txt", "just text", "plain.md", "plain"},
+	}
+	vault := t.TempDir()
+	api := newAPI(t, vault)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ref, err := api.ImportNote(context.Background(), tt.file, []byte(tt.content))
+			require.NoError(t, err)
+			require.Equal(t, tt.wantPath, ref.Path)
+			require.Equal(t, tt.wantName, ref.Name)
+			data, err := os.ReadFile(filepath.Join(vault, tt.wantPath))
+			require.NoError(t, err)
+			require.Equal(t, tt.content, string(data), "content lands verbatim")
+		})
+	}
+
+	// An unsupported extension surfaces the service sentinel for the transport
+	// layer to render per-file.
+	_, err := api.ImportNote(context.Background(), "archive.zip", []byte("x"))
+	require.ErrorIs(t, err, app.ErrUnsupportedImport)
+}
+
+// TestToReindexResult pins the partial-vs-total mapping: a *index.SyncError is
+// a partial pass folded into the result (the stats still describe what
+// indexed); any other error is a total failure.
+func TestToReindexResult(t *testing.T) {
+	stats := index.Stats{Indexed: 5, Skipped: 2, Pruned: 1, Chunks: 40}
+	tests := []struct {
+		name    string
+		err     error
+		want    ReindexResult
+		wantErr bool
+	}{
+		{
+			name: "clean pass carries the stats",
+			want: ReindexResult{Indexed: 5, Skipped: 2, Pruned: 1, Chunks: 40},
+		},
+		{
+			name: "partial pass keeps the stats and folds the failures in",
+			err:  &index.SyncError{Failed: 3, Errs: []error{errors.New("n1: boom"), errors.New("n2: boom")}},
+			want: ReindexResult{
+				Indexed: 5, Skipped: 2, Pruned: 1, Chunks: 40, Failed: 3,
+				Message: "3 note(s) failed to index: n1: boom; n2: boom; and 1 more",
+			},
+		},
+		{
+			name:    "any other error is a total failure",
+			err:     errors.New("store gone"),
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := toReindexResult(stats, tt.err)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestReindexNoModel: with no embedding model bound, the op surfaces the
+// configuration gap as a total failure for the transport's error mapping.
+func TestReindexNoModel(t *testing.T) {
+	api := newAPI(t, t.TempDir())
+	_, err := api.Reindex(context.Background(), false)
+	require.ErrorIs(t, err, app.ErrNoModel)
 }
 
 // TestCreateNoteWithFrontmatter verifies content carrying its own frontmatter

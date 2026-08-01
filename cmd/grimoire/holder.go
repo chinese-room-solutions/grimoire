@@ -21,9 +21,12 @@ import (
 // advertises its port in each bound vault's port file so the CLI can find and
 // reuse a running instance.
 type serviceHolder struct {
-	logger zerolog.Logger
-	client *grimoireapp.GatewayClient // gateway client, shared across vaults (auth is gateway-scoped).
-	port   int                        // this backend's loopback port, advertised per bound vault.
+	logger           zerolog.Logger
+	client           *grimoireapp.GatewayClient // gateway client, shared across vaults (auth is gateway-scoped).
+	port             int                        // this backend's loopback port, advertised per bound vault.
+	sharedKernels    string                     // app-level kernels dir, shared across vaults ("" = unavailable).
+	registryURL      string                     // kernel package index URL (app-level config, resolved at startup).
+	themeRegistryURL string                     // theme package index URL (mass-registry; app-level config).
 
 	folderPicker  func(title string) (string, bool, error) // wired from the GUI window, if any.
 	screenshotter func() ([]byte, error)
@@ -117,7 +120,8 @@ func (h *serviceHolder) bind(ctx context.Context, vault string) error {
 		h.logger.Warn().Err(err).Msg("recording last vault")
 	}
 
-	svc := grimoireapp.New(h.client, dir, cacheDir, vault, h.logger)
+	svc := grimoireapp.New(h.client, dir, cacheDir, vault, h.sharedKernels, h.registryURL, h.logger)
+	svc.SetThemeRegistryURL(h.themeRegistryURL)
 	h.mu.Lock()
 	if h.folderPicker != nil {
 		svc.SetFolderPicker(h.folderPicker)

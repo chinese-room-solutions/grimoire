@@ -9,6 +9,7 @@ import (
 
 	"github.com/chinese-room-solutions/grimoire/internal/appconfig"
 	"github.com/chinese-room-solutions/grimoire/internal/frontmatter"
+	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 )
@@ -87,7 +88,7 @@ func TestWriteFrontmatter(t *testing.T) {
 
 func TestUIStateRoundTrip(t *testing.T) {
 	configDir := t.TempDir()
-	s := New(nil, configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
+	s := New(nil, configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), t.TempDir(), "", zerolog.Nop())
 	t.Cleanup(func() { _ = s.Close() })
 
 	// Unset key reads empty.
@@ -125,7 +126,7 @@ func TestSetConvertMaxPixels_ClampsAndPersists(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			configDir := t.TempDir()
-			s := New(nil, configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
+			s := New(nil, configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), t.TempDir(), "", zerolog.Nop())
 			t.Cleanup(func() { _ = s.Close() })
 			require.NoError(t, s.SetConvertMaxPixels(tt.px))
 			require.Equal(t, tt.want, appconfig.Load(configDir).ConvertMaxPixels)
@@ -148,7 +149,7 @@ func TestSetConvertPageTimeout_ClampsAndPersists(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			configDir := t.TempDir()
-			s := New(nil, configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
+			s := New(nil, configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), t.TempDir(), "", zerolog.Nop())
 			t.Cleanup(func() { _ = s.Close() })
 			require.NoError(t, s.SetConvertPageTimeout(tt.d))
 			require.Equal(t, tt.want, appconfig.Load(configDir).ConvertPageTimeoutSec)
@@ -489,8 +490,13 @@ func TestReadNote(t *testing.T) {
 func TestResolveNote(t *testing.T) {
 	vault := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(vault, "sub"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(vault, "aa"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(vault, "bb"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "Map Internals.md"), []byte("x"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "sub", "Deep Note.md"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(vault, "Guide.markdown"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(vault, "aa", "Twin.md"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(vault, "bb", "Twin.md"), []byte("x"), 0o644))
 	s := &Service{cfg: appconfig.Config{Vault: vault}}
 
 	tests := []struct {
@@ -503,6 +509,10 @@ func TestResolveNote(t *testing.T) {
 		{"case-insensitive", "map internals", "Map Internals.md", true},
 		{"nested by basename", "Deep Note", "sub/Deep Note.md", true},
 		{"nested by path", "sub/Deep Note", "sub/Deep Note.md", true},
+		{"markdown ext by bare name", "Guide", "Guide.markdown", true},
+		{"markdown ext with extension", "Guide.markdown", "Guide.markdown", true},
+		{"markdown ext with alias", "Guide|shown", "Guide.markdown", true},
+		{"duplicate basename picks lexically first", "Twin", "aa/Twin.md", true},
 		{"missing", "Nope", "", false},
 	}
 	for _, tc := range tests {
@@ -512,6 +522,52 @@ func TestResolveNote(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+
+	// The pick between duplicate basenames stays deterministic on the cached
+	// list, resolve after resolve.
+	for range 3 {
+		got, ok := s.ResolveNote("Twin")
+		require.True(t, ok)
+		require.Equal(t, "aa/Twin.md", got)
+	}
+}
+
+// TestResolveNoteCacheInvalidation pins the resolver's cache contract: every
+// in-app path change (here a rename) and every watcher-reported external change
+// drops the cached walk, so a resolve never serves a path the service itself
+// knows is stale.
+func TestResolveNoteCacheInvalidation(t *testing.T) {
+	vault := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(vault, "Old Name.md"), []byte("x"), 0o644))
+	s := &Service{cfg: appconfig.Config{Vault: vault}}
+
+	got, ok := s.ResolveNote("Old Name") // warm the cache.
+	require.True(t, ok)
+	require.Equal(t, "Old Name.md", got)
+
+	t.Run("rename via the service refreshes the cache", func(t *testing.T) {
+		_, err := s.RenameNote(context.Background(), "Old Name.md", "New Name")
+		require.NoError(t, err)
+
+		_, ok := s.ResolveNote("Old Name")
+		require.False(t, ok)
+		got, ok := s.ResolveNote("New Name")
+		require.True(t, ok)
+		require.Equal(t, "New Name.md", got)
+	})
+
+	t.Run("watcher event picks up an external write", func(t *testing.T) {
+		_, ok := s.ResolveNote("External")
+		require.False(t, ok) // cache is warm and lacks the note.
+
+		ext := filepath.Join(vault, "External.md")
+		require.NoError(t, os.WriteFile(ext, []byte("x"), 0o644))
+		s.onWatchEvent(nil, fsnotify.Event{Name: ext, Op: fsnotify.Create}, map[string]time.Time{})
+
+		got, ok := s.ResolveNote("External")
+		require.True(t, ok)
+		require.Equal(t, "External.md", got)
+	})
 }
 
 // TestSearchWarmupError pins Search's error contract while the store isn't open:

@@ -27,6 +27,8 @@ func mountAPI(mux *http.ServeMux, api *grimoireapi.API, logger zerolog.Logger) {
 	mux.HandleFunc("GET /api/v1/screenshot", apiScreenshotHandler(api, logger))
 	mountAPIVault(mux, api, logger)
 	mountAPIWrite(mux, api, logger)
+	mountAPIKernel(mux, api, logger)
+	mountAPITheme(mux, api, logger)
 }
 
 // apiSearchHandler runs a hybrid search. Query params: q (required), k
@@ -128,17 +130,24 @@ func apiScreenshotHandler(api *grimoireapi.API, logger zerolog.Logger) http.Hand
 // detail is the error text — safe here since the surface is local + authed.
 func writeServiceError(w http.ResponseWriter, err error, logger zerolog.Logger, op string) {
 	switch {
-	case errors.Is(err, app.ErrOutsideVault):
+	case errors.Is(err, app.ErrOutsideVault), errors.Is(err, grimoireapi.ErrKernelBuiltin),
+		errors.Is(err, grimoireapi.ErrKernelVaultManaged), errors.Is(err, grimoireapi.ErrThemeBuiltin):
 		writeAPIError(w, http.StatusBadRequest, err.Error(), logger)
 	case errors.Is(err, app.ErrNoVault), errors.Is(err, app.ErrNoModel), errors.Is(err, app.ErrStoreNotReady),
-		errors.Is(err, app.ErrNoScreenshot):
+		errors.Is(err, app.ErrNoScreenshot), errors.Is(err, grimoireapi.ErrRegistryUnavailable):
 		writeAPIError(w, http.StatusServiceUnavailable, err.Error(), logger)
 	case errors.Is(err, app.ErrNotAFile), errors.Is(err, app.ErrTrashNotFound),
-		errors.Is(err, grimoireapi.ErrEditNotFound):
+		errors.Is(err, grimoireapi.ErrEditNotFound), errors.Is(err, grimoireapi.ErrKernelNotInstalled),
+		errors.Is(err, grimoireapi.ErrKernelPackageUnknown), errors.Is(err, grimoireapi.ErrThemeNotInstalled),
+		errors.Is(err, grimoireapi.ErrThemePackageUnknown):
 		writeAPIError(w, http.StatusNotFound, err.Error(), logger)
 	case errors.Is(err, app.ErrNoteExists), errors.Is(err, app.ErrTrashDisabled),
-		errors.Is(err, grimoireapi.ErrEditAmbiguous):
+		errors.Is(err, grimoireapi.ErrEditAmbiguous), errors.Is(err, grimoireapi.ErrKernelExists):
 		writeAPIError(w, http.StatusConflict, err.Error(), logger)
+	case errors.Is(err, grimoireapi.ErrKernelBadPackage):
+		// The registry answered but its archive was unusable — an upstream fault,
+		// reported verbatim so the operator sees what was wrong with the package.
+		writeAPIError(w, http.StatusBadGateway, err.Error(), logger)
 	case errors.Is(err, grimoireapi.ErrSwitchUnsupported):
 		writeAPIError(w, http.StatusNotImplemented, err.Error(), logger)
 	default:

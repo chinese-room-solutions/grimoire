@@ -33,6 +33,7 @@ const (
 	rootName        = "grimoire"
 	vaultsSubdir    = "vaults"
 	appSubdir       = "app"
+	kernelsSubdir   = "kernels"
 	lastVaultFile   = "last-vault"
 	knownVaultsFile = "known-vaults"
 	indexPrefix     = "index-" // per-model index files, the only true cache.
@@ -158,6 +159,22 @@ func AppDir() (string, error) {
 	dir := filepath.Join(root, appSubdir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("creating app data dir: %w", err)
+	}
+	return dir, nil
+}
+
+// KernelsDir returns the app-level shared kernels directory
+// (<config>/grimoire/kernels), creating it if needed. Kernels installed here
+// are visible to every vault; a vault's own kernels dir overrides it per
+// family/version. Like AppDir it is app-wide state, not tied to any vault.
+func KernelsDir() (string, error) {
+	root, err := Root()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(root, kernelsSubdir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("creating shared kernels dir: %w", err)
 	}
 	return dir, nil
 }

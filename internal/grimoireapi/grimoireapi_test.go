@@ -18,7 +18,7 @@ import (
 // Search needs a real embedder and is covered by the app package's tests.
 func newAPI(t *testing.T, vault string) *API {
 	t.Helper()
-	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, zerolog.Nop())
+	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	return NewStatic(svc)
 }

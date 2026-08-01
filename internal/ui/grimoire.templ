@@ -33,6 +33,7 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 		<input type="hidden" data-bind="gBody" value=""/>
 		<input type="hidden" data-bind="gRenamePath" value=""/>
 		<input type="hidden" data-bind="gNewNote" value=""/>
+		<input type="hidden" data-bind="gTheme" value=""/>
 		<input type="hidden" data-bind="gFolderPath" value=""/>
 		<input type="hidden" data-bind="gNewFolder" value=""/>
 		<input type="hidden" data-bind="gNewParent" value=""/>
@@ -101,6 +102,9 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 		     or the vault tree. The toolbar Trash toggle fires these. -->
 		<button id="g-trash-open-trigger" style="display:none" data-on:click="@get('api/trash/render')"></button>
 		<button id="g-trash-close-trigger" style="display:none" data-on:click="@get('api/files/render')"></button>
+		<!-- Extensions dialog: each tab's list is fetched when it's first shown. -->
+		<button id="g-ext-themes-trigger" style="display:none" data-on:click="@get('api/extensions/themes/render')"></button>
+		<button id="g-ext-kernels-trigger" style="display:none" data-on:click="@get('api/extensions/kernels/render')"></button>
 
 		<!-- Body: sidebar + main, side by side. The shared bottom bar (icons + input)
 		     sits below this, full width. -->
@@ -381,8 +385,20 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 						for _, ti := range uikit.Themes() {
 							<sl-menu-item type="checkbox" value={ string(ti.Name) } checked?={ string(ti.Name) == theme }>{ ti.Label }</sl-menu-item>
 						}
+						<!-- Last row: the dropdown itself stays installed-only, so browsing
+						     for more themes hands off to the Extensions dialog. -->
+						if st.HasVault {
+							<sl-divider></sl-divider>
+							<sl-menu-item value={ ThemeBrowseValue }>Browse themes…</sl-menu-item>
+						}
 					</sl-menu>
 				</sl-dropdown>
+				if st.HasVault {
+					<!-- Extensions: browse and manage themes and kernels. Registry
+					     listing runs through the vault's service, so the entry points
+					     only exist once a vault is bound. -->
+					<sl-icon-button id="g-extensions-btn" class="g-foot-btn" name="puzzle" title="Extensions"></sl-icon-button>
+				}
 				@templ.Raw(settingsHTML)
 				if st.HasVault {
 					@vaultMenu(st)
@@ -423,6 +439,9 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 		<sl-dialog id="g-shortcuts-dialog" label="Keyboard shortcuts" class="mass-dialog">
 			@shortcutsDialog()
 		</sl-dialog>
+
+		<!-- Extensions: browse and manage themes and kernels. -->
+		@extensionsDialog()
 
 		@templ.Raw(script())
 	</div>
@@ -556,10 +575,13 @@ templ runItem(it RunItem) {
 
 // RunPanelMessage replaces the output panel (outer) with a single muted message —
 // used when a block can't run (no kernel, or the interpreter isn't installed)
-// rather than streaming output.
-templ RunPanelMessage(blockID, message string) {
+// rather than streaming output. lang carries the block's language so the webview
+// can offer an install here too when the registry has a kernel for it; the
+// message alone stands when it doesn't.
+templ RunPanelMessage(blockID, lang, message string) {
 	<div class={ "g-code-output" } id={ "g-code-output-" + blockID }>
 		<div class="g-muted">{ message }</div>
+		@templ.Raw(installSlot(lang))
 	</div>
 }
 
@@ -766,6 +788,160 @@ templ shortcutsDialog() {
 			</div>
 		}
 	</div>
+}
+
+// Extension kinds, matching the /api/v1/<kind>/{install,remove} JSON API the
+// row buttons call. Rendered into each row so one JS handler serves both tabs.
+const (
+	ExtKindTheme  = "theme"
+	ExtKindKernel = "kernel"
+)
+
+// ExtensionItem is one row of an Extensions tab.
+type ExtensionItem struct {
+	// ID identifies an installed item to remove: a theme id or a kernel family.
+	ID string
+	// Package is the registry package name an install takes.
+	Package string
+	// Label is the user-visible name; Meta is the chip beside it — a kernel's
+	// version or a theme's base built-in. Desc is the registry package's
+	// description, a muted line under the name (empty for installed items).
+	Label string
+	Meta  string
+	Desc  string
+	// Version pins a kernel remove to one installed version.
+	Version string
+	// Locked, when set, is why the item can't be removed ("built-in", "vault"):
+	// it replaces the row's Remove button with that note.
+	Locked string
+}
+
+// ExtensionSections is one tab's content: what's installed (read from disk, so
+// it lists offline and includes hand-installed items), what the registry offers
+// on top, and — when the registry couldn't be read — why Available is missing or
+// stale. A warning never suppresses the installed list.
+type ExtensionSections struct {
+	Kind      string
+	Installed []ExtensionItem
+	Available []ExtensionItem
+	Warning   string
+}
+
+// ExtensionList renders one Extensions tab, patched into its panel container.
+templ ExtensionList(s ExtensionSections) {
+	<div class="g-ext-section">
+		<span class="g-label">Installed</span>
+		<div class="g-ext-rows">
+			if len(s.Installed) == 0 {
+				<div class="g-ext-note">Nothing installed yet.</div>
+			}
+			for _, it := range s.Installed {
+				@extensionRow(s.Kind, it, true)
+			}
+		</div>
+	</div>
+	<div class="g-ext-section">
+		<span class="g-label">Available</span>
+		if s.Warning != "" {
+			<div class="g-ext-warning">{ s.Warning }</div>
+		}
+		<div class="g-ext-rows">
+			if len(s.Available) == 0 && s.Warning == "" {
+				<div class="g-ext-note">Everything the registry offers is already installed.</div>
+			}
+			for _, it := range s.Available {
+				@extensionRow(s.Kind, it, false)
+			}
+		</div>
+	</div>
+}
+
+// extensionRow is one installed or available extension. The action buttons carry
+// everything the JSON API call needs as data attributes, so one delegated click
+// handler serves both tabs and both directions.
+//
+// Installed theme rows are also the activation surface (like picking the theme
+// in the palette): data-g-activate marks the click target, and the check icon —
+// synced client-side to the live theme — marks the active one.
+templ extensionRow(kind string, it ExtensionItem, installed bool) {
+	<div
+		class={ "g-ext-row", templ.KV("g-ext-activatable", installed && kind == ExtKindTheme) }
+		data-g-ext-filter={ strings.ToLower(strings.TrimSpace(it.Label + " " + it.ID + " " + it.Meta)) }
+		if installed && kind == ExtKindTheme {
+			data-g-activate={ it.ID }
+		}
+	>
+		<span class="g-ext-main">
+			<span class="g-ext-line">
+				<span class="g-ext-name">{ it.Label }</span>
+				if it.Meta != "" {
+					<span class="g-ext-meta">{ it.Meta }</span>
+				}
+				if installed && kind == ExtKindTheme {
+					// Reactive against $gTheme, the same server-seeded-signal pattern
+					// as MASS's dialog. Theme ids are lowercase-alphanumeric (uikit
+					// validates), so direct interpolation can't escape the quotes.
+					<sl-icon class="g-ext-check" name="check-lg" data-show={ "$gTheme === '" + it.ID + "'" }></sl-icon>
+				}
+			</span>
+			if it.Desc != "" {
+				<span class="g-ext-desc">{ it.Desc }</span>
+			}
+		</span>
+		<span class="g-ext-actions">
+			if installed && it.Locked != "" {
+				<span class="g-ext-builtin" title="Managed outside the registry — can't be removed here">{ it.Locked }</span>
+			} else if installed {
+				<sl-tooltip content="Remove">
+					<sl-button class="g-ext-remove" size="small" variant="danger" outline circle
+						data-g-kind={ kind } data-g-id={ it.ID } data-g-version={ it.Version } data-g-label={ it.Label }>
+						<sl-icon name="trash" label="Remove"></sl-icon>
+					</sl-button>
+				</sl-tooltip>
+			} else {
+				<sl-button class="g-ext-install" size="small" variant="primary"
+					data-g-kind={ kind } data-g-pkg={ it.Package } data-g-id={ it.ID } data-g-version={ it.Version } data-g-label={ it.Label }>
+					<sl-icon slot="prefix" name="download"></sl-icon>
+					Install
+				</sl-button>
+			}
+		</span>
+	</div>
+}
+
+// ThemeBrowseValue is the palette dropdown's non-theme last row: selecting it
+// opens the Extensions dialog on the Themes tab instead of applying a theme.
+// Shared with grimoire.js, which branches on it in the picker's select handler.
+const ThemeBrowseValue = "__browse"
+
+// Extension tab panel names, shared with grimoire.js (it shows a panel by name
+// when an entry point asks for a specific tab).
+const (
+	ExtThemesPanel  = "ext-themes"
+	ExtKernelsPanel = "ext-kernels"
+)
+
+// extensionsDialog is the Extensions browser: one overlay with a Themes tab and
+// a Kernels tab, each listing what's installed (read from disk, so it works
+// offline) above what the registry offers. One search box filters the visible
+// tab's rows, client-side. The lists themselves are server-rendered fragments
+// patched into the two containers on open (initExtensions in grimoire.js).
+templ extensionsDialog() {
+	<sl-dialog id="g-extensions-dialog" label="Extensions" class="mass-dialog" style="--width:34rem">
+		<sl-input id="g-ext-filter" class="g-ext-filter" size="small" clearable autocomplete="off" placeholder="Filter extensions…">
+			<sl-icon slot="prefix" name="search"></sl-icon>
+		</sl-input>
+		<sl-tab-group id="g-ext-tabs" class="g-ext-tabs">
+			<sl-tab slot="nav" panel={ ExtThemesPanel }>Themes</sl-tab>
+			<sl-tab slot="nav" panel={ ExtKernelsPanel }>Kernels</sl-tab>
+			<sl-tab-panel name={ ExtThemesPanel }>
+				<div id="g-ext-themes" class="g-ext-panel"></div>
+			</sl-tab-panel>
+			<sl-tab-panel name={ ExtKernelsPanel }>
+				<div id="g-ext-kernels" class="g-ext-panel"></div>
+			</sl-tab-panel>
+		</sl-tab-group>
+	</sl-dialog>
 }
 
 // EmptyConversation is the prompt for a fresh or empty session. It hides as soon

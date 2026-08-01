@@ -412,7 +412,12 @@ func fail(tag, msg string, mode endMode) actionOutcome {
 // the same value, so the two can't disagree. Writing the result to the console is
 // genuinely fire-and-forget (the console IS the output, no recovery path) — the
 // AGENTS errcheck exemption.
+// releaseScreen drops the wizard's held screen session (set by runWizard;
+// a no-op for the scripted faces, which never hold one).
+var releaseScreen = func() {}
+
 func leaveSummary(w io.Writer, s term.Summary) {
+	releaseScreen() // the trace belongs on the operator's own screen
 	for _, l := range s.Lines() {
 		_, _ = fmt.Fprintln(w, l)
 	}

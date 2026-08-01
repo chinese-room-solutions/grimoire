@@ -35,7 +35,7 @@ func TestBashKernelEndToEnd(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not on PATH")
 	}
-	reg, err := NewRegistry(t.TempDir(), zerolog.Nop())
+	reg, err := NewRegistry(t.TempDir(), "", zerolog.Nop())
 	require.NoError(t, err)
 	m := NewManager(reg, zerolog.Nop())
 	defer func() { _ = m.CloseAll() }()
@@ -59,7 +59,7 @@ func TestBashKernelRespawnsAfterExit(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not on PATH")
 	}
-	reg, err := NewRegistry(t.TempDir(), zerolog.Nop())
+	reg, err := NewRegistry(t.TempDir(), "", zerolog.Nop())
 	require.NoError(t, err)
 	m := NewManager(reg, zerolog.Nop())
 	defer func() { _ = m.CloseAll() }()
@@ -91,7 +91,7 @@ func TestBashKernelGuiPath(t *testing.T) {
 	t.Cleanup(func() { _ = os.Setenv("PATH", orig) })
 	require.NoError(t, os.Setenv("PATH", `C:\Windows\System32;C:\Windows`))
 
-	reg, err := NewRegistry(t.TempDir(), zerolog.Nop())
+	reg, err := NewRegistry(t.TempDir(), "", zerolog.Nop())
 	require.NoError(t, err)
 	m := NewManager(reg, zerolog.Nop())
 	defer func() { _ = m.CloseAll() }()

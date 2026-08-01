@@ -74,6 +74,8 @@ func grimoireRoutes(h *serviceHolder, api *grimoireapi.API, appDir string, setti
 	// The per-vault GUI action surface only exists with a vault bound; in the empty
 	// state the page shows the vault picker and none of these are reachable.
 	if svc != nil {
+		mux.HandleFunc("GET /api/extensions/themes/render", extensionThemesHandler(api, logger))
+		mux.HandleFunc("GET /api/extensions/kernels/render", extensionKernelsHandler(api, logger))
 		mux.HandleFunc("GET /api/models/render", modelOptionsHandler(svc, logger, "#g-model-select", "gModel"))
 		mux.HandleFunc("GET /api/convert-models/render", modelOptionsHandler(svc, logger, "#g-convert-model-select", "gConvertModel"))
 		mux.HandleFunc("POST /api/model", modelHandler(svc, logger))
@@ -598,7 +600,7 @@ func runBlockHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 		}
 		err := svc.RunBlock(r.Context(), sig.NotePath, sig.Lang, sig.Kernel, sig.Version, sig.Code, blockEmitter(sse, sig.Block, done))
 		if err != nil {
-			_ = sse.PatchElementTempl(ui.RunPanelMessage(sig.Block, runErrorMessage(sig.Lang, err)),
+			_ = sse.PatchElementTempl(ui.RunPanelMessage(sig.Block, sig.Lang, runErrorMessage(sig.Lang, err)),
 				datastar.WithSelector("#g-code-output-"+sig.Block), datastar.WithModeOuter())
 			logger.Warn().Err(err).Str("lang", sig.Lang).Str("note", sig.NotePath).Msg("running code block")
 		}

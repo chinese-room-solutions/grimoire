@@ -122,6 +122,14 @@ func (e *cliEnv) dispatch(args []string) int {
 		return e.runFolder(args[1:])
 	case "trash":
 		return e.runTrash(args[1:])
+	case "import":
+		return e.runImport(args[1:])
+	case "reindex":
+		return e.runReindex(args[1:])
+	case "kernel":
+		return e.runKernel(args[1:])
+	case "theme":
+		return e.runTheme(args[1:])
 	case "resolve":
 		return e.runResolve(args[1:])
 	case "screenshot":
@@ -322,6 +330,14 @@ Commands:
   folder create PATH                  create a folder
   folder delete PATH [--permanent]    delete a folder
   folder rename FROM TO               move a folder
+  import FILE...                      convert files into notes (.md .txt .html .docx .odt; .pdf needs the convert model)
+  reindex [--force]                   sync the vault into the search index (--force re-embeds every note)
+  kernel list                         list installed code kernels + registry packages
+  kernel install NAME[@VERSION]       install a kernel package from the registry
+  kernel remove FAMILY VERSION        remove an installed (shared) kernel version
+  theme list                          list registered UI themes + registry packages
+  theme install NAME[@VERSION]        install a theme package from the registry
+  theme remove NAME                   remove an installed (pluggable) theme
   trash list                          list soft-deleted items
   trash restore ID                    restore a trashed item
   trash delete ID                     permanently remove one trashed item

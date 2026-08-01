@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 
+	"github.com/chinese-room-solutions/grimoire/internal/app"
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
 	"github.com/rs/zerolog"
 )
@@ -19,6 +22,9 @@ func mountAPIWrite(mux *http.ServeMux, api *grimoireapi.API, logger zerolog.Logg
 	mux.HandleFunc("DELETE /api/v1/note", apiDeleteNoteHandler(api, logger))
 	mux.HandleFunc("PUT /api/v1/note/properties", apiSetPropertiesHandler(api, logger))
 	mux.HandleFunc("POST /api/v1/note/rename", apiRenameNoteHandler(api, logger))
+
+	mux.HandleFunc("POST /api/v1/import", apiImportHandler(api, logger))
+	mux.HandleFunc("POST /api/v1/reindex", apiReindexHandler(api, logger))
 
 	mux.HandleFunc("POST /api/v1/folder", apiCreateFolderHandler(api, logger))
 	mux.HandleFunc("DELETE /api/v1/folder", apiDeleteFolderHandler(api, logger))
@@ -163,6 +169,99 @@ func apiDeleteNoteHandler(api *grimoireapi.API, logger zerolog.Logger) http.Hand
 		if err != nil {
 			writeServiceError(w, err, logger, "delete note")
 			return
+		}
+		writeJSON(w, res, logger)
+	}
+}
+
+// apiImportHandler imports foreign files as Markdown notes. The request is
+// multipart/form-data with one or more "file" parts; each part's filename picks
+// the converter by its extension (same converters as a GUI drop). Files convert
+// one at a time — a part is held in memory only while its file imports — and a
+// failed file (unsupported type, no convert model, a broken document) doesn't
+// abort the rest: the response is 200 with {"results":[{name, path|error}]} in
+// submission order. Only request-level problems (not multipart, no file parts,
+// no vault bound) fail the request as a whole.
+func apiImportHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		mr, err := r.MultipartReader()
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "expected multipart/form-data with file parts", logger)
+			return
+		}
+		// One up-front vault check, so an unbound backend is a request-level 503
+		// rather than the same error repeated per file.
+		if _, open := api.CurrentVault(r.Context()); !open {
+			writeServiceError(w, app.ErrNoVault, logger, "import")
+			return
+		}
+		var results []grimoireapi.ImportResult
+		for {
+			part, err := mr.NextPart() // NextPart closes the previous part.
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				writeAPIError(w, http.StatusBadRequest, "reading multipart body: "+err.Error(), logger)
+				return
+			}
+			name := part.FileName()
+			if part.FormName() != "file" || name == "" {
+				continue // not a file part.
+			}
+			results = append(results, importPart(r, api, name, part, logger))
+		}
+		if len(results) == 0 {
+			writeAPIError(w, http.StatusBadRequest, "no file parts in request", logger)
+			return
+		}
+		writeJSON(w, map[string]any{"results": results}, logger)
+	}
+}
+
+// importPart imports one multipart file part, returning its per-file result;
+// any failure lands in the result's Error rather than aborting the batch.
+func importPart(r *http.Request, api *grimoireapi.API, name string, part io.Reader, logger zerolog.Logger) grimoireapi.ImportResult {
+	// The converters need the whole file, so buffer this one part (capped like
+	// the GUI's per-file import).
+	data, err := io.ReadAll(io.LimitReader(part, importMaxBytes+1))
+	switch {
+	case err != nil:
+		return grimoireapi.ImportResult{Name: name, Error: "reading file: " + err.Error()}
+	case len(data) > importMaxBytes:
+		return grimoireapi.ImportResult{Name: name, Error: fmt.Sprintf("file exceeds %d MiB", importMaxBytes>>20)}
+	}
+	ref, err := api.ImportNote(r.Context(), name, data)
+	if err != nil {
+		logger.Warn().Err(err).Str("file", name).Msg("importing file")
+		return grimoireapi.ImportResult{Name: name, Error: err.Error()}
+	}
+	return grimoireapi.ImportResult{Name: name, Path: ref.Path}
+}
+
+// apiReindexHandler syncs the vault into the search index. The JSON body is
+// optional: {"force": bool}, where force re-embeds every note and the default
+// (or an empty body) is an incremental pass. The call is synchronous — a
+// forced pass over a large vault runs for minutes. A partial pass (some notes
+// failed, the rest indexed) is still a 200, with failed > 0 and the retained
+// errors in message; only a pass that produced nothing (no vault or model,
+// store unavailable) maps to an error status.
+func apiReindexHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Force bool `json:"force"`
+		}
+		if !decodeBody(w, r, &in, logger) {
+			return
+		}
+		res, err := api.Reindex(r.Context(), in.Force)
+		if err != nil {
+			writeServiceError(w, err, logger, "reindex")
+			return
+		}
+		if res.Failed > 0 {
+			logger.Warn().Int("failed", res.Failed).Str("errors", res.Message).
+				Msg("reindex finished with failed notes")
 		}
 		writeJSON(w, res, logger)
 	}
