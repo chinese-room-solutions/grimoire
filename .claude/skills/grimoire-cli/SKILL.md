@@ -5,134 +5,112 @@ description: Read, search, and edit Grimoire/Obsidian vaults via the grimoire CL
 
 # grimoire CLI
 
-`grimoire` is a knowledge base over a folder of Markdown notes (a fresh vault or
-an existing Obsidian vault). Every command reaches the vault's backend over a
-loopback API and applies writes through one safety layer (path-safety, atomic
-writes, automatic reindexing) — so never edit vault files on the filesystem
-directly; go through the CLI.
+A knowledge base over a folder of Markdown notes (a fresh vault or an existing
+Obsidian one). Every command goes through the vault's backend, which owns
+path-safety, atomic writes, and indexing. **Never touch vault files directly** —
+a filesystem write skips all three.
 
 ```sh
 grimoire [--vault PATH] [--json] <command> [args]
+grimoire <command> --help      # synopsis + detail for any command
 ```
 
-## Vault targeting
+`--vault` and `--json` are global: they go **before** the verb. A verb's own
+flags may trail its arguments (`grimoire search "q" -k 5`).
 
-- Omit `--vault` to act on the **last-used** vault (the one most recently opened).
-- Pass `--vault /abs/path` (absolute) to target another vault.
-- Discover vaults with `grimoire vault list` (a `*` marks the current one);
-  `grimoire vault current` prints the active vault's path.
+## Indexing is automatic — don't reindex
 
-The backend is started on demand (headless, no window) if one isn't already
-running, and self-retires after ~2 minutes idle. The first call to a cold vault
-may take a few seconds while its index opens.
+Every write is indexed for you: create, update, edit, props, rename, delete,
+import, and any change made outside Grimoire. A note is searchable by the time
+your next command runs.
 
-## Output contract
+`reindex` exists for two cases only:
 
-- `note get PATH` writes the note's **raw Markdown** to stdout — nothing else.
-- Every other command prints a human-readable table/line by default.
-- Add `--json` to get the raw API shape for any command when you need to parse
-  the result programmatically. Do not parse the human tables.
-- `--json` and `--vault` are **global** flags — put them before the verb
-  (`grimoire --json note get PATH`). Trailing them is a usage error (exit `2`).
-  A verb's own flags may trail its arguments (`grimoire search "q" -k 5`).
+- `reindex --force` after the embedding model or chunker changed — the notes'
+  bytes haven't moved, so nothing else re-embeds them.
+- `reindex PATH...` to repair one note's index entry (a delete that reported
+  `indexWarning`, or a pass that failed while the gateway was down).
+
+A full `reindex` before searching is wasted minutes. It is not a warm-up step.
+
+## Finding things
+
+- `search QUERY [-k N]` — hybrid keyword + vector retrieval. Needs the MASS
+  gateway (`GRIMOIRE_GATEWAY_URL`, default
+  `http://localhost:3455/mass.llama-cpp`); without it, exit 1. Reading and
+  editing need no gateway.
+- `resolve TARGET` — a wikilink or bare name (`"My Note"`, `"My Note|alias"`,
+  with or without `.md`) to a real path. Use it before assuming a path; exit 3
+  if nothing matches.
+- `vault tree` — the folder/note tree. `vault list` / `vault current` — which
+  vaults exist and which one you're acting on.
 
 ## Editing
 
-- Prefer `note edit PATH --old S --new S`: it replaces one **exact, unique**
-  occurrence of `S`. If `S` is missing you get exit 3; if it matches more than
-  once you get exit 4 (ambiguous) — make the anchor longer/unique and retry.
-- Use `note update PATH` only to rewrite a whole note body (from `--content S`,
-  `-f FILE`, or stdin). It replaces everything.
-- Frontmatter/tags: `note props PATH --set key=v1,v2` (repeat `--set` per key);
-  this replaces the note's frontmatter.
-- `create`/`update`/`edit`/`props` take `--reindex`, which holds the command
-  until that note is searchable. Without it the write still re-indexes, just in
-  the background — so use `--reindex` only when your next step searches for what
-  you just wrote.
-- `resolve TARGET` turns a wikilink or bare note name into a note path before you
-  assume one.
+- `note edit PATH --old S --new S` is the default choice: one **exact, unique**
+  occurrence replaced, frontmatter untouched. Exit 3 = anchor absent, exit 4 =
+  anchor ambiguous; lengthen it and retry rather than guessing.
+- `note update PATH` replaces the whole body (`--content S`, `-f FILE`, or
+  stdin) — only when you mean to rewrite the note.
+- `note create PATH` takes the body the same three ways; `--overwrite` replaces
+  instead of failing with exit 4.
+- `note props PATH --set key=v1,v2` replaces the frontmatter wholesale. Repeat
+  `--set` per key; include the keys you want to keep.
+- `note rename FROM TO` moves a note (adds `.md`, creates parents).
+- `note get PATH` prints raw Markdown and nothing else, so it pipes.
 
-## Importing foreign files
+## Deleting
 
-`import FILE...` converts local files into Markdown notes at the vault root
-(one line per file: `name<TAB>created path`, or `name<TAB>error: …`):
+- `note delete` / `folder delete` **trash** by default — recoverable via
+  `trash list` then `trash restore ID`.
+- `--permanent` is a request the vault can refuse. With the trash on for agents
+  (or everyone) your delete is still a trash move; the output says `trashed …`
+  rather than `deleted …`. Read it rather than assuming.
+- `trash delete ID` and `trash empty` are **irreversible** and purge what the
+  trash was protecting. They are the user's call — don't tidy up after yourself
+  with them.
+- A delete prunes the index inline. `indexWarning` in the result (exit 1) means
+  the note left the vault but still answers searches: fix with `reindex PATH`.
 
-- `.md`/`.markdown`/`.txt`, `.html`, `.docx`/`.odt` convert locally — no
-  gateway needed.
-- `.pdf` needs the convert (vision) model configured in the app's Vault menu;
-  without it the file fails with "no PDF conversion model selected".
-- One bad file doesn't stop the rest; if any file failed the exit code is 1 —
-  read the table to see which.
-- A name collision gets a ` (1)` suffix instead of overwriting.
+## Importing
 
-## Search
+`import FILE...` converts files into notes at the vault root, one output line
+each (`name<TAB>path` or `name<TAB>error: …`).
 
-`search QUERY [-k N]` runs hybrid (keyword + vector) retrieval. It needs a
-reachable MASS gateway for embeddings — set `GRIMOIRE_GATEWAY_URL` (default
-`http://localhost:3455/mass.llama-cpp`). Without a working gateway, search fails
-with an error (exit 1); reading and editing notes do not need the gateway.
-
-## Reindexing
-
-`reindex [PATH...] [--force]` syncs the search index. It embeds, so it needs the
-gateway (like search). You rarely need it at all: edits, imports, and external
-changes index automatically.
-
-- No `PATH` covers the whole vault; naming one or more notes syncs just those and
-  leaves the rest of the index alone.
-- Default is incremental — a note whose bytes haven't changed is skipped by
-  content hash. `--force` re-embeds regardless, which is the only way to pick up
-  an embedding-model or chunker change.
-- A forced vault pass can run minutes; the command waits either way. Prefer
-  `reindex PATH...` when you know which notes moved.
-- A named note that's gone from disk is pruned from the index (counted in
-  `pruned`).
-- A partial pass (some notes failed, the rest indexed) prints the stats to
-  stdout, the failure summary to stderr, and exits 1.
+- `.md`/`.markdown`/`.txt`, `.html`, `.docx`/`.odt` convert locally.
+- `.pdf` needs the convert (vision) model set in the app's Vault menu.
+- A failure doesn't stop the batch; exit 1 if any file failed. Name collisions
+  get a ` (1)` suffix.
 
 ## Code kernels
 
-Fenced code blocks in notes run through installable kernels. `kernel list`
-prints the installed set (`family version language source`, where source is
-`builtin`/`shared`/`vault`) and the registry's installable packages; a
-`registry unreachable` warning on stderr means the available rows are missing
-or cached — the installed rows are always current. `kernel install
-NAME[@VERSION]` (e.g. `grimoire-kernel-go`) installs a package into the shared
-kernels dir, usable immediately by every vault; already installed exits 4,
-unknown package 3. `kernel remove FAMILY VERSION` removes a shared kernel;
-`theme list|install NAME[@VERSION]|remove NAME` manages UI themes the same
-way (reinstall = update, no conflict; built-in themes can't be removed);
-builtins and vault-dir kernels are refused (exit 1) — the latter are managed as
-folders in the vault's own kernels dir, not through the CLI.
-
-## Destructive operations
-
-- `note delete PATH` and `folder delete PATH` **trash** by default (restore with
-  `trash restore ID`; list with `trash list`).
-- `--permanent` on a delete, `trash delete ID`, and `trash empty` are
-  **irreversible** — no trash, no undo.
+Fenced blocks in notes run through installable kernels. `kernel list` shows
+`family version language source` (`builtin`/`shared`/`vault`) plus registry
+packages; a `registry unreachable` warning means only the available rows are
+stale. `kernel install NAME[@VERSION]` installs into the shared dir for every
+vault (exit 4 already installed, 3 unknown); `kernel remove FAMILY VERSION`
+removes one, refusing builtins and vault-local kernels. `theme list|install|
+remove` works the same for UI themes.
 
 ## Exit codes
 
-- `0` success
-- `1` request or runtime error
-- `2` usage (bad arguments)
-- `3` not found (missing note, or a resolve/edit anchor that found nothing)
-- `4` conflict (a create/rename that would clobber, or an ambiguous `note edit`)
+`0` ok · `1` error · `2` usage · `3` not found · `4` conflict
 
-## Examples (one per group)
+## Output
+
+Human-readable lines by default; `--json` gives the API shape for any command.
+Parse the JSON, never the tables.
+
+## Examples
 
 ```sh
 grimoire search "vector index rebuild" -k 5
-grimoire note get projects/ideas.md
-grimoire vault tree
 grimoire resolve "Meeting Notes"
-grimoire folder create archive/2026
-grimoire trash list
-grimoire import notes.docx paper.pdf     # pdf needs the convert model
-grimoire note update ideas.md -f new.md --reindex  # searchable when it returns
-grimoire reindex ideas.md archive/old.md # sync just these notes
-grimoire reindex --force                 # full re-embed; needs the gateway
-grimoire kernel install grimoire-kernel-go   # make ```go blocks runnable
-grimoire screenshot -o /tmp/app.png        # GUI window only
+grimoire note get projects/ideas.md
+grimoire note edit projects/ideas.md --old "TODO: bench" --new "Benchmarked: 45ms"
+grimoire note create archive/2026/log.md --content "# Log"
+grimoire --json vault tree
+grimoire import notes.docx paper.pdf          # pdf needs the convert model
+grimoire reindex --force                      # only after a model change
+grimoire kernel install grimoire-kernel-go    # make ```go blocks runnable
 ```
