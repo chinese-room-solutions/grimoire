@@ -240,28 +240,75 @@ func (ix *Indexer) Sync(ctx context.Context, progress Progress, force bool) (Sta
 // SyncNote (re)indexes a single note by its vault-relative path, for fast updates
 // after an in-app edit without walking the whole vault. A note removed from disk
 // is pruned from the store; one whose content hash already matches the store is
-// skipped (same short-circuit as Sync), so a save followed by the watcher's
-// fsnotify echo embeds once, not twice.
-func (ix *Indexer) SyncNote(ctx context.Context, relPath string) error {
+// skipped unless force is set (the same short-circuit as Sync), so a save
+// followed by the watcher's fsnotify echo embeds once, not twice.
+func (ix *Indexer) SyncNote(ctx context.Context, relPath string, force bool) error {
+	_, err := ix.syncNote(ctx, relPath, force)
+	return err
+}
+
+// SyncNotes (re)indexes exactly the named notes, leaving the rest of the store
+// alone — a targeted pass for a caller that knows which notes moved. Unlike Sync
+// it neither walks the vault nor prunes beyond the named paths, so a note missing
+// from disk prunes itself and nothing else. Sequential: the caller names a
+// handful of notes, not a vault, so the concurrency Sync needs would only add
+// moving parts. Failures follow Sync's contract — counted into a *SyncError with
+// the Stats describing what did land.
+func (ix *Indexer) SyncNotes(ctx context.Context, relPaths []string, force bool) (Stats, error) {
+	var stats Stats
+	var failed noteFailures
+	for _, rel := range relPaths {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
+		one, err := ix.syncNote(ctx, rel, force)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return stats, ctxErr
+			}
+			ix.logger.Warn().Err(err).Str("note", rel).Msg("indexing note")
+			failed.add(err)
+			continue
+		}
+		stats.Indexed += one.Indexed
+		stats.Skipped += one.Skipped
+		stats.Pruned += one.Pruned
+		stats.Chunks += one.Chunks
+	}
+	ix.logger.Info().
+		Int("indexed", stats.Indexed).Int("skipped", stats.Skipped).
+		Int("pruned", stats.Pruned).Int("chunks", stats.Chunks).
+		Int("failed", failed.count).
+		Msg("notes synced")
+	return stats, failed.err()
+}
+
+// syncNote is the single-note pass behind SyncNote and SyncNotes, reporting what
+// it did as Stats so a multi-note caller can total them.
+func (ix *Indexer) syncNote(ctx context.Context, relPath string, force bool) (Stats, error) {
 	data, err := os.ReadFile(filepath.Join(ix.vault, filepath.FromSlash(relPath)))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return ix.store.DeleteNote(relPath)
+			if err := ix.store.DeleteNote(relPath); err != nil {
+				return Stats{}, err
+			}
+			return Stats{Pruned: 1}, nil
 		}
-		return fmt.Errorf("reading %q: %w", relPath, err)
+		return Stats{}, fmt.Errorf("reading %q: %w", relPath, err)
 	}
 	hash := hashBytes(data)
 	stored, indexed, err := ix.store.DocHash(relPath)
 	if err != nil {
-		return err
+		return Stats{}, err
 	}
-	if indexed && stored == hash {
-		return nil // unchanged since last index.
+	if !force && indexed && stored == hash {
+		return Stats{Skipped: 1}, nil // unchanged since last index.
 	}
-	if _, err := ix.indexNote(ctx, relPath, hash, string(data)); err != nil {
-		return fmt.Errorf("indexing %q: %w", relPath, err)
+	n, err := ix.indexNote(ctx, relPath, hash, string(data))
+	if err != nil {
+		return Stats{}, fmt.Errorf("indexing %q: %w", relPath, err)
 	}
-	return nil
+	return Stats{Indexed: 1, Chunks: n}, nil
 }
 
 // indexNote chunks, embeds, and upserts a single note. Returns the chunk count.

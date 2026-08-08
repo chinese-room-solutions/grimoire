@@ -81,10 +81,10 @@ func (s *Service) RemoveNote(ctx context.Context, rel string, permanent, byAgent
 		return "", false, s.DeleteNote(ctx, rel)
 	}
 	id, err := s.TrashNote(ctx, rel)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrIndexStale) {
 		return "", false, err
 	}
-	return id, true, nil
+	return id, true, err
 }
 
 // TrashNote moves a note into the vault's trash under a fresh id, preserving its
@@ -107,6 +107,7 @@ func (s *Service) TrashNote(ctx context.Context, rel string) (trashID string, er
 	}
 	if err := s.reindexNoteSync(ctx, rel); err != nil {
 		s.logger.Warn().Err(err).Str("note", rel).Msg("pruning trashed note from index")
+		return id, fmt.Errorf("%w: pruning %q: %w", ErrIndexStale, rel, err)
 	}
 	return id, nil
 }
@@ -121,10 +122,10 @@ func (s *Service) RemoveFolder(ctx context.Context, rel string, permanent, byAge
 		return "", false, s.DeleteFolder(ctx, rel)
 	}
 	id, err := s.TrashFolder(ctx, rel)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrIndexStale) {
 		return "", false, err
 	}
-	return id, true, nil
+	return id, true, err
 }
 
 // TrashFolder moves a whole folder into the vault's trash under a fresh id,
@@ -153,6 +154,7 @@ func (s *Service) TrashFolder(ctx context.Context, rel string) (trashID string, 
 	}
 	if err := s.reindexVaultSync(ctx); err != nil {
 		s.logger.Warn().Err(err).Str("folder", rel).Msg("pruning trashed folder from index")
+		return id, fmt.Errorf("%w: pruning %q: %w", ErrIndexStale, rel, err)
 	}
 	return id, nil
 }

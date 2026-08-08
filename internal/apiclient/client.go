@@ -253,15 +253,16 @@ func (c *Client) Import(ctx context.Context, files []ImportFile) ([]grimoireapi.
 	return out.Results, nil
 }
 
-// Reindex syncs the vault into the search index; force re-embeds every note.
-// The call blocks until the pass completes — minutes on a large vault. The
-// shared http.Client carries no timeout and this method adds no deadline of
-// its own, so the pass can take as long as it needs; bound it via ctx if you
-// must. A partial pass (some notes failed) is a success with Failed > 0, not
-// an error.
-func (c *Client) Reindex(ctx context.Context, force bool) (grimoireapi.ReindexResult, error) {
+// Reindex syncs the search index: the whole vault, or just paths when given.
+// force re-embeds regardless of content hash. The call blocks until the pass
+// completes — minutes for a forced vault pass. The shared http.Client carries
+// no timeout and this method adds no deadline of its own, so the pass can take
+// as long as it needs; bound it via ctx if you must. A partial pass (some notes
+// failed) is a success with Failed > 0, not an error.
+func (c *Client) Reindex(ctx context.Context, paths []string, force bool) (grimoireapi.ReindexResult, error) {
 	var out grimoireapi.ReindexResult
-	err := c.sendJSON(ctx, http.MethodPost, "/reindex", map[string]any{"force": force}, &out)
+	body := map[string]any{"force": force, "paths": paths}
+	err := c.sendJSON(ctx, http.MethodPost, "/reindex", body, &out)
 	return out, err
 }
 

@@ -240,9 +240,15 @@ func (e *cliEnv) runNoteDelete(args []string) int {
 	}
 	if e.json {
 		e.writeJSON(e.out, res)
-		return exitOK
+	} else {
+		e.outln(deleteMessage(res))
 	}
-	e.outln(deleteMessage(res))
+	if res.IndexWarning != "" {
+		// The file is gone; only the index lags. Say so and exit non-zero, or a
+		// search that still returns it reads as a real hit.
+		e.errorf("%s — reindex it to clear the stale entry", res.IndexWarning)
+		return exitError
+	}
 	return exitOK
 }
 

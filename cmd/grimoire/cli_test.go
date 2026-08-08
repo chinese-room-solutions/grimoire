@@ -193,6 +193,36 @@ func TestCLINoteWriteExitCodes(t *testing.T) {
 	}
 }
 
+// TestCLIDeleteIndexWarning: the note left the vault but its index entry didn't.
+// The delete still reports as done, and the exit code is 1 so a caller can't
+// mistake a stale hit for a real one.
+func TestCLIDeleteIndexWarning(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		args  []string
+		route string
+	}{
+		{"note delete", []string{"note", "delete", "n.md"}, "DELETE /api/v1/note"},
+		{"folder delete", []string{"folder", "delete", "f"}, "DELETE /api/v1/folder"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newCLIBackend(t, map[string]http.HandlerFunc{
+				tt.route: func(w http.ResponseWriter, _ *http.Request) {
+					stubJSON(t, w, map[string]any{
+						"path": "n.md", "trashed": false,
+						"indexWarning": "index update failed: pruning \"n.md\": gateway down",
+					})
+				},
+			})
+			e, out, errBuf := b.env(t, false)
+			require.Equal(t, exitError, e.dispatch(tt.args))
+			require.Contains(t, out.String(), "deleted n.md")
+			require.Contains(t, errBuf.String(), "index update failed")
+			require.Contains(t, errBuf.String(), "reindex it to clear the stale entry")
+		})
+	}
+}
+
 func TestCLIResolveExitCodes(t *testing.T) {
 	tests := []struct {
 		name     string

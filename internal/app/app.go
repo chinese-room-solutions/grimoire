@@ -58,6 +58,12 @@ var (
 	// ErrUnsupportedImport is returned when importing a file Grimoire can't turn
 	// into a Markdown note (an unknown extension).
 	ErrUnsupportedImport = errors.New("unsupported file type")
+	// ErrIndexStale wraps a vault change that landed on disk but whose index
+	// update didn't: the delete or move stands, the index still describes the old
+	// state until the next pass. Callers that own the filesystem view (the tree,
+	// the tab strip) treat it as success; callers that promise a searchable index
+	// report it, so a stale hit never passes for a real one.
+	ErrIndexStale = errors.New("index update failed")
 	// ErrNoSessions is returned by session operations when the history store
 	// failed to open at startup.
 	ErrNoSessions = errors.New("session history unavailable")
@@ -397,15 +403,37 @@ func (s *Service) ListModels(ctx context.Context) ([]string, error) {
 // and the error is an *index.SyncError counting the rest, so callers should treat
 // it as a partial pass rather than a total failure.
 func (s *Service) Reindex(ctx context.Context, progress index.Progress, force bool) (index.Stats, error) {
+	ix, err := s.indexer(ctx)
+	if err != nil {
+		return index.Stats{}, err
+	}
+	return ix.Sync(ctx, progress, force)
+}
+
+// ReindexNotes syncs just the named notes (vault-relative paths) into the store,
+// skipping the vault walk and pruning nothing else. Same force semantics and same
+// partial-pass contract as Reindex; a path that no longer exists on disk is
+// pruned from the store and counted in Stats.Pruned.
+func (s *Service) ReindexNotes(ctx context.Context, rels []string, force bool) (index.Stats, error) {
+	ix, err := s.indexer(ctx)
+	if err != nil {
+		return index.Stats{}, err
+	}
+	return ix.SyncNotes(ctx, rels, force)
+}
+
+// indexer builds an Indexer over the bound vault, store, and embedder for a
+// caller-driven pass.
+func (s *Service) indexer(ctx context.Context) (*index.Indexer, error) {
 	s.mu.Lock()
 	cfg, st, emb := s.cfg, s.store, s.embedder
 	s.mu.Unlock()
 
 	if cfg.Vault == "" {
-		return index.Stats{}, ErrNoVault
+		return nil, ErrNoVault
 	}
 	if cfg.EmbedModel == "" {
-		return index.Stats{}, ErrNoModel
+		return nil, ErrNoModel
 	}
 	// A model is configured but its store isn't open — typically because the
 	// dimension probe was cancelled when it ran on a short-lived request context
@@ -414,18 +442,18 @@ func (s *Service) Reindex(ctx context.Context, progress index.Progress, force bo
 	// self-heals the "picked a model, but reindex says none selected" case.
 	if st == nil || emb == nil {
 		if err := s.openStore(ctx); err != nil {
-			return index.Stats{}, fmt.Errorf("%w: %w", ErrStoreNotReady, err)
+			return nil, fmt.Errorf("%w: %w", ErrStoreNotReady, err)
 		}
 		s.mu.Lock()
 		st, emb = s.store, s.embedder
 		s.mu.Unlock()
 		if st == nil || emb == nil {
-			return index.Stats{}, ErrStoreNotReady
+			return nil, ErrStoreNotReady
 		}
 	}
 	ix := index.New(cfg.Vault, st, emb, s.logger)
 	ix.SetConcurrency(cfg.IndexConcurrency) // 0 → indexer default.
-	return ix.Sync(ctx, progress, force)
+	return ix, nil
 }
 
 // Vector relevance is judged relative to the best hit, not by a fixed cutoff:
@@ -1004,6 +1032,7 @@ func (s *Service) DeleteFolder(ctx context.Context, rel string) error {
 	s.writeMu.Unlock()
 	if err := s.reindexVaultSync(ctx); err != nil {
 		s.logger.Warn().Err(err).Str("folder", rel).Msg("pruning deleted folder from index")
+		return fmt.Errorf("%w: pruning %q: %w", ErrIndexStale, rel, err)
 	}
 	return nil
 }
@@ -1057,6 +1086,7 @@ func (s *Service) DeleteNote(ctx context.Context, rel string) error {
 	s.writeMu.Unlock()
 	if err := s.reindexNoteSync(ctx, rel); err != nil {
 		s.logger.Warn().Err(err).Str("note", rel).Msg("pruning deleted note from index")
+		return fmt.Errorf("%w: pruning %q: %w", ErrIndexStale, rel, err)
 	}
 	return nil
 }
@@ -1137,7 +1167,7 @@ func trimMarkdownExt(name string) string {
 // is what matters; the index catches up.
 func (s *Service) reindexNote(rel string) {
 	s.backgroundReindex(reindexNoteTimeout, func(ctx context.Context, ix *index.Indexer) error {
-		return ix.SyncNote(ctx, rel)
+		return ix.SyncNote(ctx, rel, false)
 	})
 }
 
@@ -1151,7 +1181,7 @@ func (s *Service) reindexNoteSync(ctx context.Context, rel string) error {
 	if cfg.Vault == "" || st == nil || emb == nil {
 		return nil
 	}
-	return index.New(cfg.Vault, st, emb, s.logger).SyncNote(ctx, rel)
+	return index.New(cfg.Vault, st, emb, s.logger).SyncNote(ctx, rel, false)
 }
 
 // reindexVaultSync runs a full incremental vault sync inline, blocking until

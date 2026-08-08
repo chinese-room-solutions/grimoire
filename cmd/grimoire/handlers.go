@@ -1577,7 +1577,11 @@ func deleteNotesManyHandler(svc *app.Service, logger zerolog.Logger) http.Handle
 			}
 			if _, _, err := svc.RemoveNote(r.Context(), path, false, false); err != nil {
 				logger.Warn().Err(err).Str("note", path).Msg("batch-deleting note")
-				continue
+				// A stale index still means the note left the vault, so the
+				// preview bookkeeping below must run; anything else didn't delete.
+				if !errors.Is(err, app.ErrIndexStale) {
+					continue
+				}
 			}
 			if path == sig.PreviewPath {
 				closedPreview = true

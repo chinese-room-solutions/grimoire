@@ -239,22 +239,23 @@ func importPart(r *http.Request, api *grimoireapi.API, name string, part io.Read
 	return grimoireapi.ImportResult{Name: name, Path: ref.Path}
 }
 
-// apiReindexHandler syncs the vault into the search index. The JSON body is
-// optional: {"force": bool}, where force re-embeds every note and the default
-// (or an empty body) is an incremental pass. The call is synchronous — a
-// forced pass over a large vault runs for minutes. A partial pass (some notes
-// failed, the rest indexed) is still a 200, with failed > 0 and the retained
-// errors in message; only a pass that produced nothing (no vault or model,
-// store unavailable) maps to an error status.
+// apiReindexHandler syncs the search index. The JSON body is optional:
+// {"force": bool, "paths": []string}, where force re-embeds regardless of
+// content hash and paths narrows the pass to those notes (empty = the whole
+// vault). The call is synchronous — a forced vault pass runs for minutes. A
+// partial pass (some notes failed, the rest indexed) is still a 200, with
+// failed > 0 and the retained errors in message; only a pass that produced
+// nothing (no vault or model, store unavailable) maps to an error status.
 func apiReindexHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Force bool `json:"force"`
+			Force bool     `json:"force"`
+			Paths []string `json:"paths"`
 		}
 		if !decodeBody(w, r, &in, logger) {
 			return
 		}
-		res, err := api.Reindex(r.Context(), in.Force)
+		res, err := api.Reindex(r.Context(), in.Paths, in.Force)
 		if err != nil {
 			writeServiceError(w, err, logger, "reindex")
 			return

@@ -185,18 +185,24 @@ type ReindexResult struct {
 	Message string `json:"message,omitempty"`
 }
 
-// Reindex syncs the vault into the search index: incremental by default
-// (unchanged notes are skipped by content hash), force re-embeds every note (a
-// full rebuild, e.g. after an embedding-model change). It blocks until the
-// pass completes — minutes on a large vault. The error is reserved for a pass
-// that produced nothing (no vault or model bound, store unavailable,
-// cancelled); per-note failures ride in the result instead.
-func (a *API) Reindex(ctx context.Context, force bool) (ReindexResult, error) {
+// Reindex syncs the search index: the whole vault, or just paths when given
+// (vault-relative, as returned by ListVault). Incremental by default — unchanged
+// notes are skipped by content hash — while force re-embeds regardless, for a
+// rebuild after an embedding-model change. It blocks until the pass completes:
+// minutes for a forced vault pass, one embedding call per named note otherwise.
+// A named path that no longer exists on disk is pruned from the index. The error
+// is reserved for a pass that produced nothing (no vault or model bound, store
+// unavailable, cancelled); per-note failures ride in the result instead.
+func (a *API) Reindex(ctx context.Context, paths []string, force bool) (ReindexResult, error) {
 	svc, err := a.service()
 	if err != nil {
 		return ReindexResult{}, err
 	}
-	stats, err := svc.Reindex(ctx, nil, force)
+	if len(paths) == 0 {
+		stats, err := svc.Reindex(ctx, nil, force)
+		return toReindexResult(stats, err)
+	}
+	stats, err := svc.ReindexNotes(ctx, paths, force)
 	return toReindexResult(stats, err)
 }
 
@@ -247,7 +253,7 @@ func (a *API) RenameNote(ctx context.Context, from, to string, overwrite bool) (
 		if errorsIsNoteExists(err) && overwrite {
 			// Displace the occupant (to the trash when the mode allows), then retry.
 			trashID, trashed, delErr := svc.RemoveNote(ctx, to, false, true)
-			if delErr != nil {
+			if delErr != nil && !errors.Is(delErr, app.ErrIndexStale) {
 				return RenameResult{}, delErr
 			}
 			res.ReplacedTrashed, res.ReplacedTrashID = trashed, trashID
@@ -271,6 +277,20 @@ type DeleteResult struct {
 	Path    string `json:"path"`
 	Trashed bool   `json:"trashed"`
 	TrashID string `json:"trashID,omitempty"`
+	// IndexWarning is set when the note is gone from disk but its index entry
+	// isn't: the delete stands, and a search can still return the note until a
+	// reindex of that path clears it.
+	IndexWarning string `json:"indexWarning,omitempty"`
+}
+
+// indexWarning renders a stale-index error for a result field, and "" for any
+// other error (including none) — the caller has already decided a non-stale
+// error is fatal.
+func indexWarning(err error) string {
+	if errors.Is(err, app.ErrIndexStale) {
+		return err.Error()
+	}
+	return ""
 }
 
 // DeleteNote deletes a note. With permanent=false it honours the vault's trash
@@ -284,10 +304,10 @@ func (a *API) DeleteNote(ctx context.Context, path string, permanent bool) (Dele
 	// byAgent=true: this is an API delete, so the "agents only" trash mode
 	// soft-deletes it even when the user's own GUI deletes are permanent.
 	trashID, trashed, err := svc.RemoveNote(ctx, path, permanent, true)
-	if err != nil {
+	if err != nil && !errors.Is(err, app.ErrIndexStale) {
 		return DeleteResult{}, err
 	}
-	return DeleteResult{Path: path, Trashed: trashed, TrashID: trashID}, nil
+	return DeleteResult{Path: path, Trashed: trashed, TrashID: trashID, IndexWarning: indexWarning(err)}, nil
 }
 
 // CreateFolder creates a folder at a vault-relative path (and any missing
@@ -315,10 +335,10 @@ func (a *API) DeleteFolder(ctx context.Context, path string, permanent bool) (De
 	}
 	// byAgent=true: an API delete, so the "agents only" trash mode applies.
 	trashID, trashed, err := svc.RemoveFolder(ctx, path, permanent, true)
-	if err != nil {
+	if err != nil && !errors.Is(err, app.ErrIndexStale) {
 		return DeleteResult{}, err
 	}
-	return DeleteResult{Path: path, Trashed: trashed, TrashID: trashID}, nil
+	return DeleteResult{Path: path, Trashed: trashed, TrashID: trashID, IndexWarning: indexWarning(err)}, nil
 }
 
 // RenameFolder moves a folder to a new vault-relative path. It refuses to replace

@@ -45,6 +45,10 @@ may take a few seconds while its index opens.
   `-f FILE`, or stdin). It replaces everything.
 - Frontmatter/tags: `note props PATH --set key=v1,v2` (repeat `--set` per key);
   this replaces the note's frontmatter.
+- `create`/`update`/`edit`/`props` take `--reindex`, which holds the command
+  until that note is searchable. Without it the write still re-indexes, just in
+  the background — so use `--reindex` only when your next step searches for what
+  you just wrote.
 - `resolve TARGET` turns a wikilink or bare note name into a note path before you
   assume one.
 
@@ -70,13 +74,21 @@ with an error (exit 1); reading and editing notes do not need the gateway.
 
 ## Reindexing
 
-`reindex [--force]` syncs the vault into the search index. It embeds, so it
-needs the gateway (like search). Default is incremental — only changed notes
-re-embed; `--force` re-embeds everything (use after an embedding-model change),
-which can run minutes on a large vault — the command waits. A partial pass
-(some notes failed, the rest indexed) prints the stats to stdout, the failure
-summary to stderr, and exits 1. You rarely need this: edits, imports, and
-external changes index automatically.
+`reindex [PATH...] [--force]` syncs the search index. It embeds, so it needs the
+gateway (like search). You rarely need it at all: edits, imports, and external
+changes index automatically.
+
+- No `PATH` covers the whole vault; naming one or more notes syncs just those and
+  leaves the rest of the index alone.
+- Default is incremental — a note whose bytes haven't changed is skipped by
+  content hash. `--force` re-embeds regardless, which is the only way to pick up
+  an embedding-model or chunker change.
+- A forced vault pass can run minutes; the command waits either way. Prefer
+  `reindex PATH...` when you know which notes moved.
+- A named note that's gone from disk is pruned from the index (counted in
+  `pruned`).
+- A partial pass (some notes failed, the rest indexed) prints the stats to
+  stdout, the failure summary to stderr, and exits 1.
 
 ## Code kernels
 
@@ -118,6 +130,8 @@ grimoire resolve "Meeting Notes"
 grimoire folder create archive/2026
 grimoire trash list
 grimoire import notes.docx paper.pdf     # pdf needs the convert model
+grimoire note update ideas.md -f new.md --reindex  # searchable when it returns
+grimoire reindex ideas.md archive/old.md # sync just these notes
 grimoire reindex --force                 # full re-embed; needs the gateway
 grimoire kernel install grimoire-kernel-go   # make ```go blocks runnable
 grimoire screenshot -o /tmp/app.png        # GUI window only

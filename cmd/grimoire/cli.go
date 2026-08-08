@@ -317,12 +317,13 @@ Global flags:
 Commands:
   search QUERY [-k N]                 hybrid search over the vault
   note get PATH                       print a note's raw Markdown
-  note create PATH [--content S | -f FILE | stdin] [--overwrite]
-  note update PATH [--content S | -f FILE | stdin]
+  note create PATH [--content S | -f FILE | stdin] [--overwrite] [--reindex]
+  note update PATH [--content S | -f FILE | stdin] [--reindex]
   note edit PATH --old S --new S      replace a unique string in a note
   note delete PATH [--permanent]      delete a note (trash unless --permanent)
   note rename FROM TO [--overwrite]   move a note
   note props PATH --set key=v1,v2     replace a note's frontmatter (repeatable)
+  (note create/update/edit/props take --reindex: wait for the index before returning)
   vault tree                          print the vault's note tree
   vault list                          list known vaults (* marks current)
   vault current                       print the current vault's path
@@ -331,7 +332,7 @@ Commands:
   folder delete PATH [--permanent]    delete a folder
   folder rename FROM TO               move a folder
   import FILE...                      convert files into notes (.md .txt .html .docx .odt; .pdf needs the convert model)
-  reindex [--force]                   sync the vault into the search index (--force re-embeds every note)
+  reindex [PATH...] [--force]         sync the search index (no PATH = whole vault; --force ignores the content hash)
   kernel list                         list installed code kernels + registry packages
   kernel install NAME[@VERSION]       install a kernel package from the registry
   kernel remove FAMILY VERSION        remove an installed (shared) kernel version

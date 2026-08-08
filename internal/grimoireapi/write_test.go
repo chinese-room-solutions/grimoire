@@ -111,7 +111,7 @@ func TestToReindexResult(t *testing.T) {
 // configuration gap as a total failure for the transport's error mapping.
 func TestReindexNoModel(t *testing.T) {
 	api := newAPI(t, t.TempDir())
-	_, err := api.Reindex(context.Background(), false)
+	_, err := api.Reindex(context.Background(), nil, false)
 	require.ErrorIs(t, err, app.ErrNoModel)
 }
 

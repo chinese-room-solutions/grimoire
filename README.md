@@ -70,13 +70,17 @@ grimoire [--vault PATH] [--json] <command> [args]
 | **folder** | `folder create PATH` · `folder delete PATH [--permanent]` · `folder rename FROM TO` |
 | **trash** | `trash list` · `trash restore ID` · `trash delete ID` · `trash empty` |
 | **import** | `import FILE...` (convert foreign files into notes) |
-| **reindex** | `reindex [--force]` (sync the vault into the search index) |
+| **reindex** | `reindex [PATH...] [--force]` (sync the search index — whole vault, or just the named notes) |
 | **kernel** | `kernel list` · `kernel install NAME[@VERSION]` · `kernel remove FAMILY VERSION` |
 | **theme** | `theme list` · `theme install NAME[@VERSION]` · `theme remove NAME` |
 | **screenshot** | `screenshot [-o out.png]` (GUI window only) |
 
 `note create` / `note update` take the body from `--content S`, `-f FILE`, or
-stdin.
+stdin. Every write is indexed for you — the note is searchable by the time the
+next command runs — so there is no reindex step after an edit. A delete prunes
+the index inline and reports `indexWarning` (exit `1`) if that prune fails,
+leaving the note gone from disk but still searchable until you `reindex` its
+path.
 
 `import` converts `.md`/`.markdown`/`.txt`, `.html`, and `.docx`/`.odt` files
 locally (no gateway needed); `.pdf` goes through the convert (vision) model
@@ -84,10 +88,14 @@ picked in the app's Vault menu. A file that can't convert is reported on its
 own line without stopping the others (exit `1` if any failed).
 
 `reindex` embeds, so it needs the gateway: incremental by default (unchanged
-notes are skipped by content hash), `--force` re-embeds every note — a full
-rebuild that can run minutes on a large vault; the call waits for it. Notes
-that fail don't abort the pass: their summary goes to stderr and the exit code
-is `1`, while the rest are indexed.
+notes are skipped by content hash), `--force` re-embeds regardless — the only
+way to pick up an embedding-model or chunker change, since the notes' bytes
+haven't moved. Name one or more `PATH`s to sync just those notes (a named note
+gone from disk is pruned from the index); with none, the pass covers the vault
+and a forced one can run minutes. You rarely need any of it — writes, imports,
+and external changes index themselves. The call waits either way. Notes that fail
+don't abort the pass: their summary goes to stderr and the exit code is `1`,
+while the rest are indexed.
 
 `kernel` manages the code kernels fenced blocks run in (see
 [kernels/README.md](kernels/README.md)). `kernel list` shows what's installed —

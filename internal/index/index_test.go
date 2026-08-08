@@ -129,21 +129,21 @@ func TestSyncNote(t *testing.T) {
 	writeNote(t, vault, "a.md", "# A\nalpha")
 
 	// Index just the one note, no full walk.
-	require.NoError(t, ix.SyncNote(context.Background(), "a.md"))
+	require.NoError(t, ix.SyncNote(context.Background(), "a.md", false))
 	n, err := st.Count()
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 
 	// Re-syncing after an edit replaces its chunks.
 	writeNote(t, vault, "a.md", "# A\nalpha\n\n## More\nbeta gamma")
-	require.NoError(t, ix.SyncNote(context.Background(), "a.md"))
+	require.NoError(t, ix.SyncNote(context.Background(), "a.md", false))
 	paths, err := st.Paths()
 	require.NoError(t, err)
 	require.Equal(t, []string{"a.md"}, paths)
 
 	// A note removed from disk is pruned from the store.
 	require.NoError(t, os.Remove(filepath.Join(vault, "a.md")))
-	require.NoError(t, ix.SyncNote(context.Background(), "a.md"))
+	require.NoError(t, ix.SyncNote(context.Background(), "a.md", false))
 	n, err = st.Count()
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
@@ -156,18 +156,97 @@ func TestSyncNote_SkipsUnchanged(t *testing.T) {
 	ix, vault, _, emb := newTestIndexer(t)
 	writeNote(t, vault, "a.md", "# A\nalpha")
 
-	require.NoError(t, ix.SyncNote(context.Background(), "a.md"))
+	require.NoError(t, ix.SyncNote(context.Background(), "a.md", false))
 	first := emb.calls.Load()
 	require.Positive(t, first)
 
 	// Same content on disk: no re-embed.
-	require.NoError(t, ix.SyncNote(context.Background(), "a.md"))
+	require.NoError(t, ix.SyncNote(context.Background(), "a.md", false))
 	require.Equal(t, first, emb.calls.Load(), "unchanged note must not be re-embedded")
 
 	// Changed content: embeds again.
 	writeNote(t, vault, "a.md", "# A\nalpha changed")
-	require.NoError(t, ix.SyncNote(context.Background(), "a.md"))
+	require.NoError(t, ix.SyncNote(context.Background(), "a.md", false))
 	require.Greater(t, emb.calls.Load(), first)
+}
+
+// TestSyncNote_Force covers the one case the hash gate would otherwise block:
+// re-embedding a byte-identical note, which is what a model or chunker change
+// needs.
+func TestSyncNote_Force(t *testing.T) {
+	ix, vault, _, emb := newTestIndexer(t)
+	writeNote(t, vault, "a.md", "# A\nalpha")
+
+	require.NoError(t, ix.SyncNote(context.Background(), "a.md", false))
+	first := emb.calls.Load()
+	require.Positive(t, first)
+
+	require.NoError(t, ix.SyncNote(context.Background(), "a.md", true))
+	require.Greater(t, emb.calls.Load(), first, "force must re-embed an unchanged note")
+}
+
+// TestSyncNotes covers the targeted pass: only the named notes are touched, the
+// stats total per note, and an unnamed note keeps whatever the store already
+// held for it.
+func TestSyncNotes(t *testing.T) {
+	tests := []struct {
+		name    string
+		paths   []string
+		force   bool
+		indexed int
+		skipped int
+		pruned  int
+	}{
+		{name: "one changed note", paths: []string{"a.md"}, indexed: 1},
+		{name: "unchanged note skips", paths: []string{"b.md"}, skipped: 1},
+		{name: "forced unchanged note re-embeds", paths: []string{"b.md"}, force: true, indexed: 1},
+		{name: "missing note is pruned", paths: []string{"gone.md"}, pruned: 1},
+		{name: "mixed batch totals", paths: []string{"a.md", "b.md", "gone.md"}, indexed: 1, skipped: 1, pruned: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ix, vault, st, _ := newTestIndexer(t)
+			writeNote(t, vault, "a.md", "# A\nalpha")
+			writeNote(t, vault, "b.md", "# B\nbeta")
+			writeNote(t, vault, "gone.md", "# Gone\ndelta")
+			_, err := ix.Sync(context.Background(), nil, false)
+			require.NoError(t, err)
+
+			// a.md changes on disk, gone.md leaves it; b.md stays as indexed.
+			writeNote(t, vault, "a.md", "# A\nalpha and more")
+			require.NoError(t, os.Remove(filepath.Join(vault, "gone.md")))
+
+			stats, err := ix.SyncNotes(context.Background(), tt.paths, tt.force)
+			require.NoError(t, err)
+			require.Equal(t, tt.indexed, stats.Indexed)
+			require.Equal(t, tt.skipped, stats.Skipped)
+			require.Equal(t, tt.pruned, stats.Pruned)
+
+			// Notes outside the batch keep their chunks — a targeted pass prunes
+			// only what it was pointed at.
+			paths, err := st.Paths()
+			require.NoError(t, err)
+			require.Contains(t, paths, "b.md")
+		})
+	}
+}
+
+// TestSyncNotes_PartialFailure pins Sync's contract for the targeted pass: one
+// note's failure is counted, not fatal, and the healthy notes still land.
+func TestSyncNotes_PartialFailure(t *testing.T) {
+	ix, vault, st := newTestIndexerWith(t, &poisonEmbedder{dim: testDim, poison: "boom"})
+	writeNote(t, vault, "a.md", "# A\nalpha")
+	writeNote(t, vault, "bad.md", "# Bad\nboom")
+
+	stats, err := ix.SyncNotes(context.Background(), []string{"a.md", "bad.md"}, false)
+	var partial *SyncError
+	require.ErrorAs(t, err, &partial)
+	require.Equal(t, 1, partial.Failed)
+	require.Equal(t, 1, stats.Indexed)
+
+	paths, err := st.Paths()
+	require.NoError(t, err)
+	require.Equal(t, []string{"a.md"}, paths)
 }
 
 func TestSync_IsIncremental(t *testing.T) {
