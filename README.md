@@ -82,6 +82,11 @@ the index inline and reports `indexWarning` (exit `1`) if that prune fails,
 leaving the note gone from disk but still searchable until you `reindex` its
 path.
 
+Deletes honour the vault's trash mode (off / agents only / everyone). Because
+the CLI and JSON API are the agent surface, `--permanent` from them is a request
+the mode can refuse: with the trash on for agents, an agent's delete is a trash
+move regardless. Only your own GUI deletes can skip the trash.
+
 `import` converts `.md`/`.markdown`/`.txt`, `.html`, and `.docx`/`.odt` files
 locally (no gateway needed); `.pdf` goes through the convert (vision) model
 picked in the app's Vault menu. A file that can't convert is reported on its

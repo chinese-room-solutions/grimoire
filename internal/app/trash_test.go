@@ -197,6 +197,49 @@ func TestRemoveNoteAgentsModeOnlyTrashesAgentDeletes(t *testing.T) {
 	require.False(t, exists(t, vault, "User.md"))
 }
 
+// TestRemoveAgentPermanentIsRefused pins the precaution the trash modes exist
+// for: an agent asking for a permanent delete still only gets a trash move, so
+// no API call can destroy a note the user didn't mean to lose. With the trash
+// off for everyone there is nothing to protect and the delete is permanent.
+func TestRemoveAgentPermanentIsRefused(t *testing.T) {
+	tests := []struct {
+		name        string
+		mode        appconfig.TrashMode
+		byAgent     bool
+		wantTrashed bool
+	}{
+		{"agent permanent delete trashes in agents mode", appconfig.TrashAgents, true, true},
+		{"agent permanent delete trashes in all mode", appconfig.TrashAll, true, true},
+		{"agent permanent delete is permanent with trash off", appconfig.TrashOff, true, false},
+		{"user permanent delete stays permanent", appconfig.TrashAll, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, vault := trashService(t, tt.mode, map[string]string{
+				"Note.md": "# Note", "Folder/Deep.md": "# Deep",
+			})
+
+			id, trashed, err := s.RemoveNote(context.Background(), "Note.md", true, tt.byAgent)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantTrashed, trashed)
+			require.False(t, exists(t, vault, "Note.md"), "the note left its original path either way")
+			if tt.wantTrashed {
+				require.True(t, exists(t, vault, trashSlotPath(id, "Note.md")), "it is recoverable")
+			} else {
+				require.Empty(t, id)
+			}
+
+			// Folders take the same route.
+			fid, ftrashed, err := s.RemoveFolder(context.Background(), "Folder", true, tt.byAgent)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantTrashed, ftrashed)
+			if tt.wantTrashed {
+				require.True(t, exists(t, vault, trashSlotPath(fid, "Folder/Deep.md")))
+			}
+		})
+	}
+}
+
 func TestRemoveFolderTrashesAsUnit(t *testing.T) {
 	s, vault := trashService(t, appconfig.TrashAll, map[string]string{
 		"Projects/A.md":     "# A",

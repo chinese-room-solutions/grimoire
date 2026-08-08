@@ -51,6 +51,16 @@ type TrashEntry struct {
 	DeletedAt    time.Time `json:"deletedAt"`
 }
 
+// permanentFor resolves a caller's request to skip the trash. Only the user may
+// make it: an agent's permanent flag is dropped, so when the trash mode covers
+// agents no API call can destroy a note outright. That is the whole point of the
+// agents-only mode — the trash is the undo for a delete the user didn't ask for.
+// With the mode off there is no trash for anyone and the delete is permanent
+// regardless; the caller who turned it off chose that.
+func permanentFor(permanent, byAgent bool) bool {
+	return permanent && !byAgent
+}
+
 // trashesFor reports whether a delete soft-deletes to the trash for the given
 // caller (byAgent = an API delete vs. the user's GUI delete), per the
 // persisted trash mode.
@@ -77,7 +87,7 @@ func (s *Service) SetTrashMode(mode appconfig.TrashMode) error {
 // restore) when trashed, else empty. This is the single delete entry point the
 // GUI and API both call, so the mode is respected everywhere.
 func (s *Service) RemoveNote(ctx context.Context, rel string, permanent, byAgent bool) (trashID string, trashed bool, err error) {
-	if permanent || !s.trashesFor(byAgent) {
+	if permanentFor(permanent, byAgent) || !s.trashesFor(byAgent) {
 		return "", false, s.DeleteNote(ctx, rel)
 	}
 	id, err := s.TrashNote(ctx, rel)
@@ -118,7 +128,7 @@ func (s *Service) TrashNote(ctx context.Context, rel string) (trashID string, er
 // permanently. It is the single folder-delete entry point the GUI and API both
 // call, so the mode is respected everywhere.
 func (s *Service) RemoveFolder(ctx context.Context, rel string, permanent, byAgent bool) (trashID string, trashed bool, err error) {
-	if permanent || !s.trashesFor(byAgent) {
+	if permanentFor(permanent, byAgent) || !s.trashesFor(byAgent) {
 		return "", false, s.DeleteFolder(ctx, rel)
 	}
 	id, err := s.TrashFolder(ctx, rel)

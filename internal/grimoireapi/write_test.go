@@ -281,18 +281,23 @@ func TestDeleteNoteTrashedThenRestore(t *testing.T) {
 	require.Contains(t, note.Content, "# keep me")
 }
 
-func TestDeleteNotePermanent(t *testing.T) {
+// TestDeleteNotePermanentStillTrashesForAgents: the API is the agent surface, so
+// its permanent flag can't defeat the trash the user turned on for agents. The
+// note leaves the vault either way; it stays recoverable.
+func TestDeleteNotePermanentStillTrashesForAgents(t *testing.T) {
 	vault := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "n.md"), []byte("# bye"), 0o644))
-	api := newAPI(t, vault)
+	api := newAPI(t, vault) // trash defaults to enabled.
 
 	res, err := api.DeleteNote(context.Background(), "n.md", true)
 	require.NoError(t, err)
-	require.False(t, res.Trashed)
+	require.True(t, res.Trashed, "an agent's permanent delete is downgraded to a trash move")
+	require.NoFileExists(t, filepath.Join(vault, "n.md"))
 
 	items, err := api.ListTrash(context.Background())
 	require.NoError(t, err)
-	require.Empty(t, items)
+	require.Len(t, items, 1)
+	require.Equal(t, "n.md", items[0].OriginalPath)
 }
 
 func TestEmptyTrash(t *testing.T) {
@@ -324,7 +329,7 @@ func TestFolderCreateRenameDelete(t *testing.T) {
 
 	res, err := api.DeleteFolder(context.Background(), "Work", true)
 	require.NoError(t, err)
-	require.False(t, res.Trashed, "permanent=true bypasses the trash")
+	require.True(t, res.Trashed, "an agent's permanent delete is downgraded to a trash move")
 }
 
 func TestDeleteFolderTrashedThenRestore(t *testing.T) {
