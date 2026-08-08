@@ -313,14 +313,29 @@
     }
 
     // Call the JSON API a row's button addresses (the same endpoints the CLI
-    // uses) and re-render that tab. Returns the decoded body, or null on failure.
+    // uses) and re-render that tab. Returns the decoded body, or null on
+    // failure — a failure always toasts, so the button never dead-ends silently
+    // (an unpublished registry artifact, say, 503s here).
     function call(kind, action, body) {
       return fetch("api/v1/" + kind + "/" + action, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-      }).then(function (r) { return r.ok ? r.json() : null; })
-        .catch(function () { return null; });
+      }).then(function (r) {
+        if (r.ok) return r.json();
+        return r.text().then(function (t) {
+          fail(kind, action, window.massErrorText(t) || "HTTP " + r.status);
+          return null;
+        });
+      }, function () {
+        fail(kind, action, "the app isn't responding");
+        return null;
+      });
+    }
+
+    function fail(kind, action, reason) {
+      window.massToast("Couldn't " + action + " " + kind + ": " + reason + ".",
+        { variant: "danger" });
     }
 
     // Install: a theme joins the palette dropdown but is NOT applied — the user
@@ -1727,26 +1742,12 @@
     return /\.(?:md|markdown)$/i.test(href.split(/[?#]/)[0]);
   }
 
-  // showLinkNotice surfaces a transient warning toast (Shoelace sl-alert) when a
-  // rendered link can't be opened — the target is missing, a directory, or
-  // outside the vault. Used instead of navigating to a dead link.
+  // showLinkNotice warns when a rendered link can't be opened — the target is
+  // missing, a directory, or outside the vault. Used instead of navigating to a
+  // dead link.
   function showLinkNotice(path) {
-    var alert = Object.assign(document.createElement("sl-alert"), {
-      variant: "warning", closable: true, duration: 4000,
-      innerHTML: '<sl-icon slot="icon" name="exclamation-triangle"></sl-icon>' +
-        "Can't open " + escapeHTML(path) + " — it may be missing or not a file.",
-    });
-    document.body.appendChild(alert);
-    // The autoloader registers sl-alert lazily, so .toast() may not exist yet on
-    // first use; wait for the definition before calling it.
-    customElements.whenDefined("sl-alert").then(function () { alert.toast(); });
-  }
-
-  // escapeHTML escapes text for safe insertion into innerHTML.
-  function escapeHTML(s) {
-    var d = document.createElement("div");
-    d.textContent = s;
-    return d.innerHTML;
+    window.massToast("Can't open " + path + " — it may be missing or not a file.",
+      { variant: "warning" });
   }
 
   // Preview navigator: opens notes (from search-result links and [[wikilinks]])
