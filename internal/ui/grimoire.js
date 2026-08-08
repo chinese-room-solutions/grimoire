@@ -3223,8 +3223,8 @@
   // note centroids). The whole simulation + render is a small self-contained
   // canvas loop — no graph library. Nodes repel each other, edges pull their
   // endpoints together (stronger for more-similar pairs), and a weak gravity
-  // keeps the whole thing centered. Click a node to open that note; drag to
-  // rearrange; scroll to zoom; drag the background to pan.
+  // keeps the whole thing centered. Left-click a node to open that note;
+  // right-drag one to rearrange; scroll to zoom; drag the background to pan.
   function initGraph() {
     var overlay = getEl("g-graph");
     var canvas = getEl("g-graph-canvas");
@@ -3237,7 +3237,7 @@
     var maxDegree = 1;                     // busiest node, for size normalization.
     var view = { x: 0, y: 0, scale: 1 };   // pan offset + zoom.
     var running = false, raf = 0, alpha = 0;
-    var drag = null, panning = null, hover = null;
+    var drag = null, panning = null, hover = null, clicking = null;
 
     // Title filter: filterMatch holds the ids of nodes whose title matches the
     // query — the only nodes kept bright while the rest dim. Neighbours are NOT
@@ -3707,28 +3707,35 @@
       if (nav) nav.openNotePinned(nd.id, "");
     }
 
-    // Left-press grabs a node to drag (or the background to pan). Right-click a
-    // node opens its note (handled in the contextmenu listener below).
+    // Left-click a node to open its note; right-drag a node to move it. Either
+    // button on the background pans. A left press on a node only opens if the
+    // pointer stays put (CLICK_SLOP), so a left drag across the canvas pans past
+    // nodes instead of opening one on release.
+    var CLICK_SLOP = 4; // px
     canvas.addEventListener("pointerdown", function (ev) {
-      if (ev.button !== 0) return; // left button only; right is open (contextmenu).
+      if (ev.button !== 0 && ev.button !== 2) return;
       canvas.setPointerCapture(ev.pointerId);
       interacting = true;
       var w = toWorld(ev), hit = nodeAt(w.x, w.y);
-      if (hit) { drag = { node: hit }; reheat(0.2); } // let neighbours re-settle.
-      else { panning = { x: ev.clientX, y: ev.clientY }; reheat(0); }
+      if (hit && ev.button === 2) { drag = { node: hit }; reheat(0.2); } // let neighbours re-settle.
+      else {
+        if (hit) clicking = { node: hit, x: ev.clientX, y: ev.clientY };
+        panning = { x: ev.clientX, y: ev.clientY };
+        reheat(0);
+      }
     });
-    // Right-click opens the node under the cursor (suppressing the browser menu).
-    canvas.addEventListener("contextmenu", function (ev) {
-      ev.preventDefault();
-      var w = toWorld(ev), hit = nodeAt(w.x, w.y);
-      if (hit) openNode(hit);
-    });
+    // Right-drag is the node grab, so the browser menu never gets a look in.
+    canvas.addEventListener("contextmenu", function (ev) { ev.preventDefault(); });
     canvas.addEventListener("pointermove", function (ev) {
       if (drag) {
         var w = toWorld(ev);
         drag.node.x = w.x; drag.node.y = w.y; drag.node.vx = 0; drag.node.vy = 0;
         reheat(0.1);
       } else if (panning) {
+        if (clicking &&
+          (Math.abs(ev.clientX - clicking.x) > CLICK_SLOP || Math.abs(ev.clientY - clicking.y) > CLICK_SLOP)) {
+          clicking = null; // moved: this is a pan, not a click on the node.
+        }
         view.x += ev.clientX - panning.x; view.y += ev.clientY - panning.y;
         panning.x = ev.clientX; panning.y = ev.clientY;
         reheat(0);
@@ -3742,8 +3749,10 @@
       if (hover) { hover = null; reheat(0); }
     });
     canvas.addEventListener("pointerup", function () {
-      drag = null; panning = null;
+      var open = clicking;
+      drag = null; panning = null; clicking = null;
       interacting = false; // let the loop park once it settles.
+      if (open) openNode(open.node);
     });
     canvas.addEventListener("wheel", function (ev) {
       ev.preventDefault();

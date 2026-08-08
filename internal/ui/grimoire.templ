@@ -323,7 +323,8 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 
 			<!-- Similarity graph: a full-panel canvas overlay (peer of the preview)
 			     shown while the Graph tab's view is open. The canvas is drawn and
-			     simulated entirely in JS; clicking a node opens that note. Visibility
+			     simulated entirely in JS; left-clicking a node opens that note,
+			     right-dragging one moves it. Visibility
 			     is a plain class (g-graph-open) the workspace toggles directly — not a
 			     Datastar data-show — so showing it is synchronous and deterministic
 			     (data-show's reactive display churn left the overlay flickering hidden
@@ -758,6 +759,12 @@ var shortcutGroups = []shortcutGroup{
 		{[]string{"Esc"}, "Cancel editing"},
 		{[]string{"Ctrl", "Z"}, "Undo a property change"},
 		{[]string{"Ctrl", "Y"}, "Redo a property change"},
+	}},
+	{"Graph", []shortcut{
+		{[]string{"Click"}, "Open the note under the cursor"},
+		{[]string{"Right-drag"}, "Move a node"},
+		{[]string{"Drag"}, "Pan the graph"},
+		{[]string{"Scroll"}, "Zoom in / out"},
 	}},
 }
 
