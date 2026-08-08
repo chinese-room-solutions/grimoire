@@ -111,6 +111,11 @@ func firstNonFlag(args []string) string {
 // dispatch routes the verb (and its sub-verb) to the handler, returning the exit
 // code. Unknown verbs print usage.
 func (e *cliEnv) dispatch(args []string) int {
+	// --help is answered here, before the verb runs: several commands take a bare
+	// positional (folder create PATH) and would otherwise treat "--help" as it.
+	if helpRequested(args[1:]) && printHelp(e.out, verbChain(args)) {
+		return exitOK
+	}
 	switch args[0] {
 	case "search":
 		return e.runSearch(args[1:])
@@ -138,6 +143,19 @@ func (e *cliEnv) dispatch(args []string) int {
 		e.usageErrf("unknown command %q", args[0])
 		return exitUsage
 	}
+}
+
+// verbChain is the command's name for help lookup: the leading non-flag tokens,
+// capped at two since no command nests deeper ("note create", "trash empty").
+func verbChain(args []string) []string {
+	var chain []string
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") || len(chain) == 2 {
+			break
+		}
+		chain = append(chain, a)
+	}
+	return chain
 }
 
 // errBackendRestarted reports a mutating command whose request died in transport.
@@ -315,37 +333,7 @@ Global flags:
   --json         emit raw JSON instead of human-readable output
 
 Commands:
-  search QUERY [-k N]                 hybrid search over the vault
-  note get PATH                       print a note's raw Markdown
-  note create PATH [--content S | -f FILE | stdin] [--overwrite] [--reindex]
-  note update PATH [--content S | -f FILE | stdin] [--reindex]
-  note edit PATH --old S --new S      replace a unique string in a note
-  note delete PATH [--permanent]      delete a note (trash unless --permanent)
-  note rename FROM TO [--overwrite]   move a note
-  note props PATH --set key=v1,v2     replace a note's frontmatter (repeatable)
-  (note create/update/edit/props take --reindex: wait for the index before returning)
-  vault tree                          print the vault's note tree
-  vault list                          list known vaults (* marks current)
-  vault current                       print the current vault's path
-  resolve TARGET                      resolve a wikilink/name to a note path
-  folder create PATH                  create a folder
-  folder delete PATH [--permanent]    delete a folder
-  folder rename FROM TO               move a folder
-  import FILE...                      convert files into notes (.md .txt .html .docx .odt; .pdf needs the convert model)
-  reindex [PATH...] [--force]         sync the search index (no PATH = whole vault; --force ignores the content hash)
-  kernel list                         list installed code kernels + registry packages
-  kernel install NAME[@VERSION]       install a kernel package from the registry
-  kernel remove FAMILY VERSION        remove an installed (shared) kernel version
-  theme list                          list registered UI themes + registry packages
-  theme install NAME[@VERSION]        install a theme package from the registry
-  theme remove NAME                   remove an installed (pluggable) theme
-  trash list                          list soft-deleted items
-  trash restore ID                    restore a trashed item
-  trash delete ID                     permanently remove one trashed item
-  trash empty                         permanently empty the trash
-  screenshot [-o out.png]             capture the app window (GUI only)
-  serve [--vault PATH] [--idle-timeout D]  run a vault backend headless
-
+`+commandList()+`
 Exit codes: 0 ok, 1 error, 2 usage, 3 not-found, 4 conflict
 `, "\n"))
 }
