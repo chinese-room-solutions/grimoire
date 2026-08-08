@@ -217,10 +217,9 @@ func (e *cliEnv) runNoteEdit(args []string) int {
 	return exitOK
 }
 
-// runNoteDelete handles `grimoire note delete PATH [--permanent]`.
+// runNoteDelete handles `grimoire note delete PATH`.
 func (e *cliEnv) runNoteDelete(args []string) int {
 	fs := flag.NewFlagSet("note delete", flag.ContinueOnError)
-	permanent := fs.Bool("permanent", false, "delete outright instead of moving to the trash")
 	rest, ok := parseFlags(fs, e.err, args)
 	if !ok {
 		return exitUsage
@@ -232,7 +231,7 @@ func (e *cliEnv) runNoteDelete(args []string) int {
 	var res grimoireapi.DeleteResult
 	err := e.doWrite(context.Background(), func(ctx context.Context, c *apiclient.Client) error {
 		var callErr error
-		res, callErr = c.DeleteNote(ctx, rest[0], *permanent)
+		res, callErr = c.DeleteNote(ctx, rest[0])
 		return callErr
 	})
 	if err != nil {

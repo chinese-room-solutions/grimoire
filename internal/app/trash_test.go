@@ -13,8 +13,8 @@ import (
 
 // trashService builds a Service over a fresh temp vault with the given notes
 // (rel→body), no embedder, so trash ops run without a gateway (reindex is a
-// best-effort no-op). mode controls the trash policy.
-func trashService(t *testing.T, mode appconfig.TrashMode, notes map[string]string) (*Service, string) {
+// best-effort no-op). trash turns soft-delete on or off.
+func trashService(t *testing.T, trash bool, notes map[string]string) (*Service, string) {
 	t.Helper()
 	vault := t.TempDir()
 	for rel, body := range notes {
@@ -22,7 +22,7 @@ func trashService(t *testing.T, mode appconfig.TrashMode, notes map[string]strin
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
 		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
 	}
-	return &Service{cfg: appconfig.Config{Vault: vault, TrashMode: mode}, logger: zerolog.Nop()}, vault
+	return &Service{cfg: appconfig.Config{Vault: vault, TrashDisabled: !trash}, logger: zerolog.Nop()}, vault
 }
 
 func exists(t *testing.T, vault, rel string) bool {
@@ -32,9 +32,9 @@ func exists(t *testing.T, vault, rel string) bool {
 }
 
 func TestRemoveNoteTrashesWhenEnabled(t *testing.T) {
-	s, vault := trashService(t, appconfig.TrashAll, map[string]string{"Note.md": "# Note"})
+	s, vault := trashService(t, true, map[string]string{"Note.md": "# Note"})
 
-	id, trashed, err := s.RemoveNote(context.Background(), "Note.md", false, false)
+	id, trashed, err := s.RemoveNote(context.Background(), "Note.md")
 	require.NoError(t, err)
 	require.True(t, trashed, "with trash enabled, a delete soft-deletes")
 	require.NotEmpty(t, id)
@@ -43,24 +43,10 @@ func TestRemoveNoteTrashesWhenEnabled(t *testing.T) {
 	require.True(t, exists(t, vault, trashSlotPath(id, "Note.md")), "and now lives in the trash")
 }
 
-func TestRemoveNotePermanentBypassesTrash(t *testing.T) {
-	s, vault := trashService(t, appconfig.TrashAll, map[string]string{"Note.md": "# Note"})
-
-	id, trashed, err := s.RemoveNote(context.Background(), "Note.md", true, false)
-	require.NoError(t, err)
-	require.False(t, trashed, "permanent=true removes outright even with trash enabled")
-	require.Empty(t, id)
-	require.False(t, exists(t, vault, "Note.md"))
-
-	entries, err := s.ListTrash()
-	require.NoError(t, err)
-	require.Empty(t, entries, "a permanent delete leaves nothing in the trash")
-}
-
 func TestRemoveNoteHardDeletesWhenDisabled(t *testing.T) {
-	s, vault := trashService(t, appconfig.TrashOff, map[string]string{"Note.md": "# Note"})
+	s, vault := trashService(t, false, map[string]string{"Note.md": "# Note"})
 
-	_, trashed, err := s.RemoveNote(context.Background(), "Note.md", false, false)
+	_, trashed, err := s.RemoveNote(context.Background(), "Note.md")
 	require.NoError(t, err)
 	require.False(t, trashed, "with trash disabled, a delete is permanent")
 	require.False(t, exists(t, vault, "Note.md"))
@@ -70,9 +56,9 @@ func TestRemoveNoteHardDeletesWhenDisabled(t *testing.T) {
 }
 
 func TestTrashListRestoreRoundTrip(t *testing.T) {
-	s, vault := trashService(t, appconfig.TrashAll, map[string]string{"Folder/Deep Note.md": "# Deep"})
+	s, vault := trashService(t, true, map[string]string{"Folder/Deep Note.md": "# Deep"})
 
-	id, _, err := s.RemoveNote(context.Background(), "Folder/Deep Note.md", false, false)
+	id, _, err := s.RemoveNote(context.Background(), "Folder/Deep Note.md")
 	require.NoError(t, err)
 
 	entries, err := s.ListTrash()
@@ -95,9 +81,9 @@ func TestTrashListRestoreRoundTrip(t *testing.T) {
 }
 
 func TestRestoreRecreatesMissingParent(t *testing.T) {
-	s, vault := trashService(t, appconfig.TrashAll, map[string]string{"Folder/Sub/Note.md": "# Note"})
+	s, vault := trashService(t, true, map[string]string{"Folder/Sub/Note.md": "# Note"})
 
-	id, _, err := s.RemoveNote(context.Background(), "Folder/Sub/Note.md", false, false)
+	id, _, err := s.RemoveNote(context.Background(), "Folder/Sub/Note.md")
 	require.NoError(t, err)
 
 	// The whole original folder is gone by the time we restore — emulating the
@@ -112,9 +98,9 @@ func TestRestoreRecreatesMissingParent(t *testing.T) {
 }
 
 func TestRestoreNoClobber(t *testing.T) {
-	s, vault := trashService(t, appconfig.TrashAll, map[string]string{"Note.md": "# original"})
+	s, vault := trashService(t, true, map[string]string{"Note.md": "# original"})
 
-	id, _, err := s.RemoveNote(context.Background(), "Note.md", false, false)
+	id, _, err := s.RemoveNote(context.Background(), "Note.md")
 	require.NoError(t, err)
 
 	// A new note takes the freed path before the restore.
@@ -131,10 +117,10 @@ func TestRestoreNoClobber(t *testing.T) {
 }
 
 func TestDeleteTrashItem(t *testing.T) {
-	s, _ := trashService(t, appconfig.TrashAll, map[string]string{"A.md": "# A", "B.md": "# B"})
-	idA, _, err := s.RemoveNote(context.Background(), "A.md", false, false)
+	s, _ := trashService(t, true, map[string]string{"A.md": "# A", "B.md": "# B"})
+	idA, _, err := s.RemoveNote(context.Background(), "A.md")
 	require.NoError(t, err)
-	idB, _, err := s.RemoveNote(context.Background(), "B.md", false, false)
+	idB, _, err := s.RemoveNote(context.Background(), "B.md")
 	require.NoError(t, err)
 
 	require.NoError(t, s.DeleteTrash(context.Background(), idA))
@@ -149,10 +135,10 @@ func TestDeleteTrashItem(t *testing.T) {
 }
 
 func TestEmptyTrash(t *testing.T) {
-	s, vault := trashService(t, appconfig.TrashAll, map[string]string{"A.md": "# A", "B.md": "# B"})
-	_, _, err := s.RemoveNote(context.Background(), "A.md", false, false)
+	s, vault := trashService(t, true, map[string]string{"A.md": "# A", "B.md": "# B"})
+	_, _, err := s.RemoveNote(context.Background(), "A.md")
 	require.NoError(t, err)
-	_, _, err = s.RemoveNote(context.Background(), "B.md", false, false)
+	_, _, err = s.RemoveNote(context.Background(), "B.md")
 	require.NoError(t, err)
 
 	require.NoError(t, s.EmptyTrash(context.Background()))
@@ -167,87 +153,25 @@ func TestEmptyTrash(t *testing.T) {
 }
 
 func TestTrashRejectsPathEscape(t *testing.T) {
-	s, _ := trashService(t, appconfig.TrashAll, map[string]string{"Note.md": "# Note"})
+	s, _ := trashService(t, true, map[string]string{"Note.md": "# Note"})
 	_, err := s.TrashNote(context.Background(), "../escape.md")
 	require.ErrorIs(t, err, ErrOutsideVault, "the service's path safety covers trash too")
 }
 
 func TestRestoreUnknownIDNotFound(t *testing.T) {
-	s, _ := trashService(t, appconfig.TrashAll, nil)
+	s, _ := trashService(t, true, nil)
 	_, _, err := s.RestoreTrash(context.Background(), "20990101T000000")
 	require.ErrorIs(t, err, ErrTrashNotFound)
 }
 
-// TestRemoveNoteAgentsModeOnlyTrashesAgentDeletes covers the "agents only" mode:
-// an AI-agent (API) delete soft-deletes, while the user's own GUI delete is
-// permanent.
-func TestRemoveNoteAgentsModeOnlyTrashesAgentDeletes(t *testing.T) {
-	s, vault := trashService(t, appconfig.TrashAgents, map[string]string{
-		"Agent.md": "# Agent", "User.md": "# User",
-	})
-
-	id, trashed, err := s.RemoveNote(context.Background(), "Agent.md", false, true)
-	require.NoError(t, err)
-	require.True(t, trashed, "an agent delete soft-deletes in agents-only mode")
-	require.True(t, exists(t, vault, trashSlotPath(id, "Agent.md")))
-
-	_, trashed, err = s.RemoveNote(context.Background(), "User.md", false, false)
-	require.NoError(t, err)
-	require.False(t, trashed, "a user GUI delete is permanent in agents-only mode")
-	require.False(t, exists(t, vault, "User.md"))
-}
-
-// TestRemoveAgentPermanentIsRefused pins the precaution the trash modes exist
-// for: an agent asking for a permanent delete still only gets a trash move, so
-// no API call can destroy a note the user didn't mean to lose. With the trash
-// off for everyone there is nothing to protect and the delete is permanent.
-func TestRemoveAgentPermanentIsRefused(t *testing.T) {
-	tests := []struct {
-		name        string
-		mode        appconfig.TrashMode
-		byAgent     bool
-		wantTrashed bool
-	}{
-		{"agent permanent delete trashes in agents mode", appconfig.TrashAgents, true, true},
-		{"agent permanent delete trashes in all mode", appconfig.TrashAll, true, true},
-		{"agent permanent delete is permanent with trash off", appconfig.TrashOff, true, false},
-		{"user permanent delete stays permanent", appconfig.TrashAll, false, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s, vault := trashService(t, tt.mode, map[string]string{
-				"Note.md": "# Note", "Folder/Deep.md": "# Deep",
-			})
-
-			id, trashed, err := s.RemoveNote(context.Background(), "Note.md", true, tt.byAgent)
-			require.NoError(t, err)
-			require.Equal(t, tt.wantTrashed, trashed)
-			require.False(t, exists(t, vault, "Note.md"), "the note left its original path either way")
-			if tt.wantTrashed {
-				require.True(t, exists(t, vault, trashSlotPath(id, "Note.md")), "it is recoverable")
-			} else {
-				require.Empty(t, id)
-			}
-
-			// Folders take the same route.
-			fid, ftrashed, err := s.RemoveFolder(context.Background(), "Folder", true, tt.byAgent)
-			require.NoError(t, err)
-			require.Equal(t, tt.wantTrashed, ftrashed)
-			if tt.wantTrashed {
-				require.True(t, exists(t, vault, trashSlotPath(fid, "Folder/Deep.md")))
-			}
-		})
-	}
-}
-
 func TestRemoveFolderTrashesAsUnit(t *testing.T) {
-	s, vault := trashService(t, appconfig.TrashAll, map[string]string{
+	s, vault := trashService(t, true, map[string]string{
 		"Projects/A.md":     "# A",
 		"Projects/Sub/B.md": "# B",
 		"Keep.md":           "# keep",
 	})
 
-	id, trashed, err := s.RemoveFolder(context.Background(), "Projects", false, false)
+	id, trashed, err := s.RemoveFolder(context.Background(), "Projects")
 	require.NoError(t, err)
 	require.True(t, trashed, "with trash enabled, a folder delete soft-deletes")
 	require.NotEmpty(t, id)
@@ -277,31 +201,17 @@ func TestRemoveFolderTrashesAsUnit(t *testing.T) {
 	require.Empty(t, entries, "restoring empties that trash slot")
 }
 
-func TestRemoveFolderPermanentBypassesTrash(t *testing.T) {
-	s, vault := trashService(t, appconfig.TrashAll, map[string]string{"Projects/A.md": "# A"})
-
-	id, trashed, err := s.RemoveFolder(context.Background(), "Projects", true, false)
-	require.NoError(t, err)
-	require.False(t, trashed, "permanent=true removes outright even with trash enabled")
-	require.Empty(t, id)
-	require.False(t, exists(t, vault, "Projects"))
-
-	entries, err := s.ListTrash()
-	require.NoError(t, err)
-	require.Empty(t, entries)
-}
-
 func TestRemoveFolderHardDeletesWhenDisabled(t *testing.T) {
-	s, vault := trashService(t, appconfig.TrashOff, map[string]string{"Projects/A.md": "# A"})
+	s, vault := trashService(t, false, map[string]string{"Projects/A.md": "# A"})
 
-	_, trashed, err := s.RemoveFolder(context.Background(), "Projects", false, false)
+	_, trashed, err := s.RemoveFolder(context.Background(), "Projects")
 	require.NoError(t, err)
 	require.False(t, trashed, "with trash disabled, a folder delete is permanent")
 	require.False(t, exists(t, vault, "Projects"))
 }
 
 func TestTrashFolderRejectsNonFolder(t *testing.T) {
-	s, _ := trashService(t, appconfig.TrashAll, map[string]string{"Note.md": "# Note"})
+	s, _ := trashService(t, true, map[string]string{"Note.md": "# Note"})
 
 	_, err := s.TrashFolder(context.Background(), "Note.md")
 	require.ErrorIs(t, err, ErrNotAFolder, "a file is not a folder")
@@ -313,18 +223,16 @@ func TestTrashFolderRejectsNonFolder(t *testing.T) {
 	require.ErrorIs(t, err, ErrOutsideVault)
 }
 
-func TestSetTrashModePersists(t *testing.T) {
+func TestSetTrashEnabledPersists(t *testing.T) {
 	configDir := t.TempDir()
 	s := &Service{configDir: configDir, cfg: appconfig.Config{Vault: t.TempDir()}, logger: zerolog.Nop()}
-	require.True(t, s.trashesFor(false), "defaults to trashing for everyone when unset")
+	require.True(t, s.trashes(), "defaults to trashing when unset")
 
-	require.NoError(t, s.SetTrashMode(appconfig.TrashOff))
-	require.False(t, s.trashesFor(false))
-	require.False(t, s.trashesFor(true))
-	require.Equal(t, appconfig.TrashOff, appconfig.Load(configDir).TrashModeOrDefault(), "the setting is persisted")
+	require.NoError(t, s.SetTrashEnabled(false))
+	require.False(t, s.trashes())
+	require.False(t, appconfig.Load(configDir).Trashes(), "the setting is persisted")
 
-	require.NoError(t, s.SetTrashMode(appconfig.TrashAgents))
-	require.True(t, s.trashesFor(true), "agents trash")
-	require.False(t, s.trashesFor(false), "the user does not")
-	require.Equal(t, appconfig.TrashAgents, appconfig.Load(configDir).TrashModeOrDefault())
+	require.NoError(t, s.SetTrashEnabled(true))
+	require.True(t, s.trashes())
+	require.True(t, appconfig.Load(configDir).Trashes())
 }

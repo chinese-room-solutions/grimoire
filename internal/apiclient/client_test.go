@@ -218,22 +218,11 @@ func TestClientWrites(t *testing.T) {
 			want:       grimoireapi.Note{Path: "n.md", Content: "edited"},
 		},
 		{
-			name: "delete note passes path and permanent as query params",
-			handler: func(w http.ResponseWriter, _ *http.Request) {
-				writeJSON(t, w, grimoireapi.DeleteResult{Path: "n.md", Trashed: false})
-			},
-			call:       func(c *Client) (any, error) { return c.DeleteNote(ctx, "n.md", true) },
-			wantMethod: http.MethodDelete,
-			wantPath:   "/api/v1/note",
-			wantQuery:  url.Values{"path": {"n.md"}, "permanent": {"true"}},
-			want:       grimoireapi.DeleteResult{Path: "n.md", Trashed: false},
-		},
-		{
-			name: "delete note omits permanent when soft",
+			name: "delete note passes the path as a query param",
 			handler: func(w http.ResponseWriter, _ *http.Request) {
 				writeJSON(t, w, grimoireapi.DeleteResult{Path: "n.md", Trashed: true, TrashID: "t1"})
 			},
-			call:       func(c *Client) (any, error) { return c.DeleteNote(ctx, "n.md", false) },
+			call:       func(c *Client) (any, error) { return c.DeleteNote(ctx, "n.md") },
 			wantMethod: http.MethodDelete,
 			wantPath:   "/api/v1/note",
 			wantQuery:  url.Values{"path": {"n.md"}},
@@ -279,7 +268,7 @@ func TestClientWrites(t *testing.T) {
 			handler: func(w http.ResponseWriter, _ *http.Request) {
 				writeJSON(t, w, grimoireapi.DeleteResult{Path: "f", Trashed: true, TrashID: "t2"})
 			},
-			call:       func(c *Client) (any, error) { return c.DeleteFolder(ctx, "f", false) },
+			call:       func(c *Client) (any, error) { return c.DeleteFolder(ctx, "f") },
 			wantMethod: http.MethodDelete,
 			wantPath:   "/api/v1/folder",
 			wantQuery:  url.Values{"path": {"f"}},

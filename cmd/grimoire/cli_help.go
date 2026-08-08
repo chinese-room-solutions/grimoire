@@ -43,16 +43,15 @@ Replace one exact, unique occurrence of --old with --new, leaving the
 frontmatter alone. Exit 3 if --old is absent, exit 4 if it occurs more than
 once — lengthen the anchor and retry rather than guessing.`},
 
-	{"note delete", "note delete PATH [--permanent]", "delete a note (trash unless --permanent)", `
-Delete a note. It goes to the vault's trash when the trash mode covers this
-caller; --permanent skips the trash, and is ignored for API/CLI callers when
-the mode protects agents — the trash is that mode's whole point.
+	{"note delete", "note delete PATH", "delete a note (to the trash)", `
+Delete a note. It goes to the vault's trash, recoverable with trash restore,
+unless the user turned the trash off in the app.
 The index is pruned before returning; a failed prune exits 1 with a warning.`},
 
 	{"note rename", "note rename FROM TO [--overwrite]", "", `
 Move a note, creating parent folders as needed and adding .md if missing.
 It refuses to replace an existing note unless --overwrite, which displaces the
-occupant (to the trash when the mode allows). The index follows by itself:
+occupant (to the trash when it is on). The index follows by itself:
 the old path is pruned, the new one indexed.`},
 
 	{"note props", "note props PATH --set key=v1,v2", "replace a note's frontmatter (repeatable)", `
@@ -77,10 +76,9 @@ matches. Use it before assuming a path.`},
 	{"folder create", "folder create PATH", "create a folder", `
 Create a folder and any missing parents.`},
 
-	{"folder delete", "folder delete PATH [--permanent]", "delete a folder", `
-Delete a folder and everything in it, honouring the trash mode like a note
-delete — the folder is trashed as a unit, tree intact. --permanent is ignored
-for API/CLI callers when the mode protects agents.`},
+	{"folder delete", "folder delete PATH", "delete a folder", `
+Delete a folder and everything in it, honouring the trash setting like a note
+delete — the folder is trashed as a unit, tree intact.`},
 
 	{"folder rename", "folder rename FROM TO", "", `
 Move a folder. It refuses to replace an existing folder. Every note under it

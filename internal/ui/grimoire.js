@@ -497,66 +497,20 @@
   // trigger. sl-input's data-bind adapter is unreliable in the webview, so we
   // read .value in JS directly.
   var seq = 0;
-  // initTrashMode drives the three-state trash toggle: a pill track with a dot per
-  // stop and a round thumb that slides to the active one. The active stop's value
-  // lives on the track's data-mode (seeded server-side from the persisted setting,
-  // so there's no first-paint flash); we position the thumb by measuring, mark the
-  // active dot, show the current label, and on click slide + persist via fetch.
-  // Plain JS (not Datastar attr-binding) keeps the slide reliable in the webview.
-  function initTrashMode() {
-    var track = getEl("g-trash-mode");
-    if (!track) return;
-    var thumb = track.querySelector(".g-trash-thumb");
-    var stops = Array.prototype.slice.call(track.querySelectorAll(".g-trash-stop"));
-    var valueLabel = getEl("g-trash-value");
-    if (!thumb || !stops.length) return;
-
-    function activeStop() {
-      var mode = track.getAttribute("data-mode");
-      for (var i = 0; i < stops.length; i++) {
-        if (stops[i].getAttribute("data-value") === mode) return stops[i];
-      }
-      return stops[0];
-    }
-    // Slide the thumb to the active stop and mark the active dot / current label.
-    // Position is by index, not by measuring stops: for stop i of N, the thumb's
-    // left = pad + (i/(N-1)) * (innerWidth - thumbWidth). So the first stop lands
-    // flush-left (x = pad) and the last flush-right, each precisely filling the
-    // rounded end like a default 2-state switch, with the middle exactly centred —
-    // width-independent, no clamp. Measured each render so it's right at any width.
-    function render() {
-      var idx = 0;
-      for (var i = 0; i < stops.length; i++) {
-        var on = stops[i] === activeStop();
-        stops[i].setAttribute("aria-checked", on ? "true" : "false");
-        if (on) idx = i;
-      }
-      var pad = parseFloat(getComputedStyle(track).paddingLeft) || 0;
-      var travel = track.clientWidth - 2 * pad - thumb.offsetWidth;
-      var frac = stops.length > 1 ? idx / (stops.length - 1) : 0;
-      thumb.style.setProperty("--g-trash-x", (pad + frac * travel) + "px");
-      var active = stops[idx];
-      if (valueLabel) valueLabel.textContent = active.getAttribute("data-state") || "";
-    }
-    function select(stop) {
-      var mode = stop.getAttribute("data-value");
-      if (mode === track.getAttribute("data-mode")) return;
-      track.setAttribute("data-mode", mode);
-      render();
-      fetch("api/trash-mode", {
+  // initTrashSwitch persists the settings menu's trash switch. The checked state
+  // is server-rendered from the persisted setting, so there's nothing to seed
+  // here — plain JS rather than Datastar binding, whose adapter is unreliable for
+  // Shoelace controls in the webview.
+  function initTrashSwitch() {
+    var sw = getEl("g-trash-switch");
+    if (!sw) return;
+    sw.addEventListener("sl-change", function () {
+      fetch("api/trash-enabled", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gTrashMode: mode }),
+        body: JSON.stringify({ gTrashEnabled: sw.checked }),
       }).catch(function () { /* persistence is best-effort. */ });
-    }
-    stops.forEach(function (stop) {
-      stop.addEventListener("click", function () { select(stop); });
     });
-    // Re-measure when the settings menu actually opens (the track has no layout box
-    // while the dropdown is closed, so an initial measure would be zero).
-    var menu = track.closest("sl-dropdown");
-    if (menu) menu.addEventListener("sl-after-show", render);
-    render();
   }
 
   function initSearch() {
@@ -4457,7 +4411,7 @@
     initVault();
     themePicker.init();
     extensions.init();
-    initTrashMode();
+    initTrashSwitch();
     initSearch();
     initSidebarCollapse();
     initSidebarTabs();

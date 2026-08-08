@@ -247,7 +247,7 @@ func TestRenameNote(t *testing.T) {
 	require.Equal(t, "new.md", res.Path)
 	require.Contains(t, res.Content, "# y", "overwrite replaced the target")
 
-	// The displaced note honoured the trash mode (default: trash everything) —
+	// The displaced note honoured the trash setting (on by default) —
 	// it's recoverable, and the result carries its trash id.
 	require.True(t, res.ReplacedTrashed, "the overwritten note went to the trash")
 	require.NotEmpty(t, res.ReplacedTrashID)
@@ -263,7 +263,7 @@ func TestDeleteNoteTrashedThenRestore(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "n.md"), []byte("# keep me"), 0o644))
 	api := newAPI(t, vault) // trash defaults to enabled.
 
-	res, err := api.DeleteNote(context.Background(), "n.md", false)
+	res, err := api.DeleteNote(context.Background(), "n.md")
 	require.NoError(t, err)
 	require.True(t, res.Trashed)
 	require.NotEmpty(t, res.TrashID)
@@ -281,30 +281,11 @@ func TestDeleteNoteTrashedThenRestore(t *testing.T) {
 	require.Contains(t, note.Content, "# keep me")
 }
 
-// TestDeleteNotePermanentStillTrashesForAgents: the API is the agent surface, so
-// its permanent flag can't defeat the trash the user turned on for agents. The
-// note leaves the vault either way; it stays recoverable.
-func TestDeleteNotePermanentStillTrashesForAgents(t *testing.T) {
-	vault := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(vault, "n.md"), []byte("# bye"), 0o644))
-	api := newAPI(t, vault) // trash defaults to enabled.
-
-	res, err := api.DeleteNote(context.Background(), "n.md", true)
-	require.NoError(t, err)
-	require.True(t, res.Trashed, "an agent's permanent delete is downgraded to a trash move")
-	require.NoFileExists(t, filepath.Join(vault, "n.md"))
-
-	items, err := api.ListTrash(context.Background())
-	require.NoError(t, err)
-	require.Len(t, items, 1)
-	require.Equal(t, "n.md", items[0].OriginalPath)
-}
-
 func TestEmptyTrash(t *testing.T) {
 	vault := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "a.md"), []byte("a"), 0o644))
 	api := newAPI(t, vault)
-	_, err := api.DeleteNote(context.Background(), "a.md", false)
+	_, err := api.DeleteNote(context.Background(), "a.md")
 	require.NoError(t, err)
 
 	require.NoError(t, api.EmptyTrash(context.Background()))
@@ -327,9 +308,9 @@ func TestFolderCreateRenameDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "Work", folder.Path)
 
-	res, err := api.DeleteFolder(context.Background(), "Work", true)
+	res, err := api.DeleteFolder(context.Background(), "Work")
 	require.NoError(t, err)
-	require.True(t, res.Trashed, "an agent's permanent delete is downgraded to a trash move")
+	require.True(t, res.Trashed, "the folder went to the trash")
 }
 
 func TestDeleteFolderTrashedThenRestore(t *testing.T) {
@@ -340,9 +321,9 @@ func TestDeleteFolderTrashedThenRestore(t *testing.T) {
 	_, err = api.CreateNote(context.Background(), "Projects/Sub/B.md", "# B", false)
 	require.NoError(t, err)
 
-	res, err := api.DeleteFolder(context.Background(), "Projects", false)
+	res, err := api.DeleteFolder(context.Background(), "Projects")
 	require.NoError(t, err)
-	require.True(t, res.Trashed, "a folder delete honours the trash mode")
+	require.True(t, res.Trashed, "a folder delete honours the trash setting")
 	require.NotEmpty(t, res.TrashID)
 	require.NoDirExists(t, filepath.Join(vault, "Projects"))
 

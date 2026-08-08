@@ -63,9 +63,8 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
 
 - `note delete` / `folder delete` **trash** by default — recoverable via
   `trash list` then `trash restore ID`.
-- `--permanent` is a request the vault can refuse. With the trash on for agents
-  (or everyone) your delete is still a trash move; the output says `trashed …`
-  rather than `deleted …`. Read it rather than assuming.
+- The output says which happened: `trashed …` with a restore id, or `deleted …`
+  when the user has the trash off.
 - `trash delete ID` and `trash empty` are **irreversible** and purge what the
   trash was protecting. They are the user's call — don't tidy up after yourself
   with them.

@@ -15,7 +15,6 @@ import (
 
 	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
 	"github.com/alecthomas/chroma/v2/styles"
-	"github.com/chinese-room-solutions/grimoire/internal/appconfig"
 	"github.com/chinese-room-solutions/grimoire/internal/fence"
 	"github.com/chinese-room-solutions/grimoire/internal/frontmatter"
 	"github.com/chinese-room-solutions/mass-sdk/uikit"
@@ -468,10 +467,9 @@ type State struct {
 	// Theme is the resolved active theme name, set by RenderFullPage — it seeds
 	// the $gTheme signal.
 	Theme string
-	// TrashMode is the soft-delete policy for the Settings control: "all" (trash
-	// every delete), "agents" (trash only AI-agent deletes), or "off"
-	// (permanent for everyone).
-	TrashMode string
+	// TrashEnabled seeds the Settings trash switch: deletes move to the vault's
+	// trash (restorable) rather than being permanent.
+	TrashEnabled bool
 	// Recents are the vaults Grimoire knows about, shown as quick-pick rows in the
 	// empty state (ignored when HasVault is true).
 	Recents []VaultRef
@@ -530,8 +528,8 @@ func initialSignals(st State) string {
 		// override to the run path.
 		"gRunKernel":  "",
 		"gRunVersion": "",
-		// Trash setting: seeded so the control reflects the persisted mode.
-		"gTrashMode": st.TrashMode,
+		// Trash setting: seeded so the control reflects the persisted value.
+		"gTrashEnabled": st.TrashEnabled,
 		// The active theme. Theme-reactive markup (the Extensions dialog's
 		// active check) data-shows against it; themePicker.apply updates it.
 		"gTheme": st.Theme,
@@ -624,30 +622,9 @@ var styleBlock = `<style>
    so the two bottom-bar menus read as one family. Wider than the gear's 220px to
    fit the model selects, and height-capped so the taller content scrolls. */
 #app-grimoire .g-menu-panel{display:flex;flex-direction:column;gap:0.75rem;padding:0.85rem;width:248px;max-height:min(72vh,32rem);overflow-y:auto;background:var(--mass-bg-panel);border:1px solid var(--mass-border);border-radius:0.5rem}
-/* Trash-mode toggle: a pill track with a dot per stop and a round thumb that
-   slides to the active stop (like the editor's "Effort" multi-state toggle),
-   coloured by policy — blue for everyone, yellow for agents-only, the usual
-   disabled grey for off. The thumb is positioned from --g-trash-i (the active
-   stop's index, set by initTrashMode) and coloured from [data-mode]; the dots are
-   just visual stops, the whole row is clickable. */
-#app-grimoire .g-trash-field{display:flex;flex-direction:column;gap:var(--sl-spacing-3x-small,0.125rem)}
-#app-grimoire .g-trash-title{font-size:var(--sl-input-label-font-size-small,0.875rem);color:var(--mass-text-muted)}
-#app-grimoire .g-trash-row{display:flex;align-items:center;gap:0.5rem}
-#app-grimoire .g-trash-state{font-size:0.8rem;color:var(--mass-text-muted);white-space:nowrap}
-/* The track: the thumb diameter plus a tiny --g-pad on every side drives the
-   height, so the padding is real vertical room and the thumb sits centred. The
-   same --g-pad is the only horizontal edge gap, so an end-position thumb sits
-   flush to the rim like a default 2-state switch (no dead space on the ends). */
-#app-grimoire .g-trash-mode{--g-thumb:1.15rem;--g-pad:1px;box-sizing:border-box;position:relative;display:flex;align-items:center;width:4.25rem;height:calc(var(--g-thumb) + 2*var(--g-pad));padding:var(--g-pad);background:var(--mass-bg-active);border-radius:999px;cursor:pointer}
-/* The thumb's x is a concrete pixel offset initTrashMode measures from the active
-   stop's centre, so it lands dead-on at any width without fragile calc(). */
-#app-grimoire .g-trash-thumb{position:absolute;top:var(--g-pad);left:0;width:var(--g-thumb);height:var(--g-thumb);border-radius:50%;background:var(--mass-text-muted);box-shadow:0 1px 2px rgba(0,0,0,0.35);transition:transform 0.18s ease,background 0.18s ease;transform:translateX(var(--g-trash-x,0));pointer-events:none}
-#app-grimoire .g-trash-mode[data-mode="all"] .g-trash-thumb{background:var(--mass-accent-fill)}
-#app-grimoire .g-trash-mode[data-mode="agents"] .g-trash-thumb{background:var(--mass-warning)}
-#app-grimoire .g-trash-mode[data-mode="off"] .g-trash-thumb{background:var(--mass-text-muted)}
-#app-grimoire .g-trash-stop{flex:1;display:flex;align-items:center;justify-content:center;height:100%;border:0;background:transparent;cursor:pointer;padding:0}
-#app-grimoire .g-trash-dot{width:0.3rem;height:0.3rem;border-radius:50%;background:var(--mass-text-muted);opacity:0.55;transition:opacity 0.18s ease}
-#app-grimoire .g-trash-stop[aria-checked="true"] .g-trash-dot{opacity:0}
+/* Trash switch: the label reads like the menu's other control labels (muted, at
+   the select label's size) rather than Shoelace's body text. */
+#app-grimoire .g-trash-switch::part(label){font-size:var(--sl-input-label-font-size-small,0.875rem);color:var(--mass-text-muted)}
 /* Build version, the gear menu's last line: faint label, muted mono value, no
    rule above it — a footnote, not another section. It wraps rather than clips so
    a long version can't widen the 220px menu. */
@@ -1298,13 +1275,13 @@ func RenderPage(theme, logLevel string, st State) string {
 // app-specific controls — the SDK provides the shell and the reusable Log Level
 // control; the menu's contents are Grimoire's. The theme has a dedicated palette
 // picker in the bottom bar, so the menu seeds the appTheme signal (ThemeSignal)
-// without a theme picker of its own. The Trash select governs soft-delete; it
-// binds to gTrashMode and posts to /api/trash-mode. The build version closes the
-// menu as a plain footer line.
+// without a theme picker of its own. The Trash switch governs soft-delete; it
+// posts to /api/trash-enabled. The build version closes the menu as a plain
+// footer line.
 func settingsMenu(logLevel, theme string, st State) string {
 	return uikit.ThemeSignal(theme) + uikit.SettingsShell(
 		uikit.LogLevelSelect(logLevel),
-		trashModeSelect(st.TrashMode),
+		trashSwitch(st.TrashEnabled),
 		uikit.ConnectionSection(st.Conn.Endpoint, st.Conn.HasToken, st.Conn.CACert),
 		versionLine(st.Version),
 	)
@@ -1322,51 +1299,16 @@ func versionLine(version string) string {
 		html.EscapeString(version))
 }
 
-// trashModeSelect is the soft-delete policy control in the settings menu: a
-// three-stop sliding toggle (a pill track with a dot per stop and a thumb that
-// slides to the active one) for trashing every delete (restorable from the Files
-// tab), only AI-agent deletes, or none. The thumb's position and colour
-// (blue / yellow / grey) follow the track's data-mode attribute, which initTrashMode
-// (grimoire.js) sets from the current value and updates on click — and which is
-// seeded here from the persisted mode so there's no first-paint flash. The current
-// label is shown beside the title, mirroring the editor's "Effort (Max)" toggle.
-func trashModeSelect(mode string) string {
-	if mode == "" {
-		mode = string(appconfig.TrashAll)
+// trashSwitch is the soft-delete control in the settings menu: on, a delete
+// moves the note to the vault's trash (restorable from the Files tab); off, it
+// is permanent. Seeded from the persisted value so there's no first-paint flash;
+// initTrashSwitch (grimoire.js) persists a flip.
+func trashSwitch(enabled bool) string {
+	checked := ""
+	if enabled {
+		checked = " checked"
 	}
-	type stop struct{ value, state, hint string }
-	// Ordered off → agents → everyone, so the default (trash on for all) sits at
-	// the right end and "off" at the left, like a volume rising left to right. state
-	// names the current setting beside the toggle ("Trash <state>") and is the hint.
-	stops := []stop{
-		{string(appconfig.TrashOff), "Disabled", "Delete permanently for everyone"},
-		{string(appconfig.TrashAgents), "Enabled for agents", "Trash only AI-agent deletes; your own deletes are permanent"},
-		{string(appconfig.TrashAll), "Enabled", "Trash every delete (restorable)"},
-	}
-	var dots strings.Builder
-	curState := ""
-	for _, s := range stops {
-		if s.value == mode {
-			curState = s.state
-		}
-		fmt.Fprintf(&dots,
-			`<button type="button" class="g-trash-stop" role="radio" data-value=%q data-state=%q title=%q><span class="g-trash-dot"></span></button>`,
-			html.EscapeString(s.value), html.EscapeString(s.state), html.EscapeString(s.hint))
-	}
-	return fmt.Sprintf(`<div class="g-trash-field">
-			<span class="g-trash-title">Trash</span>
-			<div class="g-trash-row">
-				<div class="g-trash-mode" id="g-trash-mode" role="radiogroup" aria-label="Trash deleted notes" data-mode=%[2]q title="Deleted notes can move to the Trash (in Files) to be restored, or be removed permanently — choose for whom.">
-					<span class="g-trash-thumb" aria-hidden="true"></span>
-					%[3]s
-				</div>
-				<span class="g-trash-state" id="g-trash-value">%[1]s</span>
-			</div>
-		</div>`,
-		html.EscapeString(curState),
-		html.EscapeString(mode),
-		dots.String(),
-	)
+	return fmt.Sprintf(`<sl-switch id="g-trash-switch" class="g-trash-switch" size="small"%s title="Deleted notes move to the Trash (in Files) to be restored, instead of being removed permanently.">Trash deleted notes</sl-switch>`, checked)
 }
 
 // RenderFullPage returns a complete HTML page with the grimoire UI. theme is a

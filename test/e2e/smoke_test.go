@@ -194,7 +194,7 @@ func TestUISmoke(t *testing.T) {
 		})
 		clickReady(t, d, "#g-delete-confirm")
 
-		// Soft delete (default trash mode): the row leaves the tree and the file
+		// Soft delete (the trash is on by default): the row leaves the tree and the file
 		// moves under <vault>/.trash/<id>/a.md.
 		waitNotVisible(t, d, `#g-files .g-tree-note[data-note="a.md"]`)
 		poll(t, "a.md to move into the vault trash", func() (bool, string) {

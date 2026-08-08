@@ -17,7 +17,6 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/chinese-room-solutions/grimoire/internal/app"
-	"github.com/chinese-room-solutions/grimoire/internal/appconfig"
 	"github.com/chinese-room-solutions/grimoire/internal/frontmatter"
 	"github.com/chinese-room-solutions/grimoire/internal/graph"
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
@@ -81,7 +80,7 @@ func grimoireRoutes(h *serviceHolder, api *grimoireapi.API, appDir string, setti
 		mux.HandleFunc("POST /api/model", modelHandler(svc, logger))
 		mux.HandleFunc("POST /action/reindex", reindexHandler(svc, logger))
 		mux.HandleFunc("POST /api/concurrency", concurrencyHandler(svc, logger))
-		mux.HandleFunc("POST /api/trash-mode", trashModeHandler(svc, logger))
+		mux.HandleFunc("POST /api/trash-enabled", trashHandler(svc, logger))
 		mux.HandleFunc("POST /api/convert-model", convertModelHandler(svc, logger))
 		mux.HandleFunc("POST /api/convert-resolution", convertResolutionHandler(svc, logger))
 		mux.HandleFunc("POST /api/convert-timeout", convertTimeoutHandler(svc, logger))
@@ -188,7 +187,7 @@ func pageHandler(h *serviceHolder, appDir string, store *connstore.Store, client
 			ChunkCount:            count,
 			IndexConcurrency:      concurrency,
 			GraphOpen:             focusedTabIsGraph(svc, logger),
-			TrashMode:             string(ac.TrashModeOrDefault()),
+			TrashEnabled:          ac.Trashes(),
 			Conn:                  connState,
 			Version:               version,
 		}))
@@ -307,25 +306,18 @@ func concurrencyHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFun
 	}
 }
 
-// trashModeHandler records the soft-delete policy from the Settings control:
-// trash for all deletes, for AI-agent (API) deletes only, or off.
-func trashModeHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
+// trashHandler records the soft-delete setting from the Settings control:
+// deletes move to the vault's trash, or are permanent.
+func trashHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Mode string `json:"gTrashMode"`
+			Enabled bool `json:"gTrashEnabled"`
 		}
 		if err := readSignals(r, &body); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		mode := appconfig.TrashMode(body.Mode)
-		switch mode {
-		case appconfig.TrashAll, appconfig.TrashAgents, appconfig.TrashOff:
-		default:
-			http.Error(w, "invalid trash mode", http.StatusBadRequest)
-			return
-		}
-		if err := svc.SetTrashMode(mode); err != nil {
+		if err := svc.SetTrashEnabled(body.Enabled); err != nil {
 			logger.Warn().Err(err).Msg("saving trash setting")
 			http.Error(w, "could not save trash setting", http.StatusInternalServerError)
 			return
@@ -1371,9 +1363,8 @@ func deleteNoteHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc
 		if sig.Path == "" {
 			return
 		}
-		// permanent=false, byAgent=false: a user GUI delete, so the trash mode
-		// decides (soft-delete to .trash/ or permanent removal).
-		if _, _, err := svc.RemoveNote(r.Context(), sig.Path, false, false); err != nil {
+		// The trash setting decides: soft-delete to .trash/, or permanent removal.
+		if _, _, err := svc.RemoveNote(r.Context(), sig.Path); err != nil {
 			logger.Warn().Err(err).Str("note", sig.Path).Msg("deleting note")
 		}
 		renderFiles(sse, svc, logger)
@@ -1524,8 +1515,8 @@ func renameFolderHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFu
 }
 
 // deleteFolderHandler deletes a folder and all its contents — honouring the
-// vault's trash mode like a note delete (soft-deleting the folder as a unit when
-// enabled) — repaints the tree, and closes the preview if the open note was
+// vault's trash setting like a note delete (soft-deleting the folder as a unit
+// when enabled) — repaints the tree, and closes the preview if the open note was
 // inside the deleted folder. The folder path arrives as a signal.
 func deleteFolderHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1541,7 +1532,7 @@ func deleteFolderHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFu
 		if sig.Path == "" {
 			return
 		}
-		if _, _, err := svc.RemoveFolder(r.Context(), sig.Path, false, false); err != nil {
+		if _, _, err := svc.RemoveFolder(r.Context(), sig.Path); err != nil {
 			logger.Warn().Err(err).Str("folder", sig.Path).Msg("deleting folder")
 		}
 		renderFiles(sse, svc, logger)
@@ -1575,7 +1566,7 @@ func deleteNotesManyHandler(svc *app.Service, logger zerolog.Logger) http.Handle
 			if path == "" {
 				continue
 			}
-			if _, _, err := svc.RemoveNote(r.Context(), path, false, false); err != nil {
+			if _, _, err := svc.RemoveNote(r.Context(), path); err != nil {
 				logger.Warn().Err(err).Str("note", path).Msg("batch-deleting note")
 				// A stale index still means the note left the vault, so the
 				// preview bookkeeping below must run; anything else didn't delete.

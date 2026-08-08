@@ -229,7 +229,7 @@ func toReindexResult(stats index.Stats, err error) (ReindexResult, error) {
 
 // RenameResult is a rename's outcome: the note at its new path, plus — when
 // overwrite displaced an existing note — whether that note went to the trash
-// (per the vault's trash mode) and the id to restore it by.
+// (when the vault's trash is on) and the id to restore it by.
 type RenameResult struct {
 	Note
 	ReplacedTrashed bool   `json:"replacedTrashed,omitempty"`
@@ -239,8 +239,8 @@ type RenameResult struct {
 // RenameNote moves a note from one vault-relative path to another. With
 // overwrite=false it refuses to replace an existing note at the target
 // (ErrNoteExists); overwrite=true removes the target first — honouring the
-// vault's trash mode like every other agent deletion, so the displaced note is
-// recoverable when trashing is on (its trash id rides in the result). Returns
+// vault's trash setting like every other agent deletion, so the displaced note
+// is recoverable when trashing is on (its trash id rides in the result). Returns
 // the note at its new path.
 func (a *API) RenameNote(ctx context.Context, from, to string, overwrite bool) (RenameResult, error) {
 	svc, err := a.service()
@@ -252,7 +252,7 @@ func (a *API) RenameNote(ctx context.Context, from, to string, overwrite bool) (
 	if err != nil {
 		if errorsIsNoteExists(err) && overwrite {
 			// Displace the occupant (to the trash when the mode allows), then retry.
-			trashID, trashed, delErr := svc.RemoveNote(ctx, to, false, true)
+			trashID, trashed, delErr := svc.RemoveNote(ctx, to)
 			if delErr != nil && !errors.Is(delErr, app.ErrIndexStale) {
 				return RenameResult{}, delErr
 			}
@@ -293,17 +293,15 @@ func indexWarning(err error) string {
 	return ""
 }
 
-// DeleteNote deletes a note. With permanent=false it honours the vault's trash
-// setting (soft-deleting to .trash/ when enabled); permanent=true always removes
-// it outright. The result says which happened and, if trashed, the id to restore.
-func (a *API) DeleteNote(ctx context.Context, path string, permanent bool) (DeleteResult, error) {
+// DeleteNote deletes a note, honouring the vault's trash setting: soft-deleted
+// to .trash/ when the trash is on, removed outright when it isn't. The result
+// says which happened and, if trashed, the id to restore.
+func (a *API) DeleteNote(ctx context.Context, path string) (DeleteResult, error) {
 	svc, err := a.service()
 	if err != nil {
 		return DeleteResult{}, err
 	}
-	// byAgent=true: this is an API delete, so the "agents only" trash mode
-	// soft-deletes it even when the user's own GUI deletes are permanent.
-	trashID, trashed, err := svc.RemoveNote(ctx, path, permanent, true)
+	trashID, trashed, err := svc.RemoveNote(ctx, path)
 	if err != nil && !errors.Is(err, app.ErrIndexStale) {
 		return DeleteResult{}, err
 	}
@@ -324,17 +322,16 @@ func (a *API) CreateFolder(ctx context.Context, path string) (NoteRef, error) {
 	return NoteRef{Name: baseName(written), Path: written}, nil
 }
 
-// DeleteFolder deletes a folder and everything inside it. With permanent=false
-// it honours the vault's trash setting like a note delete — soft-deleting the
-// folder as a unit (tree intact) when enabled; permanent=true always removes it
-// outright. The result says which happened and, if trashed, the id to restore.
-func (a *API) DeleteFolder(ctx context.Context, path string, permanent bool) (DeleteResult, error) {
+// DeleteFolder deletes a folder and everything inside it, honouring the vault's
+// trash setting like a note delete — soft-deleted as a unit (tree intact) when
+// the trash is on. The result says which happened and, if trashed, the id to
+// restore.
+func (a *API) DeleteFolder(ctx context.Context, path string) (DeleteResult, error) {
 	svc, err := a.service()
 	if err != nil {
 		return DeleteResult{}, err
 	}
-	// byAgent=true: an API delete, so the "agents only" trash mode applies.
-	trashID, trashed, err := svc.RemoveFolder(ctx, path, permanent, true)
+	trashID, trashed, err := svc.RemoveFolder(ctx, path)
 	if err != nil && !errors.Is(err, app.ErrIndexStale) {
 		return DeleteResult{}, err
 	}

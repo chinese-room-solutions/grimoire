@@ -166,10 +166,9 @@ func (e *cliEnv) runFolderCreate(args []string) int {
 	return exitOK
 }
 
-// runFolderDelete handles `grimoire folder delete PATH [--permanent]`.
+// runFolderDelete handles `grimoire folder delete PATH`.
 func (e *cliEnv) runFolderDelete(args []string) int {
 	fs := flag.NewFlagSet("folder delete", flag.ContinueOnError)
-	permanent := fs.Bool("permanent", false, "delete outright instead of moving to the trash")
 	rest, ok := parseFlags(fs, e.err, args)
 	if !ok {
 		return exitUsage
@@ -181,7 +180,7 @@ func (e *cliEnv) runFolderDelete(args []string) int {
 	var res grimoireapi.DeleteResult
 	err := e.doWrite(context.Background(), func(ctx context.Context, c *apiclient.Client) error {
 		var callErr error
-		res, callErr = c.DeleteFolder(ctx, rest[0], *permanent)
+		res, callErr = c.DeleteFolder(ctx, rest[0])
 		return callErr
 	})
 	if err != nil {

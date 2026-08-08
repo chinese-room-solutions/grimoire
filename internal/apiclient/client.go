@@ -176,12 +176,9 @@ func (c *Client) EditNote(ctx context.Context, path, oldText, newText string) (g
 	return out, err
 }
 
-// DeleteNote deletes a note. permanent=false honours the vault's trash setting.
-func (c *Client) DeleteNote(ctx context.Context, path string, permanent bool) (grimoireapi.DeleteResult, error) {
+// DeleteNote deletes a note, honouring the vault's trash setting.
+func (c *Client) DeleteNote(ctx context.Context, path string) (grimoireapi.DeleteResult, error) {
 	q := url.Values{"path": {path}}
-	if permanent {
-		q.Set("permanent", "true")
-	}
 	var out grimoireapi.DeleteResult
 	err := c.sendJSON(ctx, http.MethodDelete, "/note?"+q.Encode(), nil, &out)
 	return out, err
@@ -330,11 +327,8 @@ func (c *Client) CreateFolder(ctx context.Context, path string) (grimoireapi.Not
 }
 
 // DeleteFolder deletes a folder and everything inside it.
-func (c *Client) DeleteFolder(ctx context.Context, path string, permanent bool) (grimoireapi.DeleteResult, error) {
+func (c *Client) DeleteFolder(ctx context.Context, path string) (grimoireapi.DeleteResult, error) {
 	q := url.Values{"path": {path}}
-	if permanent {
-		q.Set("permanent", "true")
-	}
 	var out grimoireapi.DeleteResult
 	err := c.sendJSON(ctx, http.MethodDelete, "/folder?"+q.Encode(), nil, &out)
 	return out, err

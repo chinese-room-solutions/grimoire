@@ -64,10 +64,10 @@ grimoire [--vault PATH] [--json] <command> [args]
 | Group | Commands |
 | --- | --- |
 | **search** | `search QUERY [-k N]` |
-| **note** | `note get PATH` · `note create PATH` · `note update PATH` · `note edit PATH --old S --new S` · `note delete PATH [--permanent]` · `note rename FROM TO` · `note props PATH --set key=v1,v2` |
+| **note** | `note get PATH` · `note create PATH` · `note update PATH` · `note edit PATH --old S --new S` · `note delete PATH` · `note rename FROM TO` · `note props PATH --set key=v1,v2` |
 | **vault** | `vault tree` · `vault list` · `vault current` |
 | **resolve** | `resolve TARGET` (a wikilink or bare name → a note path) |
-| **folder** | `folder create PATH` · `folder delete PATH [--permanent]` · `folder rename FROM TO` |
+| **folder** | `folder create PATH` · `folder delete PATH` · `folder rename FROM TO` |
 | **trash** | `trash list` · `trash restore ID` · `trash delete ID` · `trash empty` |
 | **import** | `import FILE...` (convert foreign files into notes) |
 | **reindex** | `reindex [PATH...] [--force]` (sync the search index — whole vault, or just the named notes) |
@@ -82,10 +82,10 @@ the index inline and reports `indexWarning` (exit `1`) if that prune fails,
 leaving the note gone from disk but still searchable until you `reindex` its
 path.
 
-Deletes honour the vault's trash mode (off / agents only / everyone). Because
-the CLI and JSON API are the agent surface, `--permanent` from them is a request
-the mode can refuse: with the trash on for agents, an agent's delete is a trash
-move regardless. Only your own GUI deletes can skip the trash.
+Deletes go to the vault's trash unless you turn it off in the settings — there
+is no per-delete override, in the GUI or the API. The trash is what makes an
+agent's delete recoverable, so nothing an agent sends can skip it; permanent
+removal is `trash delete` / `trash empty`, or the setting.
 
 `import` converts `.md`/`.markdown`/`.txt`, `.html`, and `.docx`/`.odt` files
 locally (no gateway needed); `.pdf` goes through the convert (vision) model

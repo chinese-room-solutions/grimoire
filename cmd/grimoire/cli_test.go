@@ -310,9 +310,9 @@ func TestCLINoteDeleteSendsQueryAndReportsTrash(t *testing.T) {
 			wantOut:   "trashed a.md (restore id: t9)\n",
 		},
 		{
-			name:      "permanent delete adds permanent=true",
-			args:      []string{"note", "delete", "a.md", "--permanent"},
-			wantQuery: "path=a.md&permanent=true",
+			name:      "a delete with the trash off reports a plain removal",
+			args:      []string{"note", "delete", "a.md"},
+			wantQuery: "path=a.md",
 			trashed:   false,
 			wantOut:   "deleted a.md\n",
 		},

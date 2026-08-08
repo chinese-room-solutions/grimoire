@@ -85,7 +85,7 @@ func TestTrashRestoreHandlerReadsQueryID(t *testing.T) {
 	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 
-	id, trashed, err := svc.RemoveNote(context.Background(), "n.md", false, false)
+	id, trashed, err := svc.RemoveNote(context.Background(), "n.md")
 	require.NoError(t, err)
 	require.True(t, trashed)
 
@@ -108,7 +108,7 @@ func TestTrashManyHandlers(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	ids := map[string]string{}
 	for _, n := range []string{"a.md", "b.md", "c.md"} {
-		id, _, err := svc.RemoveNote(context.Background(), n, false, false)
+		id, _, err := svc.RemoveNote(context.Background(), n)
 		require.NoError(t, err)
 		ids[n] = id
 	}

@@ -164,8 +164,7 @@ func apiDeleteNoteHandler(api *grimoireapi.API, logger zerolog.Logger) http.Hand
 		if !requireField(w, path, "path", logger) {
 			return
 		}
-		permanent := r.URL.Query().Get("permanent") == "true"
-		res, err := api.DeleteNote(r.Context(), path, permanent)
+		res, err := api.DeleteNote(r.Context(), path)
 		if err != nil {
 			writeServiceError(w, err, logger, "delete note")
 			return
@@ -291,8 +290,7 @@ func apiDeleteFolderHandler(api *grimoireapi.API, logger zerolog.Logger) http.Ha
 		if !requireField(w, path, "path", logger) {
 			return
 		}
-		permanent := r.URL.Query().Get("permanent") == "true"
-		res, err := api.DeleteFolder(r.Context(), path, permanent)
+		res, err := api.DeleteFolder(r.Context(), path)
 		if err != nil {
 			writeServiceError(w, err, logger, "delete folder")
 			return
