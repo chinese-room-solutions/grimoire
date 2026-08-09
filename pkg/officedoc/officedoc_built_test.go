@@ -42,7 +42,8 @@ func docxZip(t *testing.T, body string, extra map[string][]byte) []byte {
 		"word/document.xml": []byte(`<?xml version="1.0" encoding="UTF-8"?>` +
 			`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"` +
 			` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"` +
-			` xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">` +
+			` xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"` +
+			` xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">` +
 			`<w:body>` + body + `</w:body></w:document>`),
 	}
 	for name, data := range extra {
@@ -300,6 +301,21 @@ func TestConvertBuiltDocx(t *testing.T) {
 			name: "run-level tab still emits a tab",
 			body: docxP("", `<w:r><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r>`),
 			want: "a\tb\n",
+		},
+		{
+			// A text box: the Choice branch holds the live copy, the Fallback a
+			// legacy redraw of the same text. Only the Choice is read, and its
+			// nested <w:p> is emitted once.
+			name: "alternate content text is not duplicated",
+			body: docxP("", `<w:r><mc:AlternateContent>`+
+				`<mc:Choice Requires="wps"><w:drawing><w:txbxContent>`+
+				`<w:p><w:r><w:t>boxtext</w:t></w:r></w:p>`+
+				`</w:txbxContent></w:drawing></mc:Choice>`+
+				`<mc:Fallback><w:pict><w:txbxContent>`+
+				`<w:p><w:r><w:t>boxtext</w:t></w:r></w:p>`+
+				`</w:txbxContent></w:pict></mc:Fallback>`+
+				`</mc:AlternateContent></w:r>`),
+			want: "boxtext\n",
 		},
 	}
 	for _, tt := range tests {

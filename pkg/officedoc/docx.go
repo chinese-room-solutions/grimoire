@@ -74,6 +74,13 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 		linkTarget string
 	)
 
+	resetPara := func() {
+		para.Reset()
+		plain.Reset()
+		paraImages = nil
+		heading, listLvl, ordered, styled, allBold, indent = 0, 0, false, false, true, 0
+	}
+
 	for {
 		tok, terr := dec.Token()
 		if terr == io.EOF {
@@ -87,10 +94,14 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 		case xml.StartElement:
 			switch t.Name.Local {
 			case "p":
-				para.Reset()
-				plain.Reset()
-				paraImages = nil
-				heading, listLvl, ordered, styled, allBold, indent = 0, 0, false, false, true, 0
+				resetPara()
+			case "Fallback":
+				// <mc:AlternateContent> offers the same content twice: <mc:Choice>
+				// (the branch Word maintains) and <mc:Fallback> (a legacy redraw of
+				// it). Reading both duplicates the text, so keep the Choice only.
+				if serr := dec.Skip(); serr != nil {
+					return nil, nil, ctxerr.With(fmt.Errorf("skipping alternate content fallback: %w", serr), nil)
+				}
 			case "ind":
 				indent = atoiDefault(attr(t, "left"), 0)
 			case "blip":
@@ -163,6 +174,10 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 				for _, img := range paraImages {
 					blocks = append(blocks, block{text: img})
 				}
+				// A text box nests a whole <w:p> inside the paragraph that anchors
+				// it; without clearing here the inner paragraph's text is emitted
+				// again when the outer one ends.
+				resetPara()
 			}
 		}
 	}
