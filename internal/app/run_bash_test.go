@@ -29,12 +29,13 @@ func newBashService(t *testing.T, note, content string) *Service {
 	return s
 }
 
-// runAbove collects, per block index, the merged output and exit code.
-func runAbove(t *testing.T, s *Service, note string, target int) (map[int]string, map[int]int, error) {
+// runAbove collects, per block index, the merged output, the exit code, and the
+// source RunAbove tagged the events with.
+func runAbove(t *testing.T, s *Service, note string, target int) (out map[int]string, code map[int]int, src map[int]string, err error) {
 	t.Helper()
-	out := map[int]string{}
-	code := map[int]int{}
-	err := s.RunAbove(context.Background(), note, target, func(block int, ev RunEvent) {
+	out, code, src = map[int]string{}, map[int]int{}, map[int]string{}
+	err = s.RunAbove(context.Background(), note, target, func(block int, source string, ev RunEvent) {
+		src[block] = source
 		switch ev.Type {
 		case "output", "error":
 			out[block] += ev.Data
@@ -42,7 +43,7 @@ func runAbove(t *testing.T, s *Service, note string, target int) (map[int]string
 			code[block] = ev.Code
 		}
 	})
-	return out, code, err
+	return out, code, src, err
 }
 
 func TestRunAboveSharedSession(t *testing.T) {
@@ -53,13 +54,17 @@ func TestRunAboveSharedSession(t *testing.T) {
 		"```bash\necho \"sum=$(( x + y ))\"\n```\n"
 	s := newBashService(t, note, content)
 
-	out, code, err := runAbove(t, s, note, 2)
+	out, code, src, err := runAbove(t, s, note, 2)
 	require.NoError(t, err)
 	// All three blocks ran; the last sees x and y from the earlier blocks.
 	keys := blockKeys(code)
 	require.Equal(t, []int{0, 1, 2}, keys)
 	require.Equal(t, 0, code[2])
 	require.Equal(t, "sum=30\n", out[2])
+	// Each block's events carry that block's source, so a caller can key its
+	// saved output by the same content hash the run panel uses.
+	require.Equal(t, "x=10\n", src[0])
+	require.Equal(t, "echo \"sum=$(( x + y ))\"\n", src[2])
 }
 
 func TestRunAboveStopsOnFailure(t *testing.T) {
@@ -70,7 +75,7 @@ func TestRunAboveStopsOnFailure(t *testing.T) {
 		"```bash\necho should-not-run\n```\n"
 	s := newBashService(t, note, content)
 
-	out, code, err := runAbove(t, s, note, 2)
+	out, code, _, err := runAbove(t, s, note, 2)
 	require.ErrorIs(t, err, ErrBlockFailed)
 	// Block 1 failed, so block 2 never ran.
 	require.Equal(t, []int{0, 1}, blockKeys(code))
@@ -86,7 +91,7 @@ func TestRunAboveSkipsNonRunnableBlocks(t *testing.T) {
 		"```bash\necho \"a=$a\"\n```\n"
 	s := newBashService(t, note, content)
 
-	out, code, err := runAbove(t, s, note, 2)
+	out, code, _, err := runAbove(t, s, note, 2)
 	require.NoError(t, err)
 	// The plain block (index 1) is skipped; bash blocks 0 and 2 ran.
 	require.Equal(t, []int{0, 2}, blockKeys(code))
