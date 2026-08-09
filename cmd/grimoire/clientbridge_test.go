@@ -132,14 +132,15 @@ func TestClientBridgeSecondAttachReplacesFirst(t *testing.T) {
 }
 
 // With no window attached, the two native ops degrade the way their callers
-// already handle: the picker reports "nothing picked" (a headless daemon and a
-// browser client both land here), and a capture reports ErrNoScreenshot, which
-// the API surface answers 503 with.
+// already handle: the picker reports errNoClient, so the vault picker can offer
+// a path field rather than treating it as a cancelled dialog (a headless daemon
+// and a browser client both land here), and a capture reports ErrNoScreenshot,
+// which the API surface answers 503 with.
 func TestClientBridgeWithoutAClient(t *testing.T) {
 	bridge := newClientBridge("dark")
 
 	path, ok, err := bridge.PickFolder(t.Context(), "pick")
-	require.NoError(t, err)
+	require.ErrorIs(t, err, errNoClient)
 	require.False(t, ok)
 	require.Empty(t, path)
 

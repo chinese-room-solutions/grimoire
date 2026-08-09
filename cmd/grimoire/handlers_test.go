@@ -110,15 +110,15 @@ func TestPageHandlerResolvesTheVault(t *testing.T) {
 		"a vault that isn't there falls back to the picker")
 }
 
-// TestOpenVaultHandler covers the Vault menu's "Switch vault…" and the
-// empty-state recent rows: the vault is opened in the daemon and becomes the
-// default, and the page is told to reload only when it isn't already showing it.
+// TestOpenVaultHandler covers the Vaults tab's "Add vault…" and the empty-state
+// recent rows: the vault is opened in the daemon and becomes the default, and
+// the page is told to navigate only when it isn't already showing it.
 func TestOpenVaultHandler(t *testing.T) {
 	reg := newTestRegistry(t)
 	open := openVaultHandler(reg, zerolog.Nop())
 
 	post := func(path, pageVault string) *httptest.ResponseRecorder {
-		target := "/api/open-vault"
+		target := "/api/vaults/add"
 		if pageVault != "" {
 			target += "?vault=" + url.QueryEscape(pageVault)
 		}
@@ -132,7 +132,7 @@ func TestOpenVaultHandler(t *testing.T) {
 	vault := tempVault(t)
 	rec := post(vault, "")
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.JSONEq(t, `{"ok":true,"reload":true}`, rec.Body.String())
+	require.JSONEq(t, `{"ok":true,"reload":true,"vault":"`+vault+`"}`, rec.Body.String())
 	last, err := vaultdir.LastVault()
 	require.NoError(t, err)
 	require.Equal(t, vault, last, "opening a vault makes it the default")

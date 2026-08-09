@@ -645,10 +645,31 @@ type State struct {
 }
 
 // VaultRef is one vault in the empty-state picker: its display name (the folder's
-// base name) and absolute path (what open-vault binds).
+// base name) and absolute path (what api/vaults/add opens).
 type VaultRef struct {
 	Name string
 	Path string
+}
+
+// VaultRow is one row of the sidebar's Vaults tab. Detail is the pre-formatted
+// tooltip (chunk count, last sync, embedding model): the list shows name and
+// path, and the numbers stay one hover away rather than making every row three
+// lines tall.
+type VaultRow struct {
+	Name      string
+	Path      string
+	Current   bool
+	Available bool
+	Detail    string
+}
+
+// boolAttr renders a boolean as the "true"/"false" a data- attribute carries
+// (an absent attribute and a "false" one are different things to JS).
+func boolAttr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // megapixels formats a pixel count for the Vault menu's resolution input,
@@ -1005,6 +1026,30 @@ var styleBlock = `<style>
 #app-grimoire .g-sessions-section{gap:0.4rem}
 #app-grimoire .g-new-session::part(base){min-height:0;height:var(--g-tab-top-h)}
 #app-grimoire .g-new-session::part(label){padding-top:0;padding-bottom:0}
+
+/* Vaults tab: the same column rhythm as Sessions, so the three tabs line up. */
+#app-grimoire .g-vaults-section{gap:0.4rem}
+#app-grimoire .g-vaults{display:flex;flex-direction:column;gap:1px;overflow-y:auto;flex:1;min-height:0;padding-right:10px}
+#app-grimoire .g-vaults-empty{font-size:0.74rem;padding:0.4rem 0.1rem}
+/* The path field is revealed only when the client has no native folder dialog. */
+#app-grimoire .g-vault-add-path{display:none}
+#app-grimoire .g-vault-add-path.g-vault-add-path-open{display:block}
+#app-grimoire .g-vault-row{display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0.4rem;border-radius:0.35rem;cursor:pointer;color:var(--mass-text)}
+#app-grimoire .g-vault-row:hover{background:var(--mass-bg-hover)}
+/* The dot is the status: accent = the vault this page shows, plain = another
+   available one, hollow/muted = its folder is gone. */
+#app-grimoire .g-vault-dot{flex:0 0 auto;width:0.5rem;height:0.5rem;border-radius:50%;background:var(--mass-text-muted)}
+#app-grimoire .g-vault-row-current{background:var(--mass-accent-soft)}
+#app-grimoire .g-vault-row-current .g-vault-dot{background:var(--mass-accent)}
+#app-grimoire .g-vault-row-current .g-vault-name{color:var(--mass-accent)}
+#app-grimoire .g-vault-row-gone{cursor:default;opacity:0.55}
+#app-grimoire .g-vault-row-gone .g-vault-dot{background:none;box-shadow:inset 0 0 0 1px var(--mass-text-muted)}
+#app-grimoire .g-vault-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:0.05rem}
+#app-grimoire .g-vault-name{font-size:0.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#app-grimoire .g-vault-path{font-size:0.66rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#app-grimoire .g-vault-row-menu{color:var(--mass-text-muted);opacity:0;transition:opacity 0.1s}
+#app-grimoire .g-vault-row:hover .g-vault-row-menu,#app-grimoire .g-vault-row-menu[open]{opacity:1}
+#app-grimoire .g-vault-row-menu sl-icon-button::part(base){padding:0.1rem}
 
 /* Files: vault folder tree */
 #app-grimoire .g-files-section{gap:0.4rem}

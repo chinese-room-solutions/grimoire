@@ -56,31 +56,47 @@
     });
   }
 
-  // Vault open/switch happens in-process: the daemon opens the chosen vault (it
+  // Adding a vault happens in-process: the daemon opens the chosen folder (it
   // keeps every vault it serves resident) and reports {reload:true} when it isn't
-  // the one this page is showing, so we reload onto it. The dialog's "Switch
-  // vault…" and the empty-state "Open a vault folder…" both open the native folder
-  // picker (path omitted); the empty-state recent rows post their own path. The
-  // model selects, concurrency, and Reindex are wired in the templ.
-  function openVault(body, btn) {
+  // the one this page is showing, so we reload onto it. With no path in the body
+  // the daemon raises the native folder dialog; a client with no window to raise
+  // it in gets {needsPath:true} back instead, and onNeedsPath (the Vaults tab's
+  // inline field) takes over. The model selects, concurrency, and Reindex are
+  // wired in the templ.
+  function openVault(body, btn, onNeedsPath) {
     if (btn) btn.loading = true;
-    fetch(apiURL("api/open-vault"), { method: "POST", body: body })
+    fetch(apiURL("api/vaults/add"), { method: "POST", body: body })
       .then(function (r) { return r.json(); })
       .then(function (res) {
-        if (res && res.reload) { location.reload(); return; }
+        // Navigate to the vault by name rather than reloading: this page's URL
+        // may pin a different ?vault=, and a reload would land back on it.
+        if (res && res.reload) { location.assign(vaultURL(res.vault)); return; }
+        if (res && res.needsPath && onNeedsPath) { onNeedsPath(); return; }
         // ok:false (picker cancelled) or ok:true with no change: nothing to do.
       })
       .catch(function () { /* open failed; leave the UI as-is */ })
       .finally(function () { if (btn) btn.loading = false; });
   }
 
+  // pathBody wraps an absolute vault path as the form body api/vaults/add takes.
+  function pathBody(path) {
+    var fd = new FormData();
+    fd.append("path", path);
+    return fd;
+  }
+
+  // vaultURL is the page for one vault. Opening a vault is a navigation, not a
+  // reload: the workspace, file tree and session history all come from the
+  // vault's own state, which the page restores on load.
+  function vaultURL(path) {
+    return path ? "?vault=" + encodeURIComponent(path) : location.pathname;
+  }
+
   function initVault() {
     // The vault button is the trigger of an sl-dropdown (the gear-style Vault
-    // menu), so Shoelace opens it on click — no manual show() needed.
-
-    // Pick a folder (no path) → bind it to this instance.
-    var switchBtn = getEl("g-vault-switch");
-    if (switchBtn) switchBtn.addEventListener("click", function () { openVault(null, switchBtn); });
+    // menu), so Shoelace opens it on click — no manual show() needed. The menu
+    // holds this vault's own settings; choosing a different vault is the Vaults
+    // tab in the sidebar.
 
     // Empty state: pick a new folder, or open a known vault by its path.
     var emptyOpen = getEl("g-vault-empty-open");
@@ -89,10 +105,97 @@
     if (empty) empty.addEventListener("click", function (e) {
       var row = e.target.closest(".g-vault-recent");
       if (!row) return;
-      var fd = new FormData();
-      fd.append("path", row.getAttribute("data-vault-path") || "");
-      openVault(fd, row);
+      openVault(pathBody(row.getAttribute("data-vault-path") || ""), row);
     });
+  }
+
+  // The Vaults sidebar tab: the daemon's whole vault list, with the one this page
+  // is showing highlighted. Switching is a reload onto ?vault=, not an in-place
+  // swap — every open tab, the file tree and the session history belong to the
+  // vault, and the page restores all of it from that vault's own UI state on load.
+  var vaults = (function () {
+    // Re-render by clicking the templ's data-init trigger's twin: the list is a
+    // server-rendered fragment, so a change is a re-fetch, never a DOM edit here.
+    function refresh() {
+      var t = getEl("g-vaults-render-trigger");
+      if (t) t.click();
+    }
+
+    // Reveal the absolute-path field (a browser tab has no native folder dialog)
+    // and focus it. Enter submits; the field stays open so a typo can be fixed.
+    function revealPathField() {
+      var wrap = getEl("g-vault-add-path");
+      var input = getEl("g-vault-add-input");
+      if (!wrap || !input) return;
+      wrap.classList.add("g-vault-add-path-open");
+      if (typeof input.focus === "function") input.focus();
+    }
+
+    function forget(path, name) {
+      confirmForget(name, path, function () {
+        fetch(apiURL("api/vaults/forget"), { method: "POST", body: pathBody(path) })
+          .then(function () { refresh(); })
+          .catch(function () { /* the list is unchanged; nothing to undo. */ });
+      });
+    }
+
+    function init() {
+      var addBtn = getEl("g-vault-add");
+      if (addBtn) addBtn.addEventListener("click", function () {
+        openVault(null, addBtn, revealPathField);
+      });
+      var input = getEl("g-vault-add-input");
+      if (input) input.addEventListener("keydown", function (e) {
+        if (e.key !== "Enter") return;
+        var path = (input.value || "").trim();
+        if (path) openVault(pathBody(path), null);
+      });
+
+      var list = getEl("g-vaults");
+      if (!list) return;
+      // One delegated click for the whole list: rows are replaced wholesale on
+      // every re-render, so per-row listeners would have to be re-attached.
+      list.addEventListener("click", function (e) {
+        var row = e.target.closest(".g-vault-row");
+        if (!row) return;
+        var path = row.getAttribute("data-vault-path") || "";
+        if (e.target.closest(".g-vault-forget")) {
+          forget(path, row.querySelector(".g-vault-name").textContent);
+          return;
+        }
+        // The overflow menu is not a row click.
+        if (e.target.closest(".g-vault-row-menu")) return;
+        if (row.getAttribute("data-vault-available") !== "true") return;
+        if (row.classList.contains("g-vault-row-current")) return;
+        location.assign(vaultURL(path));
+      });
+    }
+    return { init: init };
+  })();
+
+  // confirmForget asks before dropping a vault from the list. Its own dialog, not
+  // the delete one: forgetting removes nothing from disk, and the copy has to say
+  // so or it reads as a delete.
+  function confirmForget(name, path, onConfirm) {
+    var dialog = getEl("g-forget-dialog");
+    var body = getEl("g-forget-body");
+    if (!dialog) return;
+    if (body) {
+      body.textContent = "Remove “" + name + "” from the vault list? The folder " +
+        "and its notes stay on disk at " + path + " — add it again any time.";
+    }
+    var confirm = getEl("g-forget-confirm");
+    var cancel = getEl("g-forget-cancel");
+    // Fresh handlers per ask, so a previous vault's path can't be forgotten by a
+    // later confirmation.
+    function close() {
+      dialog.hide();
+      if (confirm) confirm.onclick = null;
+      if (cancel) cancel.onclick = null;
+    }
+    if (confirm) confirm.onclick = function () { close(); onConfirm(); };
+    if (cancel) cancel.onclick = close;
+    dialog.show();
   }
 
   // Hover calm-down for the scrollable lists: while content wheel-scrolls under a
@@ -2237,13 +2340,14 @@
     }
     // A new tab is context-aware (browser new-tab convention): on the Files
     // sidebar tab it creates a new note (a real file, opened as a tab — Grimoire
-    // notes are always files, like Obsidian); elsewhere it opens a blank session
-    // scratch tab that commits nothing until you search. Shared by the strip's "+"
-    // and the Ctrl+N shortcut.
+    // notes are always files, like Obsidian); on the Vaults tab it adds a vault;
+    // elsewhere it opens a blank session scratch tab that commits nothing until
+    // you search. Shared by the strip's "+" and the Ctrl+N shortcut.
     function newTab() {
       var group = getEl("g-tabs");
       var active = group && group.activeTab ? group.activeTab.panel : "sessions";
       if (active === "files") { var nn = getEl("g-new-note"); if (nn) nn.click(); }
+      else if (active === "vaults") { var av = getEl("g-vault-add"); if (av) av.click(); }
       else nav.openScratch();
     }
     var tabNew = getEl("g-tab-new");
@@ -4387,9 +4491,11 @@
     var group = getEl("g-tabs");
     var newBtn = getEl("g-tab-new");
     // The strip "+" tooltip reflects what it'll do for the active sidebar tab
-    // (new note on Files, new session otherwise; the click handler is in initPreview).
+    // (new note on Files, add vault on Vaults, new session otherwise; the click
+    // handler is in initPreview).
+    var NEW_TITLES = { files: "New note", vaults: "Add vault" };
     function syncNewTitle(name) {
-      if (newBtn) newBtn.title = name === "files" ? "New note" : "New session";
+      if (newBtn) newBtn.title = NEW_TITLES[name] || "New session";
     }
     if (group) group.addEventListener("sl-tab-show", function (e) {
       saveActiveTab(e.detail.name);
@@ -4402,11 +4508,13 @@
   // until then (no Sessions flash). show() runs the panel sync; call it once the
   // group has rendered. Don't pre-set the tab's active attribute — that makes the
   // group think the tab is already active and skip the panel sync.
+  var SIDEBAR_PANELS = { vaults: true, sessions: true, files: true };
   function restoreActiveTab() {
     var name;
     try { name = sessionStorage.getItem(TAB_KEY); } catch (e) { return Promise.resolve(); }
-    // "graph" is no longer a sidebar tab (it's a main-panel tab); ignore a stale value.
-    if (!name || name === "graph") return Promise.resolve();
+    // Anything that isn't a sidebar panel is a stale value ("graph" moved to the
+    // main panel); leave the group on its default rather than showing nothing.
+    if (!SIDEBAR_PANELS[name]) return Promise.resolve();
     var group = getEl("g-tabs");
     if (!group || typeof group.show !== "function") return Promise.resolve();
     var ready = group.updateComplete && group.updateComplete.then
@@ -4420,6 +4528,7 @@
   function init() {
     confirmDelete.init();
     initVault();
+    vaults.init();
     themePicker.init();
     extensions.init();
     initTrashSwitch();
@@ -4428,6 +4537,7 @@
     initSidebarTabs();
     calmHoverWhileScrolling("g-sessions");
     calmHoverWhileScrolling("g-files");
+    calmHoverWhileScrolling("g-vaults");
     initResize();
     initAutoScroll();
     initPreview();

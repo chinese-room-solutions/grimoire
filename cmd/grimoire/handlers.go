@@ -106,9 +106,12 @@ func grimoireRoutes(reg *vaultRegistry, api *grimoireapi.API, ctl *daemonControl
 
 	mux.HandleFunc("GET /{$}", pageHandler(reg, appDir, store, client, logger))
 
-	// Opening a vault is available in any state: from the empty state's picker, or
-	// as a switch from a vault already open.
-	mux.HandleFunc("POST /api/open-vault", openVaultHandler(reg, logger))
+	// Vault management is vault-independent — the Vaults tab and the empty-state
+	// picker both work with nothing open — so it hangs off the registry rather
+	// than the request's one service.
+	mux.HandleFunc("POST /api/vaults/add", openVaultHandler(reg, logger))
+	mux.HandleFunc("GET /api/vaults/render", vaultsRenderHandler(api, logger))
+	mux.HandleFunc("POST /api/vaults/forget", forgetVaultHandler(api, logger))
 	mux.HandleFunc("POST /api/settings", settings.Handler())
 	// The MASS connection (endpoint/token/CA) is global — available even in the
 	// empty state, so it can be fixed before any vault is open.
@@ -306,11 +309,19 @@ func knownVaultRefs(logger zerolog.Logger) []ui.VaultRef {
 	return out
 }
 
-// openVaultHandler opens a vault in this daemon and makes it the page's vault. A
-// path form value (an empty-state recent click) is used directly; otherwise the
-// native folder dialog picks one. The vault becomes the last-used one and the
-// client reloads onto it. {"ok":false} = picker cancelled or unavailable;
-// {"ok":true} = already on it; {"ok":true,"reload":true} = opened.
+// openVaultHandler opens a vault in this daemon and makes it the page's vault —
+// the Vaults tab's "Add vault…" and the empty-state picker alike. A path form
+// value (a recent row, or the fallback path field) is used directly; otherwise
+// the native folder dialog picks one. The vault becomes the last-used one and
+// the client reloads onto it.
+//
+//	{"ok":false}                        picker cancelled
+//	{"ok":false,"needsPath":true}       no native dialog here — ask for a path
+//	{"ok":true}                         already the page's vault
+//	{"ok":true,"reload":true,"vault":…} opened; navigate onto it
+//
+// The answer carries the vault because the page can't reload its way there: its
+// URL may pin a different ?vault=, which a plain reload would land on again.
 func openVaultHandler(reg *vaultRegistry, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// The page's own vault, read before the last-vault pointer moves, so the
@@ -319,12 +330,18 @@ func openVaultHandler(reg *vaultRegistry, logger zerolog.Logger) http.HandlerFun
 		path := strings.TrimSpace(r.FormValue("path"))
 		if path == "" {
 			picked, ok, err := reg.pickFolder(r.Context(), "Select a vault folder")
-			if err != nil {
+			switch {
+			case errors.Is(err, errNoClient):
+				// A browser tab or a headless daemon: no window to raise a dialog in,
+				// so the client asks for a path instead. Distinct from a cancelled
+				// dialog, which means the user said no and wants nothing to happen.
+				writeJSONString(w, `{"ok":false,"needsPath":true}`)
+				return
+			case err != nil:
 				logger.Warn().Err(err).Msg("folder dialog failed")
 				http.Error(w, "folder dialog failed", http.StatusInternalServerError)
 				return
-			}
-			if !ok {
+			case !ok:
 				writeJSONString(w, `{"ok":false}`)
 				return
 			}
@@ -346,8 +363,84 @@ func openVaultHandler(reg *vaultRegistry, logger zerolog.Logger) http.HandlerFun
 			writeJSONString(w, `{"ok":true}`) // already the page's vault; nothing to reload.
 			return
 		}
-		writeJSONString(w, `{"ok":true,"reload":true}`)
+		writeJSON(w, struct {
+			OK     bool   `json:"ok"`
+			Reload bool   `json:"reload"`
+			Vault  string `json:"vault"`
+		}{OK: true, Reload: true, Vault: current}, logger)
 	}
+}
+
+// vaultsRenderHandler repaints the sidebar's Vaults tab. It goes through the same
+// grimoireapi listing the CLI reads, so the tab and `grimoire vault list` can
+// never disagree about a vault's state.
+func vaultsRenderHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sse := datastar.NewSSE(w, r)
+		vaults, err := api.ListVaults(r.Context())
+		if err != nil {
+			logger.Warn().Err(err).Msg("listing vaults for the vaults tab")
+			return
+		}
+		_ = sse.PatchElementTempl(ui.VaultList(toVaultRows(vaults)),
+			datastar.WithSelector("#g-vaults"), datastar.WithModeInner())
+	}
+}
+
+// forgetVaultHandler drops the posted path from the vault list. It answers
+// {"ok":true} — the client re-renders the list rather than trusting a payload —
+// and an unknown path is still a success, since the end state is what was asked
+// for.
+func forgetVaultHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimSpace(r.FormValue("path"))
+		if path == "" {
+			http.Error(w, "path is required", http.StatusBadRequest)
+			return
+		}
+		if err := api.ForgetVault(r.Context(), path); err != nil {
+			logger.Warn().Err(err).Str("vault", path).Msg("forgetting vault")
+			http.Error(w, "could not forget the vault", http.StatusInternalServerError)
+			return
+		}
+		writeJSONString(w, `{"ok":true}`)
+	}
+}
+
+// toVaultRows adapts the API's vault status to the sidebar's display shape. The
+// numbers go into the row tooltip rather than the row, which shows name and path.
+func toVaultRows(vaults []grimoireapi.Vault) []ui.VaultRow {
+	out := make([]ui.VaultRow, len(vaults))
+	for i, v := range vaults {
+		out[i] = ui.VaultRow{
+			Name:      v.Name,
+			Path:      v.Path,
+			Current:   v.Current,
+			Available: v.Available,
+			Detail:    vaultDetail(v),
+		}
+	}
+	return out
+}
+
+// vaultDetail is a vault row's tooltip: its path, plus whatever is known about
+// its index. An unavailable vault says so first — that's the reason it can't be
+// opened.
+func vaultDetail(v grimoireapi.Vault) string {
+	parts := []string{v.Path}
+	if !v.Available {
+		parts = append(parts, "folder not found")
+	}
+	if v.Chunks > 0 {
+		parts = append(parts, fmt.Sprintf("%d chunks", v.Chunks))
+	}
+	if v.EmbedModel != "" {
+		parts = append(parts, v.EmbedModel)
+	}
+	if v.LastSync != "" {
+		parts = append(parts, "synced "+v.LastSync)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // modelHandler records the embedding model and (re)opens the store.

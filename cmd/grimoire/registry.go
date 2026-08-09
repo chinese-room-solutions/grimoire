@@ -263,16 +263,17 @@ func (reg *vaultRegistry) SetScreenshotter(fn func() ([]byte, error)) {
 	reg.shared.SetScreenshotter(fn)
 }
 
-// pickFolder runs the native folder dialog, or reports false when no window is
-// attached (a headless daemon, or a browser client). ctx is the requesting
-// call's: a dialog waits on the user, and nothing should outlive the request
-// that opened it.
+// pickFolder runs the native folder dialog. It reports errNoClient when there is
+// no window to raise one in (a headless daemon, a browser client): the caller
+// then asks for a path instead, which a cancelled dialog (ok=false) must not
+// trigger. ctx is the requesting call's — a dialog waits on the user, and
+// nothing should outlive the request that opened it.
 func (reg *vaultRegistry) pickFolder(ctx context.Context, title string) (string, bool, error) {
 	reg.mu.Lock()
 	fn := reg.folderPicker
 	reg.mu.Unlock()
 	if fn == nil {
-		return "", false, nil
+		return "", false, errNoClient
 	}
 	return fn(ctx, title)
 }

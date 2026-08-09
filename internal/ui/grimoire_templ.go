@@ -98,7 +98,7 @@ func grimoirePage(settingsHTML, theme string, st State) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "\"> <input type=\"hidden\" data-bind=\"gStatus\" value=\"\"> <input type=\"hidden\" data-bind=\"gSessionID\" value=\"0\"> <input type=\"hidden\" data-bind=\"gTurnID\" value=\"0\"> <input type=\"hidden\" data-bind=\"gSessionTitle\" value=\"\"> <input type=\"hidden\" data-bind=\"gOpenURL\" value=\"\"><!-- Runnable code blocks: JS writes the clicked block's language, source and\n\t\t     id (and the note's path for the per-note kernel session), then fires the\n\t\t     run trigger. gClosePath carries a closed note's path to its close trigger. --><input type=\"hidden\" data-bind=\"gRunLang\" value=\"\"> <input type=\"hidden\" data-bind=\"gRunCode\" value=\"\"> <input type=\"hidden\" data-bind=\"gRunBlock\" value=\"\"> <input type=\"hidden\" data-bind=\"gClosePath\" value=\"\"><!-- Selected trash ids (JSON array) for the bulk restore/delete actions. --><input type=\"hidden\" data-bind=\"gTrashIDs\" value=\"[]\"><!-- Hidden Datastar triggers (clicked by JS) --><button id=\"g-session-clear-trigger\" style=\"display:none\" data-on:click=\"@post('api/sessions/clear')\"></button> <button id=\"g-session-open-trigger\" style=\"display:none\" data-on:click=\"@post($gOpenURL)\"></button> <button id=\"g-session-rename-trigger\" style=\"display:none\" data-on:click=\"@post('api/sessions/rename')\"></button> <button id=\"g-session-delete-trigger\" style=\"display:none\" data-on:click=\"@post('api/sessions/delete')\"></button> <button id=\"g-turn-delete-trigger\" style=\"display:none\" data-on:click=\"@post('api/sessions/turn/delete')\"></button> <button id=\"g-sessions-delete-many-trigger\" style=\"display:none\" data-on:click=\"@post('api/sessions/delete-many')\"></button> <button id=\"g-sessions-trigger\" style=\"display:none\" data-on:click=\"@get('api/sessions/render')\"></button> <button id=\"g-files-trigger\" style=\"display:none\" data-on:click=\"@get('api/files/render')\"></button> <button id=\"g-note-create-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/create')\"></button> <button id=\"g-note-rename-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/rename')\"></button> <button id=\"g-note-delete-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/delete')\"></button> <button id=\"g-note-delete-many-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/delete-many')\"></button> <button id=\"g-move-trigger\" style=\"display:none\" data-on:click=\"@post('api/move')\"></button> <button id=\"g-folder-create-trigger\" style=\"display:none\" data-on:click=\"@post('api/folder/create')\"></button> <button id=\"g-folder-rename-trigger\" style=\"display:none\" data-on:click=\"@post('api/folder/rename')\"></button> <button id=\"g-folder-delete-trigger\" style=\"display:none\" data-on:click=\"@post('api/folder/delete')\"></button> <button id=\"g-search-trigger\" style=\"display:none\" data-on:click=\"@post('action/search')\"></button> <button id=\"g-preview-trigger\" style=\"display:none\" data-on:click=\"@post('action/preview')\"></button> <button id=\"g-props-save-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/properties')\"></button> <button id=\"g-body-save-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/body')\"></button> <button id=\"g-runblock-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-block')\"></button> <button id=\"g-runabove-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-above')\"></button> <button id=\"g-runsave-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-save')\"></button> <button id=\"g-rundiscard-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-discard')\"></button> <button id=\"g-runsaveall-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-save-all')\"></button> <button id=\"g-rundiscardall-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-discard-all')\"></button> <button id=\"g-rundelete-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-delete')\"></button> <button id=\"g-rundeleteall-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-delete-all')\"></button> <button id=\"g-note-close-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/close')\"></button><!-- Empty trash: no id, so a single trigger. Per-row restore/delete post with\n\t\t     the id inlined into the URL (no client signal to race). The many-actions\n\t\t     post a JSON list of selected trash ids (gTrashIDs). --><button id=\"g-trash-empty-trigger\" style=\"display:none\" data-on:click=\"@post('api/trash/empty-ui')\"></button> <button id=\"g-trash-restore-many-trigger\" style=\"display:none\" data-on:click=\"@post('api/trash/restore-many-ui')\"></button> <button id=\"g-trash-delete-many-trigger\" style=\"display:none\" data-on:click=\"@post('api/trash/delete-many-ui')\"></button><!-- Open/leave the trash view: each re-renders #g-files with the trash list\n\t\t     or the vault tree. The toolbar Trash toggle fires these. --><button id=\"g-trash-open-trigger\" style=\"display:none\" data-on:click=\"@get('api/trash/render')\"></button> <button id=\"g-trash-close-trigger\" style=\"display:none\" data-on:click=\"@get('api/files/render')\"></button><!-- Extensions dialog: each tab's list is fetched when it's first shown. --><button id=\"g-ext-themes-trigger\" style=\"display:none\" data-on:click=\"@get('api/extensions/themes/render')\"></button> <button id=\"g-ext-kernels-trigger\" style=\"display:none\" data-on:click=\"@get('api/extensions/kernels/render')\"></button><!-- Body: sidebar + main, side by side. The shared bottom bar (icons + input)\n\t\t     sits below this, full width. --><div id=\"g-body\" class=\"flex\" style=\"flex:1;min-height:0\"><!-- ── Sidebar: tabbed (Sessions / Files), resizable, MASS-style ── --><aside id=\"g-sidebar\" class=\"g-sidebar flex flex-col flex-shrink-0\"><div class=\"g-side-head flex items-center gap-2\"><!-- The book is a Home button. The clickable/hover target is the wrapping\n\t\t\t\t     span (a plain element reliably shows the pointer cursor); the inner\n\t\t\t\t     sl-icon is inert so its shadow SVG doesn't swallow the cursor. --><span id=\"g-home\" class=\"g-home\" title=\"Home\"><sl-icon name=\"book-half\" class=\"g-brand-icon\" style=\"font-size:1.1rem;color:var(--mass-accent)\"></sl-icon></span> <span class=\"g-brand\">Grimoire</span><!-- Obsidian-style sidebar collapse: folds the panel to a slim rail; the\n\t\t\t\t     icon flips to point the other way (and the title says expand). --><sl-icon-button id=\"g-sidebar-toggle\" class=\"g-sidebar-toggle\" name=\"layout-sidebar-inset\" title=\"Collapse sidebar (Ctrl+B)\"></sl-icon-button></div><sl-tab-group id=\"g-tabs\" class=\"g-tabs flex flex-col flex-1\" style=\"min-height:0\"><sl-tab slot=\"nav\" panel=\"sessions\">Sessions</sl-tab> <sl-tab slot=\"nav\" panel=\"files\">Files</sl-tab><!-- Sessions tab: new-session button + the session history list. --><sl-tab-panel name=\"sessions\" class=\"g-tab-panel\"><div class=\"g-sessions-section flex flex-col\" style=\"height:100%\"><sl-button id=\"g-new-session\" class=\"g-new-session\" size=\"small\" variant=\"primary\" style=\"width:100%\"><sl-icon slot=\"prefix\" name=\"plus-lg\"></sl-icon> New session</sl-button> <sl-input id=\"g-session-filter\" size=\"small\" clearable autocomplete=\"off\" placeholder=\"Filter sessions (any word order)…\"><sl-icon slot=\"prefix\" name=\"search\"></sl-icon></sl-input><div id=\"g-sessions\" class=\"g-sessions g-sessions-tab\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "\"> <input type=\"hidden\" data-bind=\"gStatus\" value=\"\"> <input type=\"hidden\" data-bind=\"gSessionID\" value=\"0\"> <input type=\"hidden\" data-bind=\"gTurnID\" value=\"0\"> <input type=\"hidden\" data-bind=\"gSessionTitle\" value=\"\"> <input type=\"hidden\" data-bind=\"gOpenURL\" value=\"\"><!-- Runnable code blocks: JS writes the clicked block's language, source and\n\t\t     id (and the note's path for the per-note kernel session), then fires the\n\t\t     run trigger. gClosePath carries a closed note's path to its close trigger. --><input type=\"hidden\" data-bind=\"gRunLang\" value=\"\"> <input type=\"hidden\" data-bind=\"gRunCode\" value=\"\"> <input type=\"hidden\" data-bind=\"gRunBlock\" value=\"\"> <input type=\"hidden\" data-bind=\"gClosePath\" value=\"\"><!-- Selected trash ids (JSON array) for the bulk restore/delete actions. --><input type=\"hidden\" data-bind=\"gTrashIDs\" value=\"[]\"><!-- Hidden Datastar triggers (clicked by JS) --><button id=\"g-session-clear-trigger\" style=\"display:none\" data-on:click=\"@post('api/sessions/clear')\"></button> <button id=\"g-session-open-trigger\" style=\"display:none\" data-on:click=\"@post($gOpenURL)\"></button> <button id=\"g-session-rename-trigger\" style=\"display:none\" data-on:click=\"@post('api/sessions/rename')\"></button> <button id=\"g-session-delete-trigger\" style=\"display:none\" data-on:click=\"@post('api/sessions/delete')\"></button> <button id=\"g-turn-delete-trigger\" style=\"display:none\" data-on:click=\"@post('api/sessions/turn/delete')\"></button> <button id=\"g-sessions-delete-many-trigger\" style=\"display:none\" data-on:click=\"@post('api/sessions/delete-many')\"></button> <button id=\"g-sessions-trigger\" style=\"display:none\" data-on:click=\"@get('api/sessions/render')\"></button> <button id=\"g-files-trigger\" style=\"display:none\" data-on:click=\"@get('api/files/render')\"></button> <button id=\"g-note-create-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/create')\"></button> <button id=\"g-note-rename-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/rename')\"></button> <button id=\"g-note-delete-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/delete')\"></button> <button id=\"g-note-delete-many-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/delete-many')\"></button> <button id=\"g-move-trigger\" style=\"display:none\" data-on:click=\"@post('api/move')\"></button> <button id=\"g-folder-create-trigger\" style=\"display:none\" data-on:click=\"@post('api/folder/create')\"></button> <button id=\"g-folder-rename-trigger\" style=\"display:none\" data-on:click=\"@post('api/folder/rename')\"></button> <button id=\"g-folder-delete-trigger\" style=\"display:none\" data-on:click=\"@post('api/folder/delete')\"></button> <button id=\"g-search-trigger\" style=\"display:none\" data-on:click=\"@post('action/search')\"></button> <button id=\"g-preview-trigger\" style=\"display:none\" data-on:click=\"@post('action/preview')\"></button> <button id=\"g-props-save-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/properties')\"></button> <button id=\"g-body-save-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/body')\"></button> <button id=\"g-runblock-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-block')\"></button> <button id=\"g-runabove-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-above')\"></button> <button id=\"g-runsave-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-save')\"></button> <button id=\"g-rundiscard-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-discard')\"></button> <button id=\"g-runsaveall-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-save-all')\"></button> <button id=\"g-rundiscardall-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-discard-all')\"></button> <button id=\"g-rundelete-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-delete')\"></button> <button id=\"g-rundeleteall-trigger\" style=\"display:none\" data-on:click=\"@post('action/run-delete-all')\"></button> <button id=\"g-note-close-trigger\" style=\"display:none\" data-on:click=\"@post('api/note/close')\"></button><!-- Empty trash: no id, so a single trigger. Per-row restore/delete post with\n\t\t     the id inlined into the URL (no client signal to race). The many-actions\n\t\t     post a JSON list of selected trash ids (gTrashIDs). --><button id=\"g-trash-empty-trigger\" style=\"display:none\" data-on:click=\"@post('api/trash/empty-ui')\"></button> <button id=\"g-trash-restore-many-trigger\" style=\"display:none\" data-on:click=\"@post('api/trash/restore-many-ui')\"></button> <button id=\"g-trash-delete-many-trigger\" style=\"display:none\" data-on:click=\"@post('api/trash/delete-many-ui')\"></button><!-- Open/leave the trash view: each re-renders #g-files with the trash list\n\t\t     or the vault tree. The toolbar Trash toggle fires these. --><button id=\"g-trash-open-trigger\" style=\"display:none\" data-on:click=\"@get('api/trash/render')\"></button> <button id=\"g-trash-close-trigger\" style=\"display:none\" data-on:click=\"@get('api/files/render')\"></button><!-- Repaint the Vaults tab after an add or a forget. --><button id=\"g-vaults-render-trigger\" style=\"display:none\" data-on:click=\"@get('api/vaults/render')\"></button><!-- Extensions dialog: each tab's list is fetched when it's first shown. --><button id=\"g-ext-themes-trigger\" style=\"display:none\" data-on:click=\"@get('api/extensions/themes/render')\"></button> <button id=\"g-ext-kernels-trigger\" style=\"display:none\" data-on:click=\"@get('api/extensions/kernels/render')\"></button><!-- Body: sidebar + main, side by side. The shared bottom bar (icons + input)\n\t\t     sits below this, full width. --><div id=\"g-body\" class=\"flex\" style=\"flex:1;min-height:0\"><!-- ── Sidebar: tabbed (Sessions / Files), resizable, MASS-style ── --><aside id=\"g-sidebar\" class=\"g-sidebar flex flex-col flex-shrink-0\"><div class=\"g-side-head flex items-center gap-2\"><!-- The book is a Home button. The clickable/hover target is the wrapping\n\t\t\t\t     span (a plain element reliably shows the pointer cursor); the inner\n\t\t\t\t     sl-icon is inert so its shadow SVG doesn't swallow the cursor. --><span id=\"g-home\" class=\"g-home\" title=\"Home\"><sl-icon name=\"book-half\" class=\"g-brand-icon\" style=\"font-size:1.1rem;color:var(--mass-accent)\"></sl-icon></span> <span class=\"g-brand\">Grimoire</span><!-- Obsidian-style sidebar collapse: folds the panel to a slim rail; the\n\t\t\t\t     icon flips to point the other way (and the title says expand). --><sl-icon-button id=\"g-sidebar-toggle\" class=\"g-sidebar-toggle\" name=\"layout-sidebar-inset\" title=\"Collapse sidebar (Ctrl+B)\"></sl-icon-button></div><sl-tab-group id=\"g-tabs\" class=\"g-tabs flex flex-col flex-1\" style=\"min-height:0\"><sl-tab slot=\"nav\" panel=\"vaults\">Vaults</sl-tab> <sl-tab slot=\"nav\" panel=\"sessions\">Sessions</sl-tab> <sl-tab slot=\"nav\" panel=\"files\">Files</sl-tab><!-- Vaults tab: every vault the daemon knows, with an Add button. It is\n\t\t\t\t     the only vault-management surface (the Vault settings menu keeps just\n\t\t\t\t     the current vault's own settings) and works in the empty state too,\n\t\t\t\t     so it lists unconditionally. Clicking an available vault reloads the\n\t\t\t\t     page onto it — the workspace is restored from that vault's own UI\n\t\t\t\t     state, so there is nothing to tear down in place. --><sl-tab-panel name=\"vaults\" class=\"g-tab-panel\"><div class=\"g-vaults-section flex flex-col\" style=\"height:100%\"><sl-button id=\"g-vault-add\" class=\"g-new-session\" size=\"small\" variant=\"primary\" style=\"width:100%\"><sl-icon slot=\"prefix\" name=\"plus-lg\"></sl-icon> Add vault…</sl-button><!-- Fallback for a client with no native folder dialog (a browser\n\t\t\t\t\t\t     tab, a headless daemon): the server says needsPath and JS\n\t\t\t\t\t\t     reveals this field for an absolute path. --><div id=\"g-vault-add-path\" class=\"g-vault-add-path\"><sl-input id=\"g-vault-add-input\" size=\"small\" clearable autocomplete=\"off\" placeholder=\"Absolute path to a vault folder…\"><sl-icon slot=\"prefix\" name=\"folder2\"></sl-icon></sl-input></div><div id=\"g-vaults\" class=\"g-vaults\" data-init=\"@get('api/vaults/render')\"></div></div></sl-tab-panel><!-- Sessions tab: new-session button + the session history list. --><sl-tab-panel name=\"sessions\" class=\"g-tab-panel\"><div class=\"g-sessions-section flex flex-col\" style=\"height:100%\"><sl-button id=\"g-new-session\" class=\"g-new-session\" size=\"small\" variant=\"primary\" style=\"width:100%\"><sl-icon slot=\"prefix\" name=\"plus-lg\"></sl-icon> New session</sl-button> <sl-input id=\"g-session-filter\" size=\"small\" clearable autocomplete=\"off\" placeholder=\"Filter sessions (any word order)…\"><sl-icon slot=\"prefix\" name=\"search\"></sl-icon></sl-input><div id=\"g-sessions\" class=\"g-sessions g-sessions-tab\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -174,7 +174,7 @@ func grimoirePage(settingsHTML, theme string, st State) templ.Component {
 			var templ_7745c5c3_Var8 string
 			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue(string(ti.Name))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 397, Col: 60}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 424, Col: 60}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
 			if templ_7745c5c3_Err != nil {
@@ -197,7 +197,7 @@ func grimoirePage(settingsHTML, theme string, st State) templ.Component {
 			var templ_7745c5c3_Var9 string
 			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(ti.Label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 397, Col: 111}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 424, Col: 111}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 			if templ_7745c5c3_Err != nil {
@@ -220,7 +220,7 @@ func grimoirePage(settingsHTML, theme string, st State) templ.Component {
 			var templ_7745c5c3_Var10 string
 			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.ResolveAttributeValue(ThemeBrowseValue)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 403, Col: 45}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 430, Col: 45}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
 			if templ_7745c5c3_Err != nil {
@@ -251,7 +251,7 @@ func grimoirePage(settingsHTML, theme string, st State) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<sl-icon-button id=\"g-shortcuts-btn\" class=\"g-foot-btn\" name=\"keyboard\" title=\"Keyboard shortcuts (?)\"></sl-icon-button> <sl-icon-button id=\"g-open-graph\" class=\"g-foot-btn\" name=\"diagram-3\" title=\"Similarity graph\"></sl-icon-button></div><!-- Input: an auto-growing textarea (one line at rest, expands up to a cap\n\t\t\t     then scrolls). Enter searches; Shift+Enter inserts a newline. --><div class=\"g-input-row\"><sl-textarea id=\"g-query-input\" size=\"small\" rows=\"1\" resize=\"auto\" style=\"flex:1\" placeholder=\"Search your notes…  (Shift+Enter for a new line)\"></sl-textarea> <sl-button id=\"g-search-btn\" size=\"small\" variant=\"primary\" data-attr:loading=\"$gSearchBusy\">Search</sl-button></div></div><!-- Hidden trigger: slider/toggle changes click it so JS reloads the graph\n\t\t     with the current mode + $gGraphK / $gGraphMinSim values. --><button id=\"g-graph-reload\" style=\"display:none\"></button><!-- Delete confirmation for a note or a folder. Deleting touches the real\n\t\t     vault on disk; JS sets the label, the message, and the target path\n\t\t     (a folder delete is recursive, so its message warns about contents). --><sl-dialog id=\"g-delete-dialog\" label=\"Delete\" class=\"mass-dialog\"><span id=\"g-delete-body\"></span> <sl-button id=\"g-delete-cancel\" slot=\"footer\" variant=\"default\">Cancel</sl-button> <sl-button id=\"g-delete-confirm\" slot=\"footer\" variant=\"danger\">Delete</sl-button></sl-dialog><!-- Keyboard shortcuts reference, opened from the sidebar header (or \"?\"). --><sl-dialog id=\"g-shortcuts-dialog\" label=\"Keyboard shortcuts\" class=\"mass-dialog\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<sl-icon-button id=\"g-shortcuts-btn\" class=\"g-foot-btn\" name=\"keyboard\" title=\"Keyboard shortcuts (?)\"></sl-icon-button> <sl-icon-button id=\"g-open-graph\" class=\"g-foot-btn\" name=\"diagram-3\" title=\"Similarity graph\"></sl-icon-button></div><!-- Input: an auto-growing textarea (one line at rest, expands up to a cap\n\t\t\t     then scrolls). Enter searches; Shift+Enter inserts a newline. --><div class=\"g-input-row\"><sl-textarea id=\"g-query-input\" size=\"small\" rows=\"1\" resize=\"auto\" style=\"flex:1\" placeholder=\"Search your notes…  (Shift+Enter for a new line)\"></sl-textarea> <sl-button id=\"g-search-btn\" size=\"small\" variant=\"primary\" data-attr:loading=\"$gSearchBusy\">Search</sl-button></div></div><!-- Hidden trigger: slider/toggle changes click it so JS reloads the graph\n\t\t     with the current mode + $gGraphK / $gGraphMinSim values. --><button id=\"g-graph-reload\" style=\"display:none\"></button><!-- Delete confirmation for a note or a folder. Deleting touches the real\n\t\t     vault on disk; JS sets the label, the message, and the target path\n\t\t     (a folder delete is recursive, so its message warns about contents). --><sl-dialog id=\"g-delete-dialog\" label=\"Delete\" class=\"mass-dialog\"><span id=\"g-delete-body\"></span> <sl-button id=\"g-delete-cancel\" slot=\"footer\" variant=\"default\">Cancel</sl-button> <sl-button id=\"g-delete-confirm\" slot=\"footer\" variant=\"danger\">Delete</sl-button></sl-dialog><!-- Forgetting a vault only takes it off the list — nothing on disk is\n\t\t     touched — so it gets its own confirmation rather than the delete\n\t\t     dialog, whose red \"Delete\" would misdescribe it. --><sl-dialog id=\"g-forget-dialog\" label=\"Forget vault\" class=\"mass-dialog\"><span id=\"g-forget-body\"></span> <sl-button id=\"g-forget-cancel\" slot=\"footer\" variant=\"default\">Cancel</sl-button> <sl-button id=\"g-forget-confirm\" slot=\"footer\" variant=\"primary\">Forget</sl-button></sl-dialog><!-- Keyboard shortcuts reference, opened from the sidebar header (or \"?\"). --><sl-dialog id=\"g-shortcuts-dialog\" label=\"Keyboard shortcuts\" class=\"mass-dialog\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -321,7 +321,7 @@ func SearchTurn(seq string, query string) templ.Component {
 		var templ_7745c5c3_Var12 string
 		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(query)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 477, Col: 45}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 513, Col: 45}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 		if templ_7745c5c3_Err != nil {
@@ -334,7 +334,7 @@ func SearchTurn(seq string, query string) templ.Component {
 		var templ_7745c5c3_Var13 string
 		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("g-results-%s", seq))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 478, Col: 44}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 514, Col: 44}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var13)
 		if templ_7745c5c3_Err != nil {
@@ -395,7 +395,7 @@ func SearchResults(hits []Hit, warnings []string) templ.Component {
 			var templ_7745c5c3_Var15 string
 			templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(snippet(h.Text))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 495, Col: 44}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 531, Col: 44}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 			if templ_7745c5c3_Err != nil {
@@ -414,7 +414,7 @@ func SearchResults(hits []Hit, warnings []string) templ.Component {
 			var templ_7745c5c3_Var16 string
 			templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(w)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 499, Col: 40}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 535, Col: 40}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 			if templ_7745c5c3_Err != nil {
@@ -480,7 +480,7 @@ func RunPanel(blockID, lang string) templ.Component {
 		var templ_7745c5c3_Var20 string
 		templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.ResolveAttributeValue("g-code-output-" + blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 509, Col: 63}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 545, Col: 63}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var20)
 		if templ_7745c5c3_Err != nil {
@@ -493,7 +493,7 @@ func RunPanel(blockID, lang string) templ.Component {
 		var templ_7745c5c3_Var21 string
 		templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.ResolveAttributeValue("g-run-time-" + blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 510, Col: 55}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 546, Col: 55}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var21)
 		if templ_7745c5c3_Err != nil {
@@ -506,7 +506,7 @@ func RunPanel(blockID, lang string) templ.Component {
 		var templ_7745c5c3_Var22 string
 		templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.ResolveAttributeValue("g-run-head-" + blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 511, Col: 54}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 547, Col: 54}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var22)
 		if templ_7745c5c3_Err != nil {
@@ -519,7 +519,7 @@ func RunPanel(blockID, lang string) templ.Component {
 		var templ_7745c5c3_Var23 string
 		templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinStringErrs(lang)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 513, Col: 23}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 549, Col: 23}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
 		if templ_7745c5c3_Err != nil {
@@ -532,7 +532,7 @@ func RunPanel(blockID, lang string) templ.Component {
 		var templ_7745c5c3_Var24 string
 		templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.ResolveAttributeValue("g-run-body-" + blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 515, Col: 54}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 551, Col: 54}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var24)
 		if templ_7745c5c3_Err != nil {
@@ -545,7 +545,7 @@ func RunPanel(blockID, lang string) templ.Component {
 		var templ_7745c5c3_Var25 string
 		templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.ResolveAttributeValue("g-run-save-" + blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 517, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 553, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var25)
 		if templ_7745c5c3_Err != nil {
@@ -598,7 +598,7 @@ func RunPanelEmpty(blockID string) templ.Component {
 		var templ_7745c5c3_Var27 string
 		templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.ResolveAttributeValue("g-code-output-" + blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 527, Col: 59}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 563, Col: 59}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var27)
 		if templ_7745c5c3_Err != nil {
@@ -643,7 +643,7 @@ func runDeleteBtn(blockID string) templ.Component {
 		var templ_7745c5c3_Var29 string
 		templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.ResolveAttributeValue(blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 534, Col: 126}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 570, Col: 126}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var29)
 		if templ_7745c5c3_Err != nil {
@@ -691,7 +691,7 @@ func RunSaveState(blockID string, saved bool) templ.Component {
 		var templ_7745c5c3_Var31 string
 		templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.ResolveAttributeValue("g-run-save-" + blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 546, Col: 54}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 582, Col: 54}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var31)
 		if templ_7745c5c3_Err != nil {
@@ -709,7 +709,7 @@ func RunSaveState(blockID string, saved bool) templ.Component {
 			var templ_7745c5c3_Var32 string
 			templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.ResolveAttributeValue(blockID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 548, Col: 166}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 584, Col: 166}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var32)
 			if templ_7745c5c3_Err != nil {
@@ -722,7 +722,7 @@ func RunSaveState(blockID string, saved bool) templ.Component {
 			var templ_7745c5c3_Var33 string
 			templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.ResolveAttributeValue(blockID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 551, Col: 171}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 587, Col: 171}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var33)
 			if templ_7745c5c3_Err != nil {
@@ -793,7 +793,7 @@ func RunResultPanel(blockID string, res RunResult) templ.Component {
 		var templ_7745c5c3_Var37 string
 		templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.ResolveAttributeValue("g-code-output-" + blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 565, Col: 63}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 601, Col: 63}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var37)
 		if templ_7745c5c3_Err != nil {
@@ -818,7 +818,7 @@ func RunResultPanel(blockID string, res RunResult) templ.Component {
 		var templ_7745c5c3_Var38 string
 		templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.ResolveAttributeValue("g-run-body-" + blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 568, Col: 54}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 604, Col: 54}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var38)
 		if templ_7745c5c3_Err != nil {
@@ -841,7 +841,7 @@ func RunResultPanel(blockID string, res RunResult) templ.Component {
 		var templ_7745c5c3_Var39 string
 		templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.ResolveAttributeValue("g-run-save-" + blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 574, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 610, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var39)
 		if templ_7745c5c3_Err != nil {
@@ -897,7 +897,7 @@ func runItem(it RunItem) templ.Component {
 			var templ_7745c5c3_Var41 string
 			templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.ResolveAttributeValue("data:" + MIMEPNG + ";base64," + it.Data)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 587, Col: 72}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 623, Col: 72}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var41)
 			if templ_7745c5c3_Err != nil {
@@ -925,7 +925,7 @@ func runItem(it RunItem) templ.Component {
 			var templ_7745c5c3_Var42 string
 			templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinStringErrs(it.Data)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 593, Col: 36}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 629, Col: 36}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
 			if templ_7745c5c3_Err != nil {
@@ -991,7 +991,7 @@ func RunPanelMessage(blockID, lang, message string) templ.Component {
 		var templ_7745c5c3_Var46 string
 		templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.ResolveAttributeValue("g-code-output-" + blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 603, Col: 63}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 639, Col: 63}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var46)
 		if templ_7745c5c3_Err != nil {
@@ -1004,7 +1004,7 @@ func RunPanelMessage(blockID, lang, message string) templ.Component {
 		var templ_7745c5c3_Var47 string
 		templ_7745c5c3_Var47, templ_7745c5c3_Err = templ.JoinStringErrs(message)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 604, Col: 32}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 640, Col: 32}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var47))
 		if templ_7745c5c3_Err != nil {
@@ -1058,7 +1058,7 @@ func RunChunk(text string) templ.Component {
 		var templ_7745c5c3_Var49 string
 		templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinStringErrs(text)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 614, Col: 31}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 650, Col: 31}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 		if templ_7745c5c3_Err != nil {
@@ -1121,7 +1121,7 @@ func RunStatus(blockID string, code, durMS int, kernel string) templ.Component {
 		var templ_7745c5c3_Var53 string
 		templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.ResolveAttributeValue("g-run-head-" + blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 621, Col: 94}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 657, Col: 94}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var53)
 		if templ_7745c5c3_Err != nil {
@@ -1149,7 +1149,7 @@ func RunStatus(blockID string, code, durMS int, kernel string) templ.Component {
 		var templ_7745c5c3_Var54 string
 		templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(code))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 627, Col: 33}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 663, Col: 33}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var54))
 		if templ_7745c5c3_Err != nil {
@@ -1162,7 +1162,7 @@ func RunStatus(blockID string, code, durMS int, kernel string) templ.Component {
 		var templ_7745c5c3_Var55 string
 		templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(durMS))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 627, Col: 60}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 663, Col: 60}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 		if templ_7745c5c3_Err != nil {
@@ -1180,7 +1180,7 @@ func RunStatus(blockID string, code, durMS int, kernel string) templ.Component {
 			var templ_7745c5c3_Var56 string
 			templ_7745c5c3_Var56, templ_7745c5c3_Err = templ.JoinStringErrs(kernel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 629, Col: 41}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 665, Col: 41}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var56))
 			if templ_7745c5c3_Err != nil {
@@ -1232,7 +1232,7 @@ func RunTime(blockID string, at time.Time) templ.Component {
 		var templ_7745c5c3_Var58 string
 		templ_7745c5c3_Var58, templ_7745c5c3_Err = templ.ResolveAttributeValue("g-run-time-" + blockID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 640, Col: 54}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 676, Col: 54}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var58)
 		if templ_7745c5c3_Err != nil {
@@ -1245,7 +1245,7 @@ func RunTime(blockID string, at time.Time) templ.Component {
 		var templ_7745c5c3_Var59 string
 		templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.ResolveAttributeValue(FullDate(at))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 640, Col: 77}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 676, Col: 77}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var59)
 		if templ_7745c5c3_Err != nil {
@@ -1258,7 +1258,7 @@ func RunTime(blockID string, at time.Time) templ.Component {
 		var templ_7745c5c3_Var60 string
 		templ_7745c5c3_Var60, templ_7745c5c3_Err = templ.JoinStringErrs(RelativeDate(at))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 640, Col: 98}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 676, Col: 98}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var60))
 		if templ_7745c5c3_Err != nil {
@@ -1307,7 +1307,7 @@ func previewLink(path, heading, vault, label string) templ.Component {
 		var templ_7745c5c3_Var62 string
 		templ_7745c5c3_Var62, templ_7745c5c3_Err = templ.ResolveAttributeValue(path)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 651, Col: 72}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 687, Col: 72}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var62)
 		if templ_7745c5c3_Err != nil {
@@ -1320,7 +1320,7 @@ func previewLink(path, heading, vault, label string) templ.Component {
 		var templ_7745c5c3_Var63 string
 		templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.ResolveAttributeValue(heading)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 651, Col: 97}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 687, Col: 97}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var63)
 		if templ_7745c5c3_Err != nil {
@@ -1333,7 +1333,7 @@ func previewLink(path, heading, vault, label string) templ.Component {
 		var templ_7745c5c3_Var64 string
 		templ_7745c5c3_Var64, templ_7745c5c3_Err = templ.ResolveAttributeValue(vault)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 651, Col: 118}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 687, Col: 118}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var64)
 		if templ_7745c5c3_Err != nil {
@@ -1346,7 +1346,7 @@ func previewLink(path, heading, vault, label string) templ.Component {
 		var templ_7745c5c3_Var65 string
 		templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 651, Col: 128}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 687, Col: 128}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var65))
 		if templ_7745c5c3_Err != nil {
@@ -1403,7 +1403,7 @@ func Preview(nr NoteRenderer, source, notePath string) templ.Component {
 		var templ_7745c5c3_Var67 string
 		templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.JoinStringErrs(rawBody)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 673, Col: 43}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 709, Col: 43}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var67))
 		if templ_7745c5c3_Err != nil {
@@ -1458,7 +1458,7 @@ func NoteDates(modified, created time.Time) templ.Component {
 			var templ_7745c5c3_Var69 string
 			templ_7745c5c3_Var69, templ_7745c5c3_Err = templ.ResolveAttributeValue("Modified " + FullDate(modified))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 684, Col: 49}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 720, Col: 49}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var69)
 			if templ_7745c5c3_Err != nil {
@@ -1471,7 +1471,7 @@ func NoteDates(modified, created time.Time) templ.Component {
 			var templ_7745c5c3_Var70 string
 			templ_7745c5c3_Var70, templ_7745c5c3_Err = templ.JoinStringErrs(RelativeDate(modified))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 684, Col: 85}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 720, Col: 85}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var70))
 			if templ_7745c5c3_Err != nil {
@@ -1490,7 +1490,7 @@ func NoteDates(modified, created time.Time) templ.Component {
 			var templ_7745c5c3_Var71 string
 			templ_7745c5c3_Var71, templ_7745c5c3_Err = templ.ResolveAttributeValue("Created " + FullDate(created))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 687, Col: 47}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 723, Col: 47}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var71)
 			if templ_7745c5c3_Err != nil {
@@ -1503,7 +1503,7 @@ func NoteDates(modified, created time.Time) templ.Component {
 			var templ_7745c5c3_Var72 string
 			templ_7745c5c3_Var72, templ_7745c5c3_Err = templ.JoinStringErrs(AbsoluteDate(created))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 687, Col: 81}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 723, Col: 81}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var72))
 			if templ_7745c5c3_Err != nil {
@@ -1554,7 +1554,7 @@ func propRow(p Property) templ.Component {
 		var templ_7745c5c3_Var74 string
 		templ_7745c5c3_Var74, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.Key)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 697, Col: 37}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 733, Col: 37}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var74)
 		if templ_7745c5c3_Err != nil {
@@ -1567,7 +1567,7 @@ func propRow(p Property) templ.Component {
 		var templ_7745c5c3_Var75 string
 		templ_7745c5c3_Var75, templ_7745c5c3_Err = templ.ResolveAttributeValue(propIcon(p.Key))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 698, Col: 33}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 734, Col: 33}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var75)
 		if templ_7745c5c3_Err != nil {
@@ -1580,7 +1580,7 @@ func propRow(p Property) templ.Component {
 		var templ_7745c5c3_Var76 string
 		templ_7745c5c3_Var76, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.Key)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 699, Col: 41}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 735, Col: 41}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var76)
 		if templ_7745c5c3_Err != nil {
@@ -1633,7 +1633,7 @@ func propChip(v string) templ.Component {
 		var templ_7745c5c3_Var78 string
 		templ_7745c5c3_Var78, templ_7745c5c3_Err = templ.ResolveAttributeValue(v)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 712, Col: 34}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 748, Col: 34}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var78)
 		if templ_7745c5c3_Err != nil {
@@ -1646,7 +1646,7 @@ func propChip(v string) templ.Component {
 		var templ_7745c5c3_Var79 string
 		templ_7745c5c3_Var79, templ_7745c5c3_Err = templ.JoinStringErrs(v)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 713, Col: 31}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 749, Col: 31}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var79))
 		if templ_7745c5c3_Err != nil {
@@ -1690,7 +1690,7 @@ func Notice(msg string) templ.Component {
 		var templ_7745c5c3_Var81 string
 		templ_7745c5c3_Var81, templ_7745c5c3_Err = templ.JoinStringErrs(msg)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 721, Col: 27}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 757, Col: 27}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var81))
 		if templ_7745c5c3_Err != nil {
@@ -1808,7 +1808,7 @@ func shortcutsDialog() templ.Component {
 			var templ_7745c5c3_Var83 string
 			templ_7745c5c3_Var83, templ_7745c5c3_Err = templ.JoinStringErrs(g.Title)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 799, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 835, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var83))
 			if templ_7745c5c3_Err != nil {
@@ -1843,7 +1843,7 @@ func shortcutsDialog() templ.Component {
 						var templ_7745c5c3_Var84 string
 						templ_7745c5c3_Var84, templ_7745c5c3_Err = templ.JoinStringErrs(k)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 810, Col: 31}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 846, Col: 31}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var84))
 						if templ_7745c5c3_Err != nil {
@@ -1862,7 +1862,7 @@ func shortcutsDialog() templ.Component {
 				var templ_7745c5c3_Var85 string
 				templ_7745c5c3_Var85, templ_7745c5c3_Err = templ.JoinStringErrs(s.Desc)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 814, Col: 44}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 850, Col: 44}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var85))
 				if templ_7745c5c3_Err != nil {
@@ -1973,7 +1973,7 @@ func ExtensionList(s ExtensionSections) templ.Component {
 			var templ_7745c5c3_Var87 string
 			templ_7745c5c3_Var87, templ_7745c5c3_Err = templ.JoinStringErrs(s.Warning)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 875, Col: 41}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 911, Col: 41}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var87))
 			if templ_7745c5c3_Err != nil {
@@ -2061,7 +2061,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 		var templ_7745c5c3_Var91 string
 		templ_7745c5c3_Var91, templ_7745c5c3_Err = templ.ResolveAttributeValue(strings.ToLower(strings.TrimSpace(it.Label + " " + it.ID + " " + it.Meta)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 898, Col: 96}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 934, Col: 96}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var91)
 		if templ_7745c5c3_Err != nil {
@@ -2079,7 +2079,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var92 string
 			templ_7745c5c3_Var92, templ_7745c5c3_Err = templ.ResolveAttributeValue(it.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 900, Col: 26}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 936, Col: 26}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var92)
 			if templ_7745c5c3_Err != nil {
@@ -2097,7 +2097,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 		var templ_7745c5c3_Var93 string
 		templ_7745c5c3_Var93, templ_7745c5c3_Err = templ.JoinStringErrs(it.Label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 905, Col: 39}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 941, Col: 39}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var93))
 		if templ_7745c5c3_Err != nil {
@@ -2115,7 +2115,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var94 string
 			templ_7745c5c3_Var94, templ_7745c5c3_Err = templ.JoinStringErrs(it.Meta)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 907, Col: 39}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 943, Col: 39}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var94))
 			if templ_7745c5c3_Err != nil {
@@ -2134,7 +2134,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var95 string
 			templ_7745c5c3_Var95, templ_7745c5c3_Err = templ.ResolveAttributeValue("$gTheme === '" + it.ID + "'")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 913, Col: 91}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 949, Col: 91}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var95)
 			if templ_7745c5c3_Err != nil {
@@ -2157,7 +2157,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var96 string
 			templ_7745c5c3_Var96, templ_7745c5c3_Err = templ.JoinStringErrs(it.Desc)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 917, Col: 38}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 953, Col: 38}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var96))
 			if templ_7745c5c3_Err != nil {
@@ -2180,7 +2180,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var97 string
 			templ_7745c5c3_Var97, templ_7745c5c3_Err = templ.JoinStringErrs(it.Locked)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 922, Col: 106}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 958, Col: 106}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var97))
 			if templ_7745c5c3_Err != nil {
@@ -2198,7 +2198,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var98 string
 			templ_7745c5c3_Var98, templ_7745c5c3_Err = templ.ResolveAttributeValue(kind)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 926, Col: 24}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 962, Col: 24}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var98)
 			if templ_7745c5c3_Err != nil {
@@ -2211,7 +2211,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var99 string
 			templ_7745c5c3_Var99, templ_7745c5c3_Err = templ.ResolveAttributeValue(it.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 926, Col: 44}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 962, Col: 44}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var99)
 			if templ_7745c5c3_Err != nil {
@@ -2224,7 +2224,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var100 string
 			templ_7745c5c3_Var100, templ_7745c5c3_Err = templ.ResolveAttributeValue(it.Version)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 926, Col: 74}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 962, Col: 74}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var100)
 			if templ_7745c5c3_Err != nil {
@@ -2237,7 +2237,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var101 string
 			templ_7745c5c3_Var101, templ_7745c5c3_Err = templ.ResolveAttributeValue(it.Label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 926, Col: 100}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 962, Col: 100}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var101)
 			if templ_7745c5c3_Err != nil {
@@ -2255,7 +2255,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var102 string
 			templ_7745c5c3_Var102, templ_7745c5c3_Err = templ.ResolveAttributeValue(kind)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 932, Col: 23}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 968, Col: 23}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var102)
 			if templ_7745c5c3_Err != nil {
@@ -2268,7 +2268,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var103 string
 			templ_7745c5c3_Var103, templ_7745c5c3_Err = templ.ResolveAttributeValue(it.Package)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 932, Col: 49}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 968, Col: 49}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var103)
 			if templ_7745c5c3_Err != nil {
@@ -2281,7 +2281,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var104 string
 			templ_7745c5c3_Var104, templ_7745c5c3_Err = templ.ResolveAttributeValue(it.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 932, Col: 69}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 968, Col: 69}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var104)
 			if templ_7745c5c3_Err != nil {
@@ -2294,7 +2294,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var105 string
 			templ_7745c5c3_Var105, templ_7745c5c3_Err = templ.ResolveAttributeValue(it.Version)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 932, Col: 99}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 968, Col: 99}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var105)
 			if templ_7745c5c3_Err != nil {
@@ -2307,7 +2307,7 @@ func extensionRow(kind string, it ExtensionItem, installed bool) templ.Component
 			var templ_7745c5c3_Var106 string
 			templ_7745c5c3_Var106, templ_7745c5c3_Err = templ.ResolveAttributeValue(it.Label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 932, Col: 125}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 968, Col: 125}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var106)
 			if templ_7745c5c3_Err != nil {
@@ -2371,7 +2371,7 @@ func extensionsDialog() templ.Component {
 		var templ_7745c5c3_Var108 string
 		templ_7745c5c3_Var108, templ_7745c5c3_Err = templ.ResolveAttributeValue(ExtThemesPanel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 964, Col: 44}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1000, Col: 44}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var108)
 		if templ_7745c5c3_Err != nil {
@@ -2384,7 +2384,7 @@ func extensionsDialog() templ.Component {
 		var templ_7745c5c3_Var109 string
 		templ_7745c5c3_Var109, templ_7745c5c3_Err = templ.ResolveAttributeValue(ExtKernelsPanel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 965, Col: 45}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1001, Col: 45}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var109)
 		if templ_7745c5c3_Err != nil {
@@ -2397,7 +2397,7 @@ func extensionsDialog() templ.Component {
 		var templ_7745c5c3_Var110 string
 		templ_7745c5c3_Var110, templ_7745c5c3_Err = templ.ResolveAttributeValue(ExtThemesPanel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 966, Col: 38}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1002, Col: 38}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var110)
 		if templ_7745c5c3_Err != nil {
@@ -2410,7 +2410,7 @@ func extensionsDialog() templ.Component {
 		var templ_7745c5c3_Var111 string
 		templ_7745c5c3_Var111, templ_7745c5c3_Err = templ.ResolveAttributeValue(ExtKernelsPanel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 969, Col: 39}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1005, Col: 39}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var111)
 		if templ_7745c5c3_Err != nil {
@@ -2482,27 +2482,27 @@ func vaultMenu(st State) templ.Component {
 			templ_7745c5c3_Var113 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 172, "<sl-dropdown id=\"g-vault-menu\" placement=\"bottom-end\" hoist><sl-icon-button id=\"g-vault-btn\" slot=\"trigger\" class=\"g-foot-btn\" name=\"hdd-stack\" title=\"Vault settings\"></sl-icon-button><div class=\"g-menu-panel\"><div><span class=\"g-label\">Vault</span><!-- The page's vault. Switching picks a folder, opens it in the daemon\n\t\t\t\t     (which keeps every vault it serves resident) and reloads onto it. --><div id=\"g-vault-current\" class=\"g-vault-current\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 172, "<sl-dropdown id=\"g-vault-menu\" placement=\"bottom-end\" hoist><sl-icon-button id=\"g-vault-btn\" slot=\"trigger\" class=\"g-foot-btn\" name=\"hdd-stack\" title=\"Vault settings\"></sl-icon-button><div class=\"g-menu-panel\"><div><span class=\"g-label\">Vault</span><!-- The page's vault, for reference. Everything below applies to it\n\t\t\t\t     alone; choosing a different one is the sidebar's Vaults tab. --><div id=\"g-vault-current\" class=\"g-vault-current\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var114 string
 		templ_7745c5c3_Var114, templ_7745c5c3_Err = templ.JoinStringErrs(st.Vault)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1000, Col: 64}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1036, Col: 64}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var114))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 173, "</div><sl-button id=\"g-vault-switch\" size=\"small\" variant=\"default\" style=\"width:100%;margin-top:0.35rem\">Switch vault…</sl-button></div><!-- Each model select loads its option list on init (so the saved value's\n\t\t\t     label shows) and on open; sl-change writes the signal and posts. No\n\t\t\t     JS — Datastar owns the value via the sl-change event. --><div><span class=\"g-label\">Embedding model</span> <sl-select id=\"g-model-select\" placeholder=\"Select…\" size=\"small\" clearable autocomplete=\"off\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 173, "</div></div><!-- Each model select loads its option list on init (so the saved value's\n\t\t\t     label shows) and on open; sl-change writes the signal and posts. No\n\t\t\t     JS — Datastar owns the value via the sl-change event. --><div><span class=\"g-label\">Embedding model</span> <sl-select id=\"g-model-select\" placeholder=\"Select…\" size=\"small\" clearable autocomplete=\"off\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var115 string
 		templ_7745c5c3_Var115, templ_7745c5c3_Err = templ.ResolveAttributeValue(st.EmbedModel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1008, Col: 122}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1043, Col: 122}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var115)
 		if templ_7745c5c3_Err != nil {
@@ -2515,7 +2515,7 @@ func vaultMenu(st State) templ.Component {
 		var templ_7745c5c3_Var116 string
 		templ_7745c5c3_Var116, templ_7745c5c3_Err = templ.ResolveAttributeValue(st.ConvertModel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1012, Col: 132}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1047, Col: 132}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var116)
 		if templ_7745c5c3_Err != nil {
@@ -2528,7 +2528,7 @@ func vaultMenu(st State) templ.Component {
 		var templ_7745c5c3_Var117 string
 		templ_7745c5c3_Var117, templ_7745c5c3_Err = templ.ResolveAttributeValue(megapixels(st.ConvertMaxPixels))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1023, Col: 45}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1058, Col: 45}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var117)
 		if templ_7745c5c3_Err != nil {
@@ -2541,7 +2541,7 @@ func vaultMenu(st State) templ.Component {
 		var templ_7745c5c3_Var118 string
 		templ_7745c5c3_Var118, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprint(st.ConvertPageTimeoutMin))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1038, Col: 50}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1073, Col: 50}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var118)
 		if templ_7745c5c3_Err != nil {
@@ -2554,7 +2554,7 @@ func vaultMenu(st State) templ.Component {
 		var templ_7745c5c3_Var119 string
 		templ_7745c5c3_Var119, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprint(st.IndexConcurrency))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1058, Col: 45}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1093, Col: 45}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var119)
 		if templ_7745c5c3_Err != nil {
@@ -2572,7 +2572,7 @@ func vaultMenu(st State) templ.Component {
 // one, plus the vaults Grimoire already knows about as a quick-pick list. Opening
 // any of them (or picking a new folder) binds it to this running instance and the
 // page reloads into it — handled by initVault in grimoire.js, which posts to
-// api/open-vault and reloads on success.
+// api/vaults/add and navigating onto the opened vault.
 func vaultEmptyState(recents []VaultRef) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -2611,7 +2611,7 @@ func vaultEmptyState(recents []VaultRef) templ.Component {
 				var templ_7745c5c3_Var121 string
 				templ_7745c5c3_Var121, templ_7745c5c3_Err = templ.ResolveAttributeValue(v.Path)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1085, Col: 74}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1120, Col: 74}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var121)
 				if templ_7745c5c3_Err != nil {
@@ -2624,7 +2624,7 @@ func vaultEmptyState(recents []VaultRef) templ.Component {
 				var templ_7745c5c3_Var122 string
 				templ_7745c5c3_Var122, templ_7745c5c3_Err = templ.ResolveAttributeValue(v.Path)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1085, Col: 91}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1120, Col: 91}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var122)
 				if templ_7745c5c3_Err != nil {
@@ -2637,7 +2637,7 @@ func vaultEmptyState(recents []VaultRef) templ.Component {
 				var templ_7745c5c3_Var123 string
 				templ_7745c5c3_Var123, templ_7745c5c3_Err = templ.JoinStringErrs(v.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1087, Col: 48}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1122, Col: 48}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var123))
 				if templ_7745c5c3_Err != nil {
@@ -2650,7 +2650,7 @@ func vaultEmptyState(recents []VaultRef) templ.Component {
 				var templ_7745c5c3_Var124 string
 				templ_7745c5c3_Var124, templ_7745c5c3_Err = templ.JoinStringErrs(v.Path)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1088, Col: 56}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1123, Col: 56}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var124))
 				if templ_7745c5c3_Err != nil {
@@ -2726,7 +2726,7 @@ func FileTree(nodes []FileNode) templ.Component {
 				var templ_7745c5c3_Var126 string
 				templ_7745c5c3_Var126, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.Path)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1121, Col: 70}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1156, Col: 70}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var126)
 				if templ_7745c5c3_Err != nil {
@@ -2739,7 +2739,7 @@ func FileTree(nodes []FileNode) templ.Component {
 				var templ_7745c5c3_Var127 string
 				templ_7745c5c3_Var127, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1121, Col: 91}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1156, Col: 91}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var127)
 				if templ_7745c5c3_Err != nil {
@@ -2752,7 +2752,7 @@ func FileTree(nodes []FileNode) templ.Component {
 				var templ_7745c5c3_Var128 string
 				templ_7745c5c3_Var128, templ_7745c5c3_Err = templ.JoinStringErrs(n.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1124, Col: 39}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1159, Col: 39}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var128))
 				if templ_7745c5c3_Err != nil {
@@ -2778,7 +2778,7 @@ func FileTree(nodes []FileNode) templ.Component {
 				var templ_7745c5c3_Var129 string
 				templ_7745c5c3_Var129, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.Path)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1134, Col: 72}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1169, Col: 72}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var129)
 				if templ_7745c5c3_Err != nil {
@@ -2791,7 +2791,7 @@ func FileTree(nodes []FileNode) templ.Component {
 				var templ_7745c5c3_Var130 string
 				templ_7745c5c3_Var130, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1134, Col: 93}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1169, Col: 93}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var130)
 				if templ_7745c5c3_Err != nil {
@@ -2804,7 +2804,7 @@ func FileTree(nodes []FileNode) templ.Component {
 				var templ_7745c5c3_Var131 string
 				templ_7745c5c3_Var131, templ_7745c5c3_Err = templ.ResolveAttributeValue(strings.Join(n.Tags, " "))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1134, Col: 133}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1169, Col: 133}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var131)
 				if templ_7745c5c3_Err != nil {
@@ -2817,7 +2817,7 @@ func FileTree(nodes []FileNode) templ.Component {
 				var templ_7745c5c3_Var132 string
 				templ_7745c5c3_Var132, templ_7745c5c3_Err = templ.ResolveAttributeValue(strings.Join(n.Aliases, " "))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1134, Col: 179}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1169, Col: 179}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var132)
 				if templ_7745c5c3_Err != nil {
@@ -2830,7 +2830,7 @@ func FileTree(nodes []FileNode) templ.Component {
 				var templ_7745c5c3_Var133 string
 				templ_7745c5c3_Var133, templ_7745c5c3_Err = templ.JoinStringErrs(n.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1137, Col: 38}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1172, Col: 38}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var133))
 				if templ_7745c5c3_Err != nil {
@@ -2848,7 +2848,7 @@ func FileTree(nodes []FileNode) templ.Component {
 				var templ_7745c5c3_Var134 string
 				templ_7745c5c3_Var134, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1141, Col: 58}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1176, Col: 58}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var134)
 				if templ_7745c5c3_Err != nil {
@@ -2861,7 +2861,7 @@ func FileTree(nodes []FileNode) templ.Component {
 				var templ_7745c5c3_Var135 string
 				templ_7745c5c3_Var135, templ_7745c5c3_Err = templ.JoinStringErrs(n.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1144, Col: 38}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1179, Col: 38}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var135))
 				if templ_7745c5c3_Err != nil {
@@ -2960,7 +2960,7 @@ func TrashBrowser(items []TrashItem) templ.Component {
 				var templ_7745c5c3_Var139 string
 				templ_7745c5c3_Var139, templ_7745c5c3_Err = templ.ResolveAttributeValue(it.TrashPath)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1184, Col: 28}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1219, Col: 28}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var139)
 				if templ_7745c5c3_Err != nil {
@@ -2978,7 +2978,7 @@ func TrashBrowser(items []TrashItem) templ.Component {
 			var templ_7745c5c3_Var140 string
 			templ_7745c5c3_Var140, templ_7745c5c3_Err = templ.ResolveAttributeValue(it.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1186, Col: 22}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1221, Col: 22}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var140)
 			if templ_7745c5c3_Err != nil {
@@ -2991,7 +2991,7 @@ func TrashBrowser(items []TrashItem) templ.Component {
 			var templ_7745c5c3_Var141 string
 			templ_7745c5c3_Var141, templ_7745c5c3_Err = templ.ResolveAttributeValue(it.TrashID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1187, Col: 29}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1222, Col: 29}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var141)
 			if templ_7745c5c3_Err != nil {
@@ -3004,7 +3004,7 @@ func TrashBrowser(items []TrashItem) templ.Component {
 			var templ_7745c5c3_Var142 string
 			templ_7745c5c3_Var142, templ_7745c5c3_Err = templ.ResolveAttributeValue("Deleted from " + it.OriginalPath)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1188, Col: 44}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1223, Col: 44}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var142)
 			if templ_7745c5c3_Err != nil {
@@ -3032,7 +3032,7 @@ func TrashBrowser(items []TrashItem) templ.Component {
 			var templ_7745c5c3_Var143 string
 			templ_7745c5c3_Var143, templ_7745c5c3_Err = templ.JoinStringErrs(it.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1197, Col: 51}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1232, Col: 51}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var143))
 			if templ_7745c5c3_Err != nil {
@@ -3050,7 +3050,7 @@ func TrashBrowser(items []TrashItem) templ.Component {
 				var templ_7745c5c3_Var144 string
 				templ_7745c5c3_Var144, templ_7745c5c3_Err = templ.ResolveAttributeValue(FullDate(it.DeletedAt))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1199, Col: 61}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1234, Col: 61}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var144)
 				if templ_7745c5c3_Err != nil {
@@ -3063,7 +3063,7 @@ func TrashBrowser(items []TrashItem) templ.Component {
 				var templ_7745c5c3_Var145 string
 				templ_7745c5c3_Var145, templ_7745c5c3_Err = templ.JoinStringErrs(RelativeDate(it.DeletedAt))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1199, Col: 92}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1234, Col: 92}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var145))
 				if templ_7745c5c3_Err != nil {
@@ -3081,7 +3081,7 @@ func TrashBrowser(items []TrashItem) templ.Component {
 			var templ_7745c5c3_Var146 string
 			templ_7745c5c3_Var146, templ_7745c5c3_Err = templ.ResolveAttributeValue("@post('api/trash/restore-ui?id=" + it.TrashID + "')")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1202, Col: 73}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1237, Col: 73}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var146)
 			if templ_7745c5c3_Err != nil {
@@ -3094,7 +3094,7 @@ func TrashBrowser(items []TrashItem) templ.Component {
 			var templ_7745c5c3_Var147 string
 			templ_7745c5c3_Var147, templ_7745c5c3_Err = templ.ResolveAttributeValue(it.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1203, Col: 117}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1238, Col: 117}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var147)
 			if templ_7745c5c3_Err != nil {
@@ -3107,7 +3107,7 @@ func TrashBrowser(items []TrashItem) templ.Component {
 			var templ_7745c5c3_Var148 string
 			templ_7745c5c3_Var148, templ_7745c5c3_Err = templ.ResolveAttributeValue("@post('api/trash/delete-ui?id=" + it.TrashID + "')")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1204, Col: 72}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1239, Col: 72}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var148)
 			if templ_7745c5c3_Err != nil {
@@ -3128,6 +3128,134 @@ type Session struct {
 	Title     string
 	CreatedAt time.Time
 	UpdatedAt time.Time // last use: bumped on every turn.
+}
+
+// VaultList renders the Vaults tab: one row per vault Grimoire knows about. The
+// status dot reads at a glance — accent for the vault this page is showing, plain
+// for another available one, muted for a vault whose folder is gone. Unavailable
+// rows can't be opened (JS ignores the click) but keep their menu, since forgetting
+// them is the whole reason they are still listed. The row's tooltip carries the
+// index detail that would crowd the list.
+func VaultList(vaults []VaultRow) templ.Component {
+	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
+		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
+			return templ_7745c5c3_CtxErr
+		}
+		templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
+		if !templ_7745c5c3_IsBuffer {
+			defer func() {
+				templ_7745c5c3_BufErr := templruntime.ReleaseBuffer(templ_7745c5c3_Buffer)
+				if templ_7745c5c3_Err == nil {
+					templ_7745c5c3_Err = templ_7745c5c3_BufErr
+				}
+			}()
+		}
+		ctx = templ.InitializeContext(ctx)
+		templ_7745c5c3_Var149 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var149 == nil {
+			templ_7745c5c3_Var149 = templ.NopComponent
+		}
+		ctx = templ.ClearChildren(ctx)
+		if len(vaults) == 0 {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 224, "<div class=\"g-vaults-empty g-muted\">No vaults yet. Add one to get started.</div>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		for _, v := range vaults {
+			var templ_7745c5c3_Var150 = []any{"g-vault-row",
+				templ.KV("g-vault-row-current", v.Current),
+				templ.KV("g-vault-row-gone", !v.Available)}
+			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var150...)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 225, "<div class=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var151 string
+			templ_7745c5c3_Var151, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var150).String())
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1, Col: 0}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var151)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 226, "\" data-vault-path=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var152 string
+			templ_7745c5c3_Var152, templ_7745c5c3_Err = templ.ResolveAttributeValue(v.Path)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1267, Col: 27}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var152)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 227, "\" data-vault-available=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var153 string
+			templ_7745c5c3_Var153, templ_7745c5c3_Err = templ.ResolveAttributeValue(boolAttr(v.Available))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1268, Col: 47}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var153)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 228, "\" title=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var154 string
+			templ_7745c5c3_Var154, templ_7745c5c3_Err = templ.ResolveAttributeValue(v.Detail)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1269, Col: 19}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var154)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 229, "\"><span class=\"g-vault-dot\"></span><div class=\"g-vault-main\"><span class=\"g-vault-name\">")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var155 string
+			templ_7745c5c3_Var155, templ_7745c5c3_Err = templ.JoinStringErrs(v.Name)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1273, Col: 39}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var155))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 230, "</span> <span class=\"g-vault-path g-muted\">")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var156 string
+			templ_7745c5c3_Var156, templ_7745c5c3_Err = templ.JoinStringErrs(v.Path)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1274, Col: 47}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var156))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 231, "</span></div><sl-dropdown class=\"g-vault-row-menu\" placement=\"bottom-end\" hoist><sl-icon-button slot=\"trigger\" name=\"three-dots-vertical\" title=\"Vault actions\" tabindex=\"-1\"></sl-icon-button> <sl-menu><sl-menu-item class=\"g-vault-forget\" value=\"forget\">Forget</sl-menu-item></sl-menu></sl-dropdown></div>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		return nil
+	})
 }
 
 // SessionList renders the sidebar history; the active session is highlighted.
@@ -3151,119 +3279,119 @@ func SessionList(sessions []Session, active int64) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var149 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var149 == nil {
-			templ_7745c5c3_Var149 = templ.NopComponent
+		templ_7745c5c3_Var157 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var157 == nil {
+			templ_7745c5c3_Var157 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
 		for _, se := range sessions {
-			var templ_7745c5c3_Var150 = []any{"g-session", templ.KV("g-session-active", se.ID == active)}
-			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var150...)
+			var templ_7745c5c3_Var158 = []any{"g-session", templ.KV("g-session-active", se.ID == active)}
+			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var158...)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 224, "<div class=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 232, "<div class=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var151 string
-			templ_7745c5c3_Var151, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var150).String())
+			var templ_7745c5c3_Var159 string
+			templ_7745c5c3_Var159, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var158).String())
 			if templ_7745c5c3_Err != nil {
 				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1, Col: 0}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var151)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var159)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 225, "\" data-id=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 233, "\" data-id=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var152 string
-			templ_7745c5c3_Var152, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprint(se.ID))
+			var templ_7745c5c3_Var160 string
+			templ_7745c5c3_Var160, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprint(se.ID))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1226, Col: 30}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1295, Col: 30}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var152)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 226, "\" data-title=\"")
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var160)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var153 string
-			templ_7745c5c3_Var153, templ_7745c5c3_Err = templ.ResolveAttributeValue(se.Title)
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1227, Col: 24}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var153)
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 234, "\" data-title=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 227, "\" data-open-url=\"")
+			var templ_7745c5c3_Var161 string
+			templ_7745c5c3_Var161, templ_7745c5c3_Err = templ.ResolveAttributeValue(se.Title)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1296, Col: 24}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var161)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var154 string
-			templ_7745c5c3_Var154, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("api/sessions/%d/open", se.ID))
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1228, Col: 61}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var154)
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 235, "\" data-open-url=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 228, "\" tabindex=\"-1\"><div class=\"g-session-main\"><span class=\"g-session-title\">")
+			var templ_7745c5c3_Var162 string
+			templ_7745c5c3_Var162, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("api/sessions/%d/open", se.ID))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1297, Col: 61}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var162)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var155 string
-			templ_7745c5c3_Var155, templ_7745c5c3_Err = templ.JoinStringErrs(se.Title)
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1232, Col: 44}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var155))
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 236, "\" tabindex=\"-1\"><div class=\"g-session-main\"><span class=\"g-session-title\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 229, "</span> ")
+			var templ_7745c5c3_Var163 string
+			templ_7745c5c3_Var163, templ_7745c5c3_Err = templ.JoinStringErrs(se.Title)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1301, Col: 44}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var163))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 237, "</span> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if !se.UpdatedAt.IsZero() {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 230, "<span class=\"g-session-meta\" title=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 238, "<span class=\"g-session-meta\" title=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var156 string
-				templ_7745c5c3_Var156, templ_7745c5c3_Err = templ.ResolveAttributeValue("Created " + FullDate(se.CreatedAt))
+				var templ_7745c5c3_Var164 string
+				templ_7745c5c3_Var164, templ_7745c5c3_Err = templ.ResolveAttributeValue("Created " + FullDate(se.CreatedAt))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1234, Col: 77}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1303, Col: 77}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var156)
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 231, "\">last used ")
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var164)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var157 string
-				templ_7745c5c3_Var157, templ_7745c5c3_Err = templ.JoinStringErrs(RelativeDate(se.UpdatedAt))
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1235, Col: 44}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var157))
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 239, "\">last used ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 232, "</span>")
+				var templ_7745c5c3_Var165 string
+				templ_7745c5c3_Var165, templ_7745c5c3_Err = templ.JoinStringErrs(RelativeDate(se.UpdatedAt))
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1304, Col: 44}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var165))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 240, "</span>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 233, "</div><sl-icon-button class=\"g-session-del\" name=\"x\" title=\"Delete session\" style=\"font-size:0.85rem\" tabindex=\"-1\"></sl-icon-button></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 241, "</div><sl-icon-button class=\"g-session-del\" name=\"x\" title=\"Delete session\" style=\"font-size:0.85rem\" tabindex=\"-1\"></sl-icon-button></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -3301,12 +3429,12 @@ func ConversationPanel(turns []Turn) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var158 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var158 == nil {
-			templ_7745c5c3_Var158 = templ.NopComponent
+		templ_7745c5c3_Var166 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var166 == nil {
+			templ_7745c5c3_Var166 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 234, "<div id=\"g-conversation\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 242, "<div id=\"g-conversation\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -3314,7 +3442,7 @@ func ConversationPanel(turns []Turn) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 235, "</div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 243, "</div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -3340,9 +3468,9 @@ func Conversation(turns []Turn) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var159 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var159 == nil {
-			templ_7745c5c3_Var159 = templ.NopComponent
+		templ_7745c5c3_Var167 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var167 == nil {
+			templ_7745c5c3_Var167 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
 		if len(turns) == 0 {
@@ -3352,33 +3480,33 @@ func Conversation(turns []Turn) templ.Component {
 			}
 		}
 		for _, t := range turns {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 236, "<div class=\"g-turn\" data-turn-id=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 244, "<div class=\"g-turn\" data-turn-id=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var160 string
-			templ_7745c5c3_Var160, templ_7745c5c3_Err = templ.ResolveAttributeValue(strconv.FormatInt(t.ID, 10))
+			var templ_7745c5c3_Var168 string
+			templ_7745c5c3_Var168, templ_7745c5c3_Err = templ.ResolveAttributeValue(strconv.FormatInt(t.ID, 10))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1276, Col: 64}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1345, Col: 64}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var160)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 237, "\"><div class=\"g-bubble g-bubble-user\">")
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var168)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var161 string
-			templ_7745c5c3_Var161, templ_7745c5c3_Err = templ.JoinStringErrs(t.Query)
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1277, Col: 48}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var161))
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 245, "\"><div class=\"g-bubble g-bubble-user\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 238, "</div>")
+			var templ_7745c5c3_Var169 string
+			templ_7745c5c3_Var169, templ_7745c5c3_Err = templ.JoinStringErrs(t.Query)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1346, Col: 48}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var169))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 246, "</div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -3386,7 +3514,7 @@ func Conversation(turns []Turn) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 239, "</div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 247, "</div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -3418,49 +3546,49 @@ func ModelOptions(models []ModelOption) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var162 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var162 == nil {
-			templ_7745c5c3_Var162 = templ.NopComponent
+		templ_7745c5c3_Var170 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var170 == nil {
+			templ_7745c5c3_Var170 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
 		for _, m := range models {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 240, "<sl-option value=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 248, "<sl-option value=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var163 string
-			templ_7745c5c3_Var163, templ_7745c5c3_Err = templ.ResolveAttributeValue(m.ID)
+			var templ_7745c5c3_Var171 string
+			templ_7745c5c3_Var171, templ_7745c5c3_Err = templ.ResolveAttributeValue(m.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1292, Col: 25}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1361, Col: 25}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var163)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var171)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 241, "\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 249, "\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if m.Selected {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 242, " selected")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 250, " selected")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 243, ">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 251, ">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var164 string
-			templ_7745c5c3_Var164, templ_7745c5c3_Err = templ.JoinStringErrs(m.ID)
+			var templ_7745c5c3_Var172 string
+			templ_7745c5c3_Var172, templ_7745c5c3_Err = templ.JoinStringErrs(m.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1292, Col: 59}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/grimoire.templ`, Line: 1361, Col: 59}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var164))
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var172))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 244, "</sl-option>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 252, "</sl-option>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

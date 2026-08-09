@@ -106,6 +106,8 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 		     or the vault tree. The toolbar Trash toggle fires these. -->
 		<button id="g-trash-open-trigger" style="display:none" data-on:click="@get('api/trash/render')"></button>
 		<button id="g-trash-close-trigger" style="display:none" data-on:click="@get('api/files/render')"></button>
+		<!-- Repaint the Vaults tab after an add or a forget. -->
+		<button id="g-vaults-render-trigger" style="display:none" data-on:click="@get('api/vaults/render')"></button>
 		<!-- Extensions dialog: each tab's list is fetched when it's first shown. -->
 		<button id="g-ext-themes-trigger" style="display:none" data-on:click="@get('api/extensions/themes/render')"></button>
 		<button id="g-ext-kernels-trigger" style="display:none" data-on:click="@get('api/extensions/kernels/render')"></button>
@@ -129,8 +131,33 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 			</div>
 
 			<sl-tab-group id="g-tabs" class="g-tabs flex flex-col flex-1" style="min-height:0">
+				<sl-tab slot="nav" panel="vaults">Vaults</sl-tab>
 				<sl-tab slot="nav" panel="sessions">Sessions</sl-tab>
 				<sl-tab slot="nav" panel="files">Files</sl-tab>
+
+				<!-- Vaults tab: every vault the daemon knows, with an Add button. It is
+				     the only vault-management surface (the Vault settings menu keeps just
+				     the current vault's own settings) and works in the empty state too,
+				     so it lists unconditionally. Clicking an available vault reloads the
+				     page onto it — the workspace is restored from that vault's own UI
+				     state, so there is nothing to tear down in place. -->
+				<sl-tab-panel name="vaults" class="g-tab-panel">
+					<div class="g-vaults-section flex flex-col" style="height:100%">
+						<sl-button id="g-vault-add" class="g-new-session" size="small" variant="primary" style="width:100%">
+							<sl-icon slot="prefix" name="plus-lg"></sl-icon>
+							Add vault…
+						</sl-button>
+						<!-- Fallback for a client with no native folder dialog (a browser
+						     tab, a headless daemon): the server says needsPath and JS
+						     reveals this field for an absolute path. -->
+						<div id="g-vault-add-path" class="g-vault-add-path">
+							<sl-input id="g-vault-add-input" size="small" clearable autocomplete="off" placeholder="Absolute path to a vault folder…">
+								<sl-icon slot="prefix" name="folder2"></sl-icon>
+							</sl-input>
+						</div>
+						<div id="g-vaults" class="g-vaults" data-init="@get('api/vaults/render')"></div>
+					</div>
+				</sl-tab-panel>
 
 				<!-- Sessions tab: new-session button + the session history list. -->
 				<sl-tab-panel name="sessions" class="g-tab-panel">
@@ -445,6 +472,15 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 			<sl-button id="g-delete-confirm" slot="footer" variant="danger">Delete</sl-button>
 		</sl-dialog>
 
+
+		<!-- Forgetting a vault only takes it off the list — nothing on disk is
+		     touched — so it gets its own confirmation rather than the delete
+		     dialog, whose red "Delete" would misdescribe it. -->
+		<sl-dialog id="g-forget-dialog" label="Forget vault" class="mass-dialog">
+			<span id="g-forget-body"></span>
+			<sl-button id="g-forget-cancel" slot="footer" variant="default">Cancel</sl-button>
+			<sl-button id="g-forget-confirm" slot="footer" variant="primary">Forget</sl-button>
+		</sl-dialog>
 
 		<!-- Keyboard shortcuts reference, opened from the sidebar header (or "?"). -->
 		<sl-dialog id="g-shortcuts-dialog" label="Keyboard shortcuts" class="mass-dialog">
@@ -995,10 +1031,9 @@ templ vaultMenu(st State) {
 		<div class="g-menu-panel">
 			<div>
 				<span class="g-label">Vault</span>
-				<!-- The page's vault. Switching picks a folder, opens it in the daemon
-				     (which keeps every vault it serves resident) and reloads onto it. -->
+				<!-- The page's vault, for reference. Everything below applies to it
+				     alone; choosing a different one is the sidebar's Vaults tab. -->
 				<div id="g-vault-current" class="g-vault-current">{ st.Vault }</div>
-				<sl-button id="g-vault-switch" size="small" variant="default" style="width:100%;margin-top:0.35rem">Switch vault…</sl-button>
 			</div>
 			<!-- Each model select loads its option list on init (so the saved value's
 			     label shows) and on open; sl-change writes the signal and posts. No
@@ -1071,7 +1106,7 @@ templ vaultMenu(st State) {
 // one, plus the vaults Grimoire already knows about as a quick-pick list. Opening
 // any of them (or picking a new folder) binds it to this running instance and the
 // page reloads into it — handled by initVault in grimoire.js, which posts to
-// api/open-vault and reloads on success.
+// api/vaults/add and navigating onto the opened vault.
 templ vaultEmptyState(recents []VaultRef) {
 	<div id="g-vault-empty" class="g-vault-empty">
 		<sl-icon name="book-half" style="font-size:2.4rem;color:var(--mass-accent);opacity:0.8"></sl-icon>
@@ -1212,6 +1247,40 @@ type Session struct {
 	Title     string
 	CreatedAt time.Time
 	UpdatedAt time.Time // last use: bumped on every turn.
+}
+
+// VaultList renders the Vaults tab: one row per vault Grimoire knows about. The
+// status dot reads at a glance — accent for the vault this page is showing, plain
+// for another available one, muted for a vault whose folder is gone. Unavailable
+// rows can't be opened (JS ignores the click) but keep their menu, since forgetting
+// them is the whole reason they are still listed. The row's tooltip carries the
+// index detail that would crowd the list.
+templ VaultList(vaults []VaultRow) {
+	if len(vaults) == 0 {
+		<div class="g-vaults-empty g-muted">No vaults yet. Add one to get started.</div>
+	}
+	for _, v := range vaults {
+		<div
+			class={ "g-vault-row",
+				templ.KV("g-vault-row-current", v.Current),
+				templ.KV("g-vault-row-gone", !v.Available) }
+			data-vault-path={ v.Path }
+			data-vault-available={ boolAttr(v.Available) }
+			title={ v.Detail }
+		>
+			<span class="g-vault-dot"></span>
+			<div class="g-vault-main">
+				<span class="g-vault-name">{ v.Name }</span>
+				<span class="g-vault-path g-muted">{ v.Path }</span>
+			</div>
+			<sl-dropdown class="g-vault-row-menu" placement="bottom-end" hoist>
+				<sl-icon-button slot="trigger" name="three-dots-vertical" title="Vault actions" tabindex="-1"></sl-icon-button>
+				<sl-menu>
+					<sl-menu-item class="g-vault-forget" value="forget">Forget</sl-menu-item>
+				</sl-menu>
+			</sl-dropdown>
+		</div>
+	}
 }
 
 // SessionList renders the sidebar history; the active session is highlighted.

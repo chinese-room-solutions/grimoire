@@ -194,15 +194,12 @@ func (b *clientBridge) setTheme(base string) {
 	}
 }
 
-// PickFolder runs the window's native folder dialog. With no window attached
-// there is nothing to pick, which is the same answer as a cancelled dialog
-// (ok=false) — a headless daemon and a browser client both land here, and
-// neither is an error.
+// PickFolder runs the window's native folder dialog. With no window attached it
+// reports errNoClient — a headless daemon and a browser client both land there,
+// and the caller has to offer a path field instead. That is a different answer
+// from a cancelled dialog (ok=false), which means the user said no.
 func (b *clientBridge) PickFolder(ctx context.Context, title string) (string, bool, error) {
 	res, err := b.call(ctx, bridgeRequest{Op: opPickFolder, Title: title})
-	if errors.Is(err, errNoClient) {
-		return "", false, nil
-	}
 	if err != nil {
 		return "", false, err
 	}
