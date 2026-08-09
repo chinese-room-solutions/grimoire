@@ -14,5 +14,10 @@ func osOpen(path string) error {
 	if runtime.GOOS == "darwin" {
 		opener = "open"
 	}
-	return exec.Command(opener, path).Start()
+	cmd := exec.Command(opener, path)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	reap(cmd)
+	return nil
 }

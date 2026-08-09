@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/chinese-room-solutions/mass-sdk/install"
@@ -85,4 +86,77 @@ func TestApplyFlags_Scope(t *testing.T) {
 func TestApplyFlags_BadScope(t *testing.T) {
 	c := defaultCollected()
 	require.Error(t, applyFlags(&c, "", "global", false))
+}
+
+// isolateSetupEnv points the home and config roots at a temp dir, so the install
+// record a test writes is the only one it can read.
+func isolateSetupEnv(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("AppData", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("LocalAppData", filepath.Join(home, "AppData", "Local"))
+	return home
+}
+
+// A scripted `--uninstall` with no flags removes the install the record names —
+// dir and the scope that dir implies — since the app may not be where the scope
+// defaults point. An explicit flag still wins.
+func TestUninstallTarget(t *testing.T) {
+	tests := []struct {
+		name        string
+		record      func(home string) string // recorded install dir; "" writes no record.
+		installDir  string
+		scope       string
+		perUser     bool
+		wantDir     func(home string) string
+		wantPerUser bool
+	}{
+		{
+			name:        "no record falls back to the scope default",
+			wantDir:     func(string) string { return appSpec.ScopeInstallDir(install.ScopeUser) },
+			wantPerUser: true,
+		},
+		{
+			name:        "the recorded user-scoped dir is used",
+			record:      func(home string) string { return filepath.Join(home, "apps", "grimoire") },
+			wantDir:     func(home string) string { return filepath.Join(home, "apps", "grimoire") },
+			wantPerUser: true,
+		},
+		{
+			name:        "a recorded machine-wide dir switches the scope too",
+			record:      func(string) string { return filepath.Join(string(filepath.Separator), "opt", "grimoire") },
+			wantDir:     func(string) string { return filepath.Join(string(filepath.Separator), "opt", "grimoire") },
+			wantPerUser: false,
+		},
+		{
+			name:        "an explicit --install-dir wins over the record",
+			record:      func(home string) string { return filepath.Join(home, "apps", "grimoire") },
+			installDir:  filepath.Join(string(filepath.Separator), "custom", "grimoire"),
+			wantDir:     func(string) string { return filepath.Join(string(filepath.Separator), "custom", "grimoire") },
+			wantPerUser: true,
+		},
+		{
+			name:        "an explicit --scope wins over the record",
+			record:      func(home string) string { return filepath.Join(home, "apps", "grimoire") },
+			scope:       "system",
+			wantDir:     func(string) string { return appSpec.ScopeInstallDir(install.ScopeSystem) },
+			wantPerUser: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := isolateSetupEnv(t)
+			if tc.record != nil {
+				require.NoError(t, appSpec.SaveRecord(install.Record{InstallDir: tc.record(home)}))
+			}
+			c, err := uninstallTarget(tc.installDir, tc.scope, tc.perUser)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantDir(home), c.installDir)
+			require.Equal(t, tc.wantPerUser, c.perUser)
+		})
+	}
 }

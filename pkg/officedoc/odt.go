@@ -31,19 +31,13 @@ func OdtToMarkdown(data []byte) (Result, error) {
 	emph := odtEmphasisByStyle(content, styles)
 	orderedList := odtOrderedListStyles(content, styles)
 
-	blocks, imageHrefs, err := odtBlocks(content, emph, orderedList)
+	blocks, namer, err := odtBlocks(content, emph, orderedList)
 	if err != nil {
 		return Result{}, err
 	}
 	// An odt <draw:image> href is the archive path directly (e.g. Pictures/x.png),
-	// so the href is both the rel target and its key; the prefix is empty.
-	mediaByRelID := map[string]string{}
-	used := map[string]bool{}
-	for _, href := range imageHrefs {
-		mediaByRelID[href] = href
-		used[href] = true
-	}
-	images, err := extractImages(zr, "", mediaByRelID, used)
+	// so the href is the media target and the prefix is empty.
+	images, err := extractImages(zr, "", namer)
 	if err != nil {
 		return Result{}, err
 	}
@@ -56,10 +50,11 @@ type odtStyle struct{ bold, italic bool }
 // odtBlocks walks content.xml into Markdown blocks. Token streaming keeps spans,
 // links, and nested lists in document order. List nesting is the depth of open
 // <text:list> elements; a paragraph inside a list item becomes one list item. A
-// <draw:image> emits an ![](attachments/name) link and its href is returned so
-// the file is extracted.
-func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListStyle map[string]bool) (blocks []block, imageHrefs []string, err error) {
+// <draw:image> emits an ![](attachments/name) link and its href is recorded in
+// the returned namer so the file is extracted under the same name.
+func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListStyle map[string]bool) (blocks []block, namer *imageNamer, err error) {
 	dec := xml.NewDecoder(bytes.NewReader(content))
+	namer = newImageNamer()
 
 	var (
 		para       strings.Builder
@@ -71,6 +66,9 @@ func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListSty
 		linkHref   string // active <text:a> target.
 		allBold    bool   // every visible char so far was bold (heading heuristic).
 		isHead     bool   // the current block is a real <text:h> (a styled heading).
+		// The Markdown an open <text:a>'s spans have contributed so far: a link's
+		// text often spans several of them and must come out as one [text](href).
+		linkText strings.Builder
 		// Span emphasis is a stack: nested spans combine (a bold span inside an
 		// italic span is bold+italic).
 		emphStack []odtStyle
@@ -79,6 +77,28 @@ func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListSty
 		orderedStack []bool
 		inParagraph  bool
 	)
+
+	// startPara begins a <text:p> or (head) a <text:h>, clearing what the previous
+	// one accumulated.
+	startPara := func(head bool) {
+		inParagraph, isHead, allBold = true, head, true
+		para.Reset()
+		plain.Reset()
+		paraImages = nil
+		heading = 0
+		linkHref = ""
+		linkText.Reset()
+	}
+
+	// writeMarkup appends to the paragraph, or to the open link's text when one is
+	// active, so a link's spans stay together and in order.
+	writeMarkup := func(s string) {
+		if linkHref != "" {
+			linkText.WriteString(s)
+			return
+		}
+		para.WriteString(s)
+	}
 
 	curEmph := func() odtStyle {
 		var e odtStyle
@@ -108,17 +128,13 @@ func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListSty
 			case "image":
 				// <draw:image xlink:href="Pictures/..">: collect as a standalone image
 				// (its own block, so a heuristic on the surrounding text can't swallow
-				// it) and record the href for extraction. Skip linked (external) images
-				// whose href isn't a packaged Pictures path.
+				// it); naming it also marks it for extraction. Skip linked (external)
+				// images whose href isn't a packaged Pictures path.
 				if href := attr(t, "href"); strings.HasPrefix(href, "Pictures/") {
-					imageHrefs = append(imageHrefs, href)
-					paraImages = append(paraImages, "![]("+AttachmentDir+"/"+imageName(href)+")")
+					paraImages = append(paraImages, "![]("+AttachmentDir+"/"+namer.name(href)+")")
 				}
 			case "h":
-				inParagraph, isHead, allBold = true, true, true
-				para.Reset()
-				plain.Reset()
-				paraImages = nil
+				startPara(true)
 				heading = atoiDefault(attr(t, "outline-level"), 1)
 				if heading < 1 {
 					heading = 1
@@ -127,19 +143,19 @@ func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListSty
 					heading = 6
 				}
 			case "p":
-				inParagraph, isHead, allBold = true, false, true
-				para.Reset()
-				plain.Reset()
-				paraImages = nil
-				heading = 0
+				startPara(false)
 			case "span":
 				emphStack = append(emphStack, emphByStyle[attr(t, "style-name")])
 			case "a":
 				linkHref = attr(t, "href")
 			case "tab":
-				para.WriteByte('\t')
+				writeMarkup("\t")
+				plain.WriteByte('\t')
 			case "line-break":
-				para.WriteString("  \n")
+				writeMarkup("  \n") // a soft line break within a paragraph.
+				// The plain text mirrors the break so looksLikeHeading rejects a
+				// multi-line paragraph, as it does for a docx <w:br/>.
+				plain.WriteByte('\n')
 			}
 		case xml.CharData:
 			if inParagraph {
@@ -149,11 +165,7 @@ func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListSty
 					allBold = allBold && e.bold
 				}
 				plain.WriteString(text)
-				frag := emphasize(escapeMarkdown(text), e.bold, e.italic)
-				if linkHref != "" && frag != "" {
-					frag = "[" + frag + "](" + linkHref + ")"
-				}
-				para.WriteString(frag)
+				writeMarkup(emphasize(escapeMarkdown(text), e.bold, e.italic))
 			}
 		case xml.EndElement:
 			switch t.Name.Local {
@@ -162,7 +174,11 @@ func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListSty
 					emphStack = emphStack[:len(emphStack)-1]
 				}
 			case "a":
+				if text := linkText.String(); text != "" {
+					para.WriteString("[" + text + "](" + linkHref + ")")
+				}
 				linkHref = ""
+				linkText.Reset()
 			case "list":
 				if listLvl > 0 {
 					listLvl--
@@ -187,7 +203,7 @@ func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListSty
 			}
 		}
 	}
-	return blocks, imageHrefs, nil
+	return blocks, namer, nil
 }
 
 // odtEmphasisByStyle collects, from both content.xml's automatic styles and

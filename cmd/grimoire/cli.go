@@ -14,9 +14,9 @@ import (
 )
 
 // The CLI is a scripting front door over the same loopback /api/v1 surface the
-// GUI uses. Each verb resolves the target vault, connects to its backend
-// (launching a headless one on demand), and runs one request. Output is
-// human-readable by default; --json emits the raw API shape for piping.
+// GUI uses. Each verb resolves the target vault, connects to the daemon
+// (launching a headless one on demand), and runs one request against that vault.
+// Output is human-readable by default; --json emits the raw API shape for piping.
 
 // Exit codes the CLI returns, so scripts can branch on the outcome kind rather
 // than parsing messages.
@@ -29,16 +29,16 @@ const (
 )
 
 // cliEnv carries a CLI invocation's resolved context: the output/error writers,
-// the JSON-mode flag, and how to reach the vault's backend. connect and respawn
-// are fields so tests can supply a stub client without spawning a real backend;
-// runCLI wires them to the real launch machinery.
+// the JSON-mode flag, and how to reach the daemon. connect and respawn are fields
+// so tests can supply a stub client without spawning a real daemon; runCLI wires
+// them to the real launch machinery.
 type cliEnv struct {
 	out     io.Writer
 	err     io.Writer
 	json    bool
 	vault   string
-	connect func() (*apiclient.Client, error) // reuse a running backend, launch on demand.
-	respawn func() (*apiclient.Client, error) // force a fresh backend (stale-port retry).
+	connect func(context.Context) (*apiclient.Client, error) // reuse a running daemon, launch on demand.
+	respawn func(context.Context) (*apiclient.Client, error) // force a fresh daemon (stale-port retry).
 }
 
 // runCLI is the entry point for the CLI subcommands, dispatched from main on the
@@ -54,7 +54,8 @@ func runCLIWith(args []string, out, errW io.Writer) int {
 	fs := flag.NewFlagSet("grimoire", flag.ContinueOnError)
 	fs.SetOutput(errW)
 	fs.Usage = func() { usage(errW) }
-	vaultFlag := fs.String("vault", "", "absolute path to the vault to act on (defaults to the last-used vault)")
+	vaultFlag := fs.String("vault", "",
+		"absolute path to the vault to act on (defaults to the last-used vault; narrows a search to one vault)")
 	jsonOut := fs.Bool("json", false, "emit raw JSON instead of human-readable output")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -65,39 +66,59 @@ func runCLIWith(args []string, out, errW io.Writer) int {
 		return exitUsage
 	}
 
-	vault, err := resolveVault(*vaultFlag)
-	if err != nil {
-		_, _ = fmt.Fprintf(errW, "error: %v\n", err)
-		return exitError
-	}
-	if vault == "" {
-		_, _ = fmt.Fprintln(errW, "error: no vault: pass --vault PATH, or open one in the app first")
-		return exitUsage
+	env := &cliEnv{out: out, err: errW, json: *jsonOut}
+	// A verb that reads nothing but the binary itself runs before the vault is
+	// resolved: a fresh install has no vault yet, and `skill` is exactly what a
+	// user reaches for at that point.
+	if !needsVault(rest[0]) {
+		return env.dispatch(rest)
 	}
 
-	env := &cliEnv{
-		out:     out,
-		err:     errW,
-		json:    *jsonOut,
-		vault:   vault,
-		connect: func() (*apiclient.Client, error) { return connectVault(vault) },
-		respawn: func() (*apiclient.Client, error) { return respawnVault(vault) },
+	// Search takes the flag alone: no --vault means every vault, so falling back
+	// to the last-used one would silently narrow it. Every other verb acts on one
+	// vault and must have one.
+	vault := *vaultFlag
+	if requiresVault(rest[0]) {
+		resolved, err := resolveVault(vault)
+		if err != nil {
+			_, _ = fmt.Fprintf(errW, "error: %v\n", err)
+			return exitError
+		}
+		if resolved == "" {
+			_, _ = fmt.Fprintln(errW, "error: no vault: pass --vault PATH, or open one in the app first")
+			return exitUsage
+		}
+		vault = resolved
 	}
+
+	// The vault rides on each request rather than binding the daemon to it: a CLI
+	// verb never moves the last-vault pointer, so an agent probing another vault
+	// can't change which vault the user's GUI reopens.
+	env.vault = vault
+	env.connect = func(ctx context.Context) (*apiclient.Client, error) { return connectDaemon(ctx, vault) }
+	env.respawn = func(ctx context.Context) (*apiclient.Client, error) { return respawnDaemon(ctx, vault) }
 	return env.dispatch(rest)
 }
 
-// firstNonFlag returns the first argument that isn't a global flag (or its
-// value), which is the subcommand. main uses it to spot a CLI invocation behind
-// the leading --vault/--json flags without duplicating flag parsing: --vault
-// takes a value (so its next token is skipped unless it's --vault=X), --json is
-// a bool. It returns "" when no subcommand is present (a bare flag list → the
-// GUI); any non-empty token routes to runCLI, which prints usage and exits 2 on
-// an unknown verb.
-func firstNonFlag(args []string) string {
+// needsVault reports whether --vault means anything to a verb. Every verb takes
+// it except skill, which only prints or copies a file compiled into the binary.
+func needsVault(verb string) bool { return verb != "skill" }
+
+// requiresVault reports whether a verb can't run without one. Search can: with
+// no vault named it covers them all, so it is the one verb that works on a
+// machine that has never opened a vault in the app.
+func requiresVault(verb string) bool { return needsVault(verb) && verb != "search" }
+
+// firstNonFlagIndex returns the index of the first argument that isn't a global
+// flag (or its value), which is the subcommand, or -1 when there is none. main
+// uses it to spot a CLI invocation behind the leading --vault/--json flags
+// without duplicating flag parsing: --vault takes a value (so its next token is
+// skipped unless it's --vault=X), --json is a bool.
+func firstNonFlagIndex(args []string) int {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if !strings.HasPrefix(a, "-") {
-			return a
+			return i
 		}
 		// --vault / -vault consumes the following token as its value, unless given
 		// as --vault=PATH. Any other flag (--json) is a standalone bool.
@@ -105,12 +126,27 @@ func firstNonFlag(args []string) string {
 			i++
 		}
 	}
+	return -1
+}
+
+// firstNonFlag is the subcommand in args, or "" when there is none (a bare flag
+// list → the GUI); any non-empty token routes to runCLI, which prints usage and
+// exits 2 on an unknown verb.
+func firstNonFlag(args []string) string {
+	if i := firstNonFlagIndex(args); i >= 0 {
+		return args[i]
+	}
 	return ""
 }
 
 // dispatch routes the verb (and its sub-verb) to the handler, returning the exit
 // code. Unknown verbs print usage.
 func (e *cliEnv) dispatch(args []string) int {
+	// --help is answered here, before the verb runs: several commands take a bare
+	// positional (folder create PATH) and would otherwise treat "--help" as it.
+	if helpRequested(args[1:]) && printHelp(e.out, verbChain(args)) {
+		return exitOK
+	}
 	switch args[0] {
 	case "search":
 		return e.runSearch(args[1:])
@@ -132,6 +168,8 @@ func (e *cliEnv) dispatch(args []string) int {
 		return e.runTheme(args[1:])
 	case "resolve":
 		return e.runResolve(args[1:])
+	case "skill":
+		return e.runSkill(args[1:])
 	case "screenshot":
 		return e.runScreenshot(args[1:])
 	default:
@@ -140,11 +178,24 @@ func (e *cliEnv) dispatch(args []string) int {
 	}
 }
 
+// verbChain is the command's name for help lookup: the leading non-flag tokens,
+// capped at two since no command nests deeper ("note create", "trash empty").
+func verbChain(args []string) []string {
+	var chain []string
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") || len(chain) == 2 {
+			break
+		}
+		chain = append(chain, a)
+	}
+	return chain
+}
+
 // errBackendRestarted reports a mutating command whose request died in transport.
 // A fresh backend was spawned so the next invocation works, but the command was
 // deliberately not re-sent.
 var errBackendRestarted = errors.New(
-	"the vault's backend stopped responding and has been restarted, but this command was NOT re-run " +
+	"the grimoire daemon stopped responding and has been restarted, but this command was NOT re-run " +
 		"(it may already have been applied) — check the vault and run it again if needed")
 
 // doRead runs one read-only request against the vault's backend, with a single
@@ -168,7 +219,7 @@ func (e *cliEnv) doWrite(ctx context.Context, fn func(context.Context, *apiclien
 // do is the shared body of doRead/doWrite; retry says whether the request may be
 // repeated once against the respawned backend.
 func (e *cliEnv) do(ctx context.Context, fn func(context.Context, *apiclient.Client) error, retry bool) error {
-	c, err := e.connect()
+	c, err := e.connect(ctx)
 	if err != nil {
 		return err
 	}
@@ -176,7 +227,7 @@ func (e *cliEnv) do(ctx context.Context, fn func(context.Context, *apiclient.Cli
 	if err == nil || !isTransportError(err) || ctx.Err() != nil {
 		return err
 	}
-	c, rerr := e.respawn()
+	c, rerr := e.respawn(ctx)
 	if rerr != nil {
 		return rerr
 	}
@@ -248,6 +299,12 @@ func (e *cliEnv) errorf(format string, args ...any) {
 	_, _ = fmt.Fprintf(e.err, "error: "+format+"\n", args...)
 }
 
+// warnf writes `warning: <msg>` to stderr — for advisories on a successful
+// (exit 0) command, so agents don't mistake them for failures.
+func (e *cliEnv) warnf(format string, args ...any) {
+	_, _ = fmt.Fprintf(e.err, "warning: "+format+"\n", args...)
+}
+
 // usageErrf prints `error: <msg>` followed by the top-level usage, for a
 // misused verb. The caller returns exitUsage.
 func (e *cliEnv) usageErrf(format string, args ...any) {
@@ -271,6 +328,12 @@ func parseFlags(fs *flag.FlagSet, errW io.Writer, args []string) (positional []s
 		rest := fs.Args()
 		if len(rest) == 0 {
 			return positional, true
+		}
+		// fs.Parse consumes a `--` terminator and stops there, so everything left is
+		// positional however it is spelled — re-parsing it would read a dash-leading
+		// argument as a flag again.
+		if consumed := len(args) - len(rest); consumed > 0 && args[consumed-1] == "--" {
+			return append(positional, rest...), true
 		}
 		positional = append(positional, rest[0])
 		args = rest[1:]
@@ -311,40 +374,12 @@ Usage:
   grimoire [--vault PATH] [--json] <command> [args]
 
 Global flags:
-  --vault PATH   vault to act on (default: the last-used vault)
+  --vault PATH   vault to act on (default: the last-used vault; for search,
+                 narrows to one vault instead of covering them all)
   --json         emit raw JSON instead of human-readable output
 
 Commands:
-  search QUERY [-k N]                 hybrid search over the vault
-  note get PATH                       print a note's raw Markdown
-  note create PATH [--content S | -f FILE | stdin] [--overwrite]
-  note update PATH [--content S | -f FILE | stdin]
-  note edit PATH --old S --new S      replace a unique string in a note
-  note delete PATH [--permanent]      delete a note (trash unless --permanent)
-  note rename FROM TO [--overwrite]   move a note
-  note props PATH --set key=v1,v2     replace a note's frontmatter (repeatable)
-  vault tree                          print the vault's note tree
-  vault list                          list known vaults (* marks current)
-  vault current                       print the current vault's path
-  resolve TARGET                      resolve a wikilink/name to a note path
-  folder create PATH                  create a folder
-  folder delete PATH [--permanent]    delete a folder
-  folder rename FROM TO               move a folder
-  import FILE...                      convert files into notes (.md .txt .html .docx .odt; .pdf needs the convert model)
-  reindex [--force]                   sync the vault into the search index (--force re-embeds every note)
-  kernel list                         list installed code kernels + registry packages
-  kernel install NAME[@VERSION]       install a kernel package from the registry
-  kernel remove FAMILY VERSION        remove an installed (shared) kernel version
-  theme list                          list registered UI themes + registry packages
-  theme install NAME[@VERSION]        install a theme package from the registry
-  theme remove NAME                   remove an installed (pluggable) theme
-  trash list                          list soft-deleted items
-  trash restore ID                    restore a trashed item
-  trash delete ID                     permanently remove one trashed item
-  trash empty                         permanently empty the trash
-  screenshot [-o out.png]             capture the app window (GUI only)
-  serve [--vault PATH] [--idle-timeout D]  run a vault backend headless
-
+`+commandList()+`
 Exit codes: 0 ok, 1 error, 2 usage, 3 not-found, 4 conflict
 `, "\n"))
 }

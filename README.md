@@ -63,20 +63,29 @@ grimoire [--vault PATH] [--json] <command> [args]
 
 | Group | Commands |
 | --- | --- |
-| **search** | `search QUERY [-k N]` |
-| **note** | `note get PATH` · `note create PATH` · `note update PATH` · `note edit PATH --old S --new S` · `note delete PATH [--permanent]` · `note rename FROM TO` · `note props PATH --set key=v1,v2` |
-| **vault** | `vault tree` · `vault list` · `vault current` |
+| **search** | `search QUERY [-k N]` (across every vault at once) |
+| **note** | `note get PATH` · `note create PATH` · `note update PATH` · `note edit PATH --old S --new S` · `note delete PATH` · `note rename FROM TO` · `note props PATH --set key=v1,v2` |
+| **vault** | `vault tree` · `vault list` · `vault current` · `vault forget PATH` |
 | **resolve** | `resolve TARGET` (a wikilink or bare name → a note path) |
-| **folder** | `folder create PATH` · `folder delete PATH [--permanent]` · `folder rename FROM TO` |
+| **folder** | `folder create PATH` · `folder delete PATH` · `folder rename FROM TO` |
 | **trash** | `trash list` · `trash restore ID` · `trash delete ID` · `trash empty` |
 | **import** | `import FILE...` (convert foreign files into notes) |
-| **reindex** | `reindex [--force]` (sync the vault into the search index) |
+| **reindex** | `reindex [PATH...] [--force]` (sync the search index — whole vault, or just the named notes) |
 | **kernel** | `kernel list` · `kernel install NAME[@VERSION]` · `kernel remove FAMILY VERSION` |
 | **theme** | `theme list` · `theme install NAME[@VERSION]` · `theme remove NAME` |
 | **screenshot** | `screenshot [-o out.png]` (GUI window only) |
 
 `note create` / `note update` take the body from `--content S`, `-f FILE`, or
-stdin.
+stdin. Every write is indexed for you — the note is searchable by the time the
+next command runs — so there is no reindex step after an edit. A delete prunes
+the index inline and reports `indexWarning` (exit `1`) if that prune fails,
+leaving the note gone from disk but still searchable until you `reindex` its
+path.
+
+Deletes go to the vault's trash unless you turn it off in the settings — there
+is no per-delete override, in the GUI or the API. The trash is what makes an
+agent's delete recoverable, so nothing an agent sends can skip it; permanent
+removal is `trash delete` / `trash empty`, or the setting.
 
 `import` converts `.md`/`.markdown`/`.txt`, `.html`, and `.docx`/`.odt` files
 locally (no gateway needed); `.pdf` goes through the convert (vision) model
@@ -84,10 +93,14 @@ picked in the app's Vault menu. A file that can't convert is reported on its
 own line without stopping the others (exit `1` if any failed).
 
 `reindex` embeds, so it needs the gateway: incremental by default (unchanged
-notes are skipped by content hash), `--force` re-embeds every note — a full
-rebuild that can run minutes on a large vault; the call waits for it. Notes
-that fail don't abort the pass: their summary goes to stderr and the exit code
-is `1`, while the rest are indexed.
+notes are skipped by content hash), `--force` re-embeds regardless — the only
+way to pick up an embedding-model or chunker change, since the notes' bytes
+haven't moved. Name one or more `PATH`s to sync just those notes (a named note
+gone from disk is pruned from the index); with none, the pass covers the vault
+and a forced one can run minutes. You rarely need any of it — writes, imports,
+and external changes index themselves. The call waits either way. Notes that fail
+don't abort the pass: their summary goes to stderr and the exit code is `1`,
+while the rest are indexed.
 
 `kernel` manages the code kernels fenced blocks run in (see
 [kernels/README.md](kernels/README.md)). `kernel list` shows what's installed —
@@ -121,17 +134,29 @@ come from the
 
 ### Vault targeting
 
-Without `--vault`, a command acts on the **last-used** vault (the one the app
-opened most recently). Pass `--vault /abs/path` to target another; `grimoire
-vault list` prints the vaults Grimoire knows about (a `*` marks the current one).
+`search` covers **every** vault Grimoire knows about, labelling each hit with the
+vault it lives in; `--vault /abs/path` narrows it to one. Vaults sharing an
+embedding model are ranked as one corpus (their similarities are on one scale);
+vaults on another model form their own group, listed after it — `-k` caps each
+group, and across groups the order is presentational. Every other command acts on a single vault: the one `--vault`
+names, else the **last-used** one (the vault the app opened most recently). A
+`--vault` on a read never moves that default, so an agent looking around other
+vaults can't change which one the app reopens.
 
-Each command reaches its vault's backend on a loopback port. If none is running,
-the CLI **spawns a headless backend on demand** (no window), serves the call, and
-leaves it warm for follow-ups; that backend **self-retires after ~2 minutes of
-inactivity** (a request in flight counts as activity for its whole duration, so
-a minutes-long `reindex --force` isn't cut off). A vault already open in the GUI is reused, so the CLI never blocks
-you from opening it yourself — but `screenshot` needs a GUI window and fails
-against a headless backend.
+`grimoire vault list` prints the vaults Grimoire knows about with their state —
+whether the folder is still on disk, how much of it is indexed, and which model
+indexed it — with a `*` on the current one. `grimoire vault forget PATH` drops
+one from that list and stops serving it; nothing on disk is touched, so opening
+the path again brings it back.
+
+**One daemon serves every vault**, and each request names the vault it acts on.
+If none is running, the CLI **spawns a headless daemon on demand** (no window),
+serves the call, and leaves it warm for follow-ups; that daemon **self-retires
+after ~2 minutes of inactivity** (a request in flight counts as activity for its
+whole duration, so a minutes-long `reindex --force` isn't cut off, and an open
+app window holds it up for as long as it lives). A daemon the GUI already
+started is reused, so the CLI never blocks you from opening the app yourself —
+but `screenshot` needs a GUI window and fails against a headless daemon.
 
 ### Output and exit codes
 
@@ -153,37 +178,43 @@ Exit codes let a script branch on the outcome kind:
 | `3` | not found (a missing note, or a resolve that found nothing) |
 | `4` | conflict (a create/rename that would clobber, or an ambiguous edit) |
 
-### Long-lived backend
+### Long-lived daemon
 
-`grimoire serve [--vault <path>]` runs a backend without a window and keeps it up
-until you stop it (Ctrl-C / SIGTERM) — use it to hold a vault's API open without
-the desktop app, or to avoid the on-demand spawn latency on the first call. Pass
+`grimoire serve` runs the backend without a window and keeps it up until you stop
+it (Ctrl-C / SIGTERM) — use it to hold the API open without the desktop app, or
+to avoid the on-demand spawn latency on the first call. It serves every vault, so
+there is nothing to bind: `--vault` is accepted and ignored. Pass
 `--idle-timeout <dur>` to have it self-retire after a quiet spell (the on-demand
 spawn uses `2m`).
 
 ### For AI agents
 
-Point your agent at the [`grimoire-cli` skill](.claude/skills/grimoire-cli/SKILL.md),
+Point your agent at the [`grimoire-cli` skill](skills/grimoire-cli/SKILL.md),
 which covers vault targeting, the output contract, and the editing and search
 guidance an agent needs.
 
-The skill is a plain Markdown instruction file — any agent can use it: point
-yours at `SKILL.md` directly, or install it wherever your agent discovers
-skills. With Claude Code, for example, it's picked up automatically when
-working inside this repo; for other projects copy (or symlink) the skill
-directory into the project's `.claude/skills/grimoire-cli/`, or install it
-user-wide so every project sees it:
+The skill is a plain Markdown instruction file, tied to no particular agent, and
+it ships inside the binary — so it documents the verbs your build actually has,
+with no checkout required:
 
 ```bash
-cp -r .claude/skills/grimoire-cli ~/.claude/skills/
+grimoire skill                    # print it (pipe it wherever you like)
+grimoire skill install <dir>      # write it to <dir>/grimoire-cli/SKILL.md
 ```
+
+`<dir>` is whatever directory your agent discovers skills in — there is no
+default, and no vault is needed, so this works on a fresh install. Reinstall
+after upgrading Grimoire: an old copy describes verbs that may have moved.
 
 ### JSON HTTP API
 
-The CLI is built on a plain JSON API under `/api/v1/` on each running instance,
-reachable directly (for scripts and curl) on the loopback port the backend
-publishes to `singleton.port` in its per-vault data directory. The
-vault-navigation operations are at `/api/v1/vault/{open,switch,close,current}`.
+The CLI is built on a plain JSON API under `/api/v1/`, reachable directly (for
+scripts and curl) on the loopback port the daemon publishes to
+`<user-config>/grimoire/app/daemon.port` — one file, since one daemon serves
+every vault. Pass `?vault=/abs/path` on a request to choose the vault it acts on;
+without it a request falls back to the last-used vault, and a `/api/v1/search`
+without it covers them all. The vault-management operations are at
+`/api/v1/vault/{current,open,switch,forget}` and `/api/v1/vaults`.
 
 ## License
 

@@ -20,7 +20,7 @@ func mountAPITheme(mux *http.ServeMux, api *grimoireapi.API, logger zerolog.Logg
 // degrading a registry failure to a warning like the kernel listing.
 func apiThemeListHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		res, err := api.ThemeList(r.Context())
+		res, err := api.ThemeList(r.Context(), requestVault(r))
 		if err != nil {
 			writeServiceError(w, err, logger, "list themes")
 			return
@@ -41,7 +41,7 @@ func apiThemeInstallHandler(api *grimoireapi.API, logger zerolog.Logger) http.Ha
 		if !decodeBody(w, r, &in, logger) || !requireField(w, in.Name, "name", logger) {
 			return
 		}
-		res, err := api.ThemeInstall(r.Context(), in.Name, in.Version)
+		res, err := api.ThemeInstall(r.Context(), requestVault(r), in.Name, in.Version)
 		if err != nil {
 			writeServiceError(w, err, logger, "install theme")
 			return
@@ -60,7 +60,7 @@ func apiThemeRemoveHandler(api *grimoireapi.API, logger zerolog.Logger) http.Han
 		if !decodeBody(w, r, &in, logger) || !requireField(w, in.Name, "name", logger) {
 			return
 		}
-		res, err := api.ThemeRemove(r.Context(), in.Name)
+		res, err := api.ThemeRemove(r.Context(), requestVault(r), in.Name)
 		if err != nil {
 			writeServiceError(w, err, logger, "remove theme")
 			return

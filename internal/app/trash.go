@@ -51,40 +51,38 @@ type TrashEntry struct {
 	DeletedAt    time.Time `json:"deletedAt"`
 }
 
-// trashesFor reports whether a delete soft-deletes to the trash for the given
-// caller (byAgent = an API delete vs. the user's GUI delete), per the
-// persisted trash mode.
-func (s *Service) trashesFor(byAgent bool) bool {
+// trashes reports whether a delete soft-deletes to the trash, per the persisted
+// setting.
+func (s *Service) trashes() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.cfg.Trashes(byAgent)
+	return s.cfg.Trashes()
 }
 
-// SetTrashMode records the soft-delete policy (all / agents / off) and persists it.
-func (s *Service) SetTrashMode(mode appconfig.TrashMode) error {
+// SetTrashEnabled records whether deletes soft-delete to the trash, and persists it.
+func (s *Service) SetTrashEnabled(enabled bool) error {
 	s.mu.Lock()
-	s.cfg.TrashMode = mode
+	s.cfg.TrashDisabled = !enabled
 	cfg := s.cfg
 	s.mu.Unlock()
 	return appconfig.Save(s.configDir, cfg)
 }
 
-// RemoveNote deletes a note, honouring the trash mode for the caller: it
-// soft-deletes to the vault's trash when the mode trashes for this caller and
-// permanent is false, otherwise removes the note permanently. byAgent marks an
-// API delete (vs. a user GUI delete) so the "agents only" mode can apply.
-// trashed reports which path was taken; trashID is the trash address (for a later
-// restore) when trashed, else empty. This is the single delete entry point the
-// GUI and API both call, so the mode is respected everywhere.
-func (s *Service) RemoveNote(ctx context.Context, rel string, permanent, byAgent bool) (trashID string, trashed bool, err error) {
-	if permanent || !s.trashesFor(byAgent) {
+// RemoveNote deletes a note: it soft-deletes to the vault's trash when the trash
+// is on, otherwise removes the note permanently. No caller can override that —
+// the trash is the user's guard against a delete they didn't want, so emptying it
+// is the only way past it. trashed reports which path was taken; trashID is the
+// trash address (for a later restore) when trashed, else empty. This is the
+// single delete entry point the GUI and API both call.
+func (s *Service) RemoveNote(ctx context.Context, rel string) (trashID string, trashed bool, err error) {
+	if !s.trashes() {
 		return "", false, s.DeleteNote(ctx, rel)
 	}
 	id, err := s.TrashNote(ctx, rel)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrIndexStale) {
 		return "", false, err
 	}
-	return id, true, nil
+	return id, true, err
 }
 
 // TrashNote moves a note into the vault's trash under a fresh id, preserving its
@@ -107,24 +105,24 @@ func (s *Service) TrashNote(ctx context.Context, rel string) (trashID string, er
 	}
 	if err := s.reindexNoteSync(ctx, rel); err != nil {
 		s.logger.Warn().Err(err).Str("note", rel).Msg("pruning trashed note from index")
+		return id, fmt.Errorf("%w: pruning %q: %w", ErrIndexStale, rel, err)
 	}
 	return id, nil
 }
 
-// RemoveFolder deletes a folder, honouring the trash mode for the caller exactly
-// like RemoveNote: it soft-deletes the folder — as a unit, tree intact — when the
-// mode trashes for this caller and permanent is false, otherwise removes it
+// RemoveFolder deletes a folder exactly like RemoveNote: it soft-deletes the
+// folder — as a unit, tree intact — when the trash is on, otherwise removes it
 // permanently. It is the single folder-delete entry point the GUI and API both
-// call, so the mode is respected everywhere.
-func (s *Service) RemoveFolder(ctx context.Context, rel string, permanent, byAgent bool) (trashID string, trashed bool, err error) {
-	if permanent || !s.trashesFor(byAgent) {
+// call.
+func (s *Service) RemoveFolder(ctx context.Context, rel string) (trashID string, trashed bool, err error) {
+	if !s.trashes() {
 		return "", false, s.DeleteFolder(ctx, rel)
 	}
 	id, err := s.TrashFolder(ctx, rel)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrIndexStale) {
 		return "", false, err
 	}
-	return id, true, nil
+	return id, true, err
 }
 
 // TrashFolder moves a whole folder into the vault's trash under a fresh id,
@@ -153,6 +151,7 @@ func (s *Service) TrashFolder(ctx context.Context, rel string) (trashID string, 
 	}
 	if err := s.reindexVaultSync(ctx); err != nil {
 		s.logger.Warn().Err(err).Str("folder", rel).Msg("pruning trashed folder from index")
+		return id, fmt.Errorf("%w: pruning %q: %w", ErrIndexStale, rel, err)
 	}
 	return id, nil
 }

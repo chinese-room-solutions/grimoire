@@ -3,6 +3,7 @@ package officedoc
 import (
 	"archive/zip"
 	"bytes"
+	"regexp"
 	"sort"
 	"testing"
 
@@ -42,7 +43,8 @@ func docxZip(t *testing.T, body string, extra map[string][]byte) []byte {
 		"word/document.xml": []byte(`<?xml version="1.0" encoding="UTF-8"?>` +
 			`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"` +
 			` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"` +
-			` xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">` +
+			` xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"` +
+			` xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">` +
 			`<w:body>` + body + `</w:body></w:document>`),
 	}
 	for name, data := range extra {
@@ -138,7 +140,8 @@ func TestConvertBuiltParity(t *testing.T) {
 		docx       []byte
 		odt        []byte
 		want       string
-		wantImages []string // expected extracted image names, in any single order.
+		wantImages []string          // expected extracted image names, in any single order.
+		wantBytes  map[string]string // expected content per image name, where it matters.
 	}{
 		{
 			name: "headings map and clamp",
@@ -195,6 +198,25 @@ func TestConvertBuiltParity(t *testing.T) {
 			want: "see [the site](https://example.com/x) for details\n",
 		},
 		{
+			// The link text is split across runs/spans, one of them emphasized: it
+			// must come out as a single link, not one per fragment.
+			name: "hyperlink text split across runs",
+			docx: docxZip(t,
+				docxP("", `<w:hyperlink r:id="rId9">`+
+					`<w:r><w:t>the </w:t></w:r>`+
+					`<w:r><w:rPr><w:b/></w:rPr><w:t>site</w:t></w:r>`+
+					`</w:hyperlink>`),
+				map[string][]byte{
+					"word/_rels/document.xml.rels": docxRels([3]string{"rId9", "hyperlink", "https://example.com/x"}),
+				}),
+			odt: odtZip(t,
+				`<text:p><text:a xlink:href="https://example.com/x">the `+
+					`<text:span text:style-name="TB">site</text:span></text:a></text:p>`,
+				`<style:style style:name="TB" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style>`,
+				nil),
+			want: "[the **site**](https://example.com/x)\n",
+		},
+		{
 			name: "bold and italic runs",
 			docx: docxZip(t,
 				docxP("", `<w:r><w:t>plain </w:t></w:r>`+
@@ -240,10 +262,39 @@ func TestConvertBuiltParity(t *testing.T) {
 					"Pictures/pic.png":     pngA,
 					"Pictures/alt/pic.png": pngB,
 				}),
-			// Two sources share the basename; links keep the basename and the
-			// extraction de-duplicates by name, so exactly one pic.png is written.
-			want:       "# Photo\n\n![](attachments/pic.png)\n\n![](attachments/pic.png)\n",
-			wantImages: []string{"pic.png"},
+			// Two distinct sources share a basename: both survive, the second under
+			// a suffixed name, and each link points at its own bytes.
+			want:       "# Photo\n\n![](attachments/pic.png)\n\n![](attachments/pic-2.png)\n",
+			wantImages: []string{"pic.png", "pic-2.png"},
+			wantBytes:  map[string]string{"pic.png": string(pngA), "pic-2.png": string(pngB)},
+		},
+		{
+			// Both formats mirror a soft break into the plain text, so an all-bold
+			// two-line paragraph stays a paragraph instead of becoming a heading.
+			name: "soft break keeps a bold paragraph out of the heading heuristic",
+			docx: docxZip(t, docxP("", `<w:r><w:rPr><w:b/></w:rPr><w:t>Short bold</w:t></w:r>`+
+				`<w:br/><w:r><w:rPr><w:b/></w:rPr><w:t>second line</w:t></w:r>`), nil),
+			odt: odtZip(t,
+				`<text:p><text:span text:style-name="TB">Short bold</text:span>`+
+					`<text:line-break/><text:span text:style-name="TB">second line</text:span></text:p>`,
+				`<style:style style:name="TB" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style>`,
+				nil),
+			want: "**Short bold**  \n**second line**\n",
+		},
+		{
+			name: "a tab inside a run is kept",
+			docx: docxZip(t, docxP("", `<w:r><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r>`), nil),
+			odt:  odtZip(t, `<text:p>a<text:tab/>b</text:p>`, "", nil),
+			want: "a\tb\n",
+		},
+		{
+			// "*" is both a bullet glyph and Markdown syntax: the marker must be
+			// stripped even though escapeMarkdown wrote it as "\*".
+			name: "asterisk bullets keep no escaped marker",
+			docx: docxZip(t, docxP("", `<w:r><w:t>* foo</w:t></w:r>`)+
+				docxP("", `<w:r><w:t>* bar</w:t></w:r>`), nil),
+			odt:  odtZip(t, `<text:p>* foo</text:p><text:p>* bar</text:p>`, "", nil),
+			want: "- foo\n- bar\n",
 		},
 		{
 			name: "empty document",
@@ -273,10 +324,75 @@ func TestConvertBuiltParity(t *testing.T) {
 					for i, img := range res.Images {
 						names[i] = img.Name
 						require.NotEmpty(t, img.Data)
+						if want, ok := tt.wantBytes[img.Name]; ok {
+							require.Equal(t, want, string(img.Data), img.Name)
+						}
 					}
 					require.ElementsMatch(t, tt.wantImages, names)
+					// Every attachment link in the body resolves to an extracted image.
+					for _, link := range attachmentLinks(res.Markdown) {
+						require.Contains(t, names, link)
+					}
 				})
 			}
+		})
+	}
+}
+
+// attachmentLinkRe matches the image links the converters emit, capturing the
+// file name they point at.
+var attachmentLinkRe = regexp.MustCompile(`!\[]\(` + AttachmentDir + `/([^)]+)\)`)
+
+// attachmentLinks lists the file names a document's image links point at.
+func attachmentLinks(markdown string) []string {
+	var out []string
+	for _, m := range attachmentLinkRe.FindAllStringSubmatch(markdown, -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+// TestConvertBuiltDocx covers docx-only markup quirks that have no .odt
+// counterpart.
+func TestConvertBuiltDocx(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "tab stop definitions emit no tabs",
+			body: docxP("", `<w:r><w:t>intro</w:t></w:r>`) +
+				docxP(`<w:tabs><w:tab w:val="left" w:pos="720"/><w:tab w:val="left" w:pos="1440"/></w:tabs>`,
+					`<w:r><w:t>hello</w:t></w:r>`),
+			want: "intro\n\nhello\n",
+		},
+		{
+			name: "run-level tab still emits a tab",
+			body: docxP("", `<w:r><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r>`),
+			want: "a\tb\n",
+		},
+		{
+			// A text box: the Choice branch holds the live copy, the Fallback a
+			// legacy redraw of the same text. Only the Choice is read, and its
+			// nested <w:p> is emitted once.
+			name: "alternate content text is not duplicated",
+			body: docxP("", `<w:r><mc:AlternateContent>`+
+				`<mc:Choice Requires="wps"><w:drawing><w:txbxContent>`+
+				`<w:p><w:r><w:t>boxtext</w:t></w:r></w:p>`+
+				`</w:txbxContent></w:drawing></mc:Choice>`+
+				`<mc:Fallback><w:pict><w:txbxContent>`+
+				`<w:p><w:r><w:t>boxtext</w:t></w:r></w:p>`+
+				`</w:txbxContent></w:pict></mc:Fallback>`+
+				`</mc:AlternateContent></w:r>`),
+			want: "boxtext\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := Convert("built.docx", docxZip(t, tt.body, nil))
+			require.NoError(t, err)
+			require.Equal(t, tt.want, res.Markdown)
 		})
 	}
 }

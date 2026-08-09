@@ -114,6 +114,10 @@ func render(blocks []block) string {
 		// marker (bullet↔ordered) at the same or a shallower level starts a new list,
 		// so blank-separate it too — otherwise Markdown reads them as one list.
 		newList := !prevList || (blk.listLvl <= prevLvl && blk.ordered != prevOrdered)
+		// A marker switch against a block at this level or shallower ends the list
+		// running here, so the next one at this level starts over. (A switch only
+		// deeper — a bullet sub-list under item 1 — leaves this level's list intact.)
+		restart := prevList && prevLvl <= blk.listLvl && blk.ordered != prevOrdered
 		if i > 0 {
 			if newList {
 				b.WriteString("\n\n")
@@ -123,17 +127,19 @@ func render(blocks []block) string {
 		}
 		prevList = true
 		prevLvl, prevOrdered = blk.listLvl, blk.ordered
+		if restart {
+			delete(counters, blk.listLvl)
+		}
+		// Any list deeper than this block is closed by it; re-entering one restarts
+		// its numbering.
+		for lvl := range counters {
+			if lvl > blk.listLvl {
+				delete(counters, lvl)
+			}
+		}
 		b.WriteString(strings.Repeat("  ", blk.listLvl-1))
 		if blk.ordered {
 			counters[blk.listLvl]++
-			// A deeper level starting resets nothing; a shallower one is handled by
-			// the non-list reset above. Reset any deeper counters so re-entering a
-			// nested list restarts its numbering.
-			for lvl := range counters {
-				if lvl > blk.listLvl {
-					delete(counters, lvl)
-				}
-			}
 			if blk.alpha {
 				// A lettered list (a. b. c.) is preserved as written. Markdown has no
 				// alpha-ordered marker, so it's emitted as a literal "a. " prefix
@@ -191,9 +197,13 @@ func emphasize(text string, bold, italic bool) string {
 }
 
 // escapeMarkdown escapes the characters that would otherwise be read as Markdown
-// syntax in body text. Kept minimal: the markers our converters insert (** _ [])
-// are escaped so source text containing them stays literal, plus backslash and
-// the line-leading characters that start blocks.
+// syntax in body text: the inline markers our converters insert (** _ [] `) so
+// source text containing them stays literal, plus the backslash that escapes
+// them. It runs per run/span, with no idea where a line begins, so the
+// block-leading characters (# > + -) are left alone — escaping them everywhere
+// would mangle hyphens and pluses mid-sentence, and a paragraph that really does
+// start with "# " or "- " is text drawing its own structure, which the heuristics
+// in finishParagraph are meant to recover.
 func escapeMarkdown(s string) string {
 	return markdownEscaper.Replace(s)
 }
@@ -233,7 +243,7 @@ func finishParagraph(markup, plain string, heading, listLvl int, ordered, styled
 			lvl := indentLevel(indent)
 			var out []block
 			for _, line := range strings.Split(markup, "\n") {
-				item, isOrdered, isAlpha, ok := stripListMarker(strings.TrimSpace(line))
+				item, isOrdered, isAlpha, ok := stripMarkupListMarker(strings.TrimSpace(line))
 				if !ok {
 					item = strings.TrimSpace(line)
 				}
@@ -267,6 +277,23 @@ func stripListMarker(s string) (rest string, ordered, alpha, isItem bool) {
 	}
 	if r, isAlpha, ok := stripOrderedMarker(s); ok {
 		return r, true, isAlpha, true
+	}
+	return s, false, false, false
+}
+
+// stripMarkupListMarker is stripListMarker for a line of emitted Markdown, where
+// escapeMarkdown has backslash-escaped any marker it also treats as syntax — a
+// "* foo" bullet reaches us as "\* foo". Only a single escaping backslash is
+// stepped over, so source text that really began with a backslash ("\\* foo"
+// once escaped) stays a paragraph.
+func stripMarkupListMarker(s string) (rest string, ordered, alpha, isItem bool) {
+	if r, isOrdered, isAlpha, ok := stripListMarker(s); ok {
+		return r, isOrdered, isAlpha, ok
+	}
+	if unescaped, found := strings.CutPrefix(strings.TrimLeft(s, " \t"), `\`); found {
+		if r, isOrdered, isAlpha, ok := stripListMarker(unescaped); ok {
+			return r, isOrdered, isAlpha, ok
+		}
 	}
 	return s, false, false, false
 }
@@ -364,37 +391,54 @@ const heuristicHeadingLevel = 2
 
 // ── image extraction ─────────────────────────────────────────────────
 
-// extractImages pulls the referenced image files from the archive. mediaByRelID
-// maps a relationship id to its target path (relative to prefix, e.g. "word/" for
-// docx or "" for odt); usedRels limits extraction to images actually placed in
-// the body. Each image's Name is its basename, matching the ![](attachments/Name)
-// link the body emits. Names are de-duplicated so two sources can't collide.
-func extractImages(zr *zip.Reader, prefix string, mediaByRelID map[string]string, usedRels map[string]bool) ([]Image, error) {
-	seen := map[string]bool{}
-	var images []Image
-	for rel := range usedRels {
-		target := mediaByRelID[rel]
-		if target == "" {
-			continue
-		}
-		name := imageName(target)
-		if seen[name] {
-			continue // same media referenced twice: write it once.
-		}
+// imageNamer is the single naming decision behind both the emitted
+// ![](attachments/Name) link and the extracted file, so the two always agree. A
+// target keeps its basename; a second target sharing that basename (word/media/
+// pic.png vs word/media2/pic.png) gets a "-2" suffix rather than overwriting it.
+// Names are handed out in first-reference order, so a document always converts
+// to the same Markdown.
+type imageNamer struct {
+	nameByTarget map[string]string
+	taken        map[string]bool
+	targets      []string // distinct targets in first-reference order.
+}
+
+func newImageNamer() *imageNamer {
+	return &imageNamer{nameByTarget: map[string]string{}, taken: map[string]bool{}}
+}
+
+// name returns the file name for a media target, assigning one on first
+// reference; referencing the same target again reuses it (one written file).
+func (n *imageNamer) name(target string) string {
+	if got, ok := n.nameByTarget[target]; ok {
+		return got
+	}
+	base := path.Base(filepath.ToSlash(target))
+	ext := path.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	name := base
+	for i := 2; n.taken[name]; i++ {
+		name = fmt.Sprintf("%s-%d%s", stem, i, ext)
+	}
+	n.nameByTarget[target] = name
+	n.taken[name] = true
+	n.targets = append(n.targets, target)
+	return name
+}
+
+// extractImages reads every media target the body referenced, in that order,
+// under the name the emitted link already used. prefix is where the format keeps
+// its media relative to the archive root ("word/" for docx, "" for odt).
+func extractImages(zr *zip.Reader, prefix string, namer *imageNamer) ([]Image, error) {
+	images := make([]Image, 0, len(namer.targets))
+	for _, target := range namer.targets {
 		data, err := readZipEntry(zr, prefix+target)
 		if err != nil {
 			return nil, err
 		}
-		seen[name] = true
-		images = append(images, Image{Name: name, Data: data})
+		images = append(images, Image{Name: namer.nameByTarget[target], Data: data})
 	}
 	return images, nil
-}
-
-// imageName is the basename of a media target path, used both in the emitted
-// ![](attachments/Name) link and as the written file's name.
-func imageName(target string) string {
-	return path.Base(filepath.ToSlash(target))
 }
 
 // ── shared XML / zip helpers ─────────────────────────────────────────
@@ -439,8 +483,9 @@ func readText(dec *xml.Decoder, start xml.StartElement) (string, error) {
 	}
 }
 
-// attr returns a start element's attribute by local name (namespace ignored), or
-// "" if absent.
+// attr returns a start element's attribute by local name, or "" if absent. The
+// namespace is ignored, which is enough even for the namespaced ones (r:id,
+// r:embed, xlink:href) — no element here carries two same-named attributes.
 func attr(e xml.StartElement, local string) string {
 	for _, a := range e.Attr {
 		if a.Name.Local == local {
@@ -448,12 +493,6 @@ func attr(e xml.StartElement, local string) string {
 		}
 	}
 	return ""
-}
-
-// attrNS is attr by local name but used where the attribute is namespaced (e.g.
-// the relationships r:id); it matches on local name alone, which is enough here.
-func attrNS(e xml.StartElement, local string) string {
-	return attr(e, local)
 }
 
 // attrBool reads a boolean toggle attribute (e.g. w:b's optional w:val): present

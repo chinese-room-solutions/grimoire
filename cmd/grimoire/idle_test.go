@@ -12,7 +12,7 @@ import (
 
 func TestIdleTrackerFiresAfterTimeout(t *testing.T) {
 	var fired atomic.Bool
-	tr := newIdleTracker(30*time.Millisecond, func() { fired.Store(true) })
+	tr := newIdleTracker(30*time.Millisecond, nil, func() { fired.Store(true) })
 	defer tr.stop()
 	require.Eventually(t, fired.Load, time.Second, 5*time.Millisecond,
 		"onIdle should run once the window elapses with no activity")
@@ -20,7 +20,7 @@ func TestIdleTrackerFiresAfterTimeout(t *testing.T) {
 
 func TestIdleTrackerResetOnRequest(t *testing.T) {
 	var fired atomic.Bool
-	tr := newIdleTracker(60*time.Millisecond, func() { fired.Store(true) })
+	tr := newIdleTracker(60*time.Millisecond, nil, func() { fired.Store(true) })
 	defer tr.stop()
 	handler := tr.wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 
@@ -42,7 +42,7 @@ func TestIdleTrackerResetOnRequest(t *testing.T) {
 // last one ends.
 func TestIdleTrackerHeldByInFlightRequest(t *testing.T) {
 	var fired atomic.Bool
-	tr := newIdleTracker(30*time.Millisecond, func() { fired.Store(true) })
+	tr := newIdleTracker(30*time.Millisecond, nil, func() { fired.Store(true) })
 	defer tr.stop()
 	release := make(chan struct{})
 	handler := tr.wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
@@ -65,8 +65,27 @@ func TestIdleTrackerHeldByInFlightRequest(t *testing.T) {
 
 func TestIdleTrackerStopPreventsFiring(t *testing.T) {
 	var fired atomic.Bool
-	tr := newIdleTracker(20*time.Millisecond, func() { fired.Store(true) })
+	tr := newIdleTracker(20*time.Millisecond, nil, func() { fired.Store(true) })
 	tr.stop()
 	time.Sleep(60 * time.Millisecond)
 	require.False(t, fired.Load(), "a stopped tracker must not fire")
+}
+
+// TestIdleTrackerHeldByBusyWork guards the case an in-flight request can't cover:
+// a kernel session still running after the SSE stream that started it returned.
+// Nothing calls end() to restart the countdown, so the tracker must reschedule
+// itself while busy reports true — and retire once it stops.
+func TestIdleTrackerHeldByBusyWork(t *testing.T) {
+	var busy, fired atomic.Bool
+	busy.Store(true)
+	tr := newIdleTracker(20*time.Millisecond, busy.Load, func() { fired.Store(true) })
+	defer tr.stop()
+
+	// Several windows pass with no requests at all: busy alone keeps it alive.
+	time.Sleep(100 * time.Millisecond)
+	require.False(t, fired.Load(), "busy work must hold the backend alive")
+
+	busy.Store(false)
+	require.Eventually(t, fired.Load, time.Second, 5*time.Millisecond,
+		"the tracker retires once the work finishes")
 }

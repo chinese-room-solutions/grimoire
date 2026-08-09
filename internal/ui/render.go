@@ -15,9 +15,9 @@ import (
 
 	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
 	"github.com/alecthomas/chroma/v2/styles"
-	"github.com/chinese-room-solutions/grimoire/internal/appconfig"
 	"github.com/chinese-room-solutions/grimoire/internal/fence"
 	"github.com/chinese-room-solutions/grimoire/internal/frontmatter"
+	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
 	"github.com/chinese-room-solutions/mass-sdk/uikit"
 	"github.com/yuin/goldmark"
 	highlighting "github.com/yuin/goldmark-highlighting/v2"
@@ -68,6 +68,108 @@ const NoteLinkScheme = "grimoire-note:"
 // wikilink matches Obsidian-style [[Target]] and [[Target|Alias]] references.
 var wikilink = regexp.MustCompile(`\[\[([^\]|]+)(?:\|([^\]]+))?\]\]`)
 
+// rewriteWikilinks turns [[Target]] and [[Target|Alias]] into Markdown links to
+// the note scheme, skipping code: `[[ -f x ]]` in a bash fence or [[nodiscard]]
+// in a code span is code, not a link, and rewriting it would change what the
+// block displays, runs, and hashes.
+func rewriteWikilinks(source string) string {
+	if !strings.Contains(source, "[[") {
+		return source
+	}
+	segs, err := codeSegments(source)
+	if err != nil {
+		// Without the code ranges a rewrite would mangle code, so leave the note as
+		// written: its wikilinks stay literal, which beats broken blocks.
+		return source
+	}
+	var b strings.Builder
+	prev := 0
+	for _, seg := range segs {
+		if seg.start < prev {
+			continue
+		}
+		b.WriteString(wikilink.ReplaceAllStringFunc(source[prev:seg.start], noteLink))
+		b.WriteString(source[seg.start:seg.stop])
+		prev = seg.stop
+	}
+	b.WriteString(wikilink.ReplaceAllStringFunc(source[prev:], noteLink))
+	return b.String()
+}
+
+// noteLink renders one matched wikilink as a Markdown link. The URL is
+// percent-encoded so spaces in note names don't break parsing; the click handler
+// decodes it.
+func noteLink(m string) string {
+	g := wikilink.FindStringSubmatch(m)
+	target, alias := strings.TrimSpace(g[1]), strings.TrimSpace(g[2])
+	if alias == "" {
+		alias = target
+	}
+	return "[" + alias + "](" + NoteLinkScheme + url.PathEscape(target) + ")"
+}
+
+// srcSegment is a half-open byte range of a note's source.
+type srcSegment struct{ start, stop int }
+
+// codeSegments returns the source ranges that hold code — fenced and indented
+// blocks, and inline code spans — in document order. It parses with the renderer's
+// own parser, so what counts as code here is what the reader will see as code.
+func codeSegments(source string) ([]srcSegment, error) {
+	src := []byte(source)
+	doc := md.Parser().Parse(text.NewReader(src))
+	var out []srcSegment
+	err := ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		var seg srcSegment
+		var ok bool
+		switch n.(type) {
+		case *ast.FencedCodeBlock, *ast.CodeBlock:
+			seg, ok = linesSegment(n.Lines())
+		case *ast.CodeSpan:
+			seg, ok = childrenSegment(n)
+		}
+		if ok {
+			out = append(out, seg)
+		}
+		return ast.WalkContinue, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walking the note for code ranges: %w", err)
+	}
+	return out, nil
+}
+
+// linesSegment spans a block node's source lines, from the first line's start to
+// the last line's end.
+func linesSegment(lines *text.Segments) (srcSegment, bool) {
+	if lines == nil || lines.Len() == 0 {
+		return srcSegment{}, false
+	}
+	return srcSegment{lines.At(0).Start, lines.At(lines.Len() - 1).Stop}, true
+}
+
+// childrenSegment spans an inline node's text children, which is where a code
+// span keeps its content (the backticks themselves are not in the AST).
+func childrenSegment(n ast.Node) (srcSegment, bool) {
+	seg, ok := srcSegment{}, false
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		t, isText := c.(*ast.Text)
+		if !isText {
+			continue
+		}
+		if !ok || t.Segment.Start < seg.start {
+			seg.start = t.Segment.Start
+		}
+		if !ok || t.Segment.Stop > seg.stop {
+			seg.stop = t.Segment.Stop
+		}
+		ok = true
+	}
+	return seg, ok
+}
+
 // Property is a frontmatter key and its value(s) for the properties panel.
 type Property = frontmatter.Property
 
@@ -75,9 +177,9 @@ type Property = frontmatter.Property
 // properties (for the panel), the raw Markdown body (for the editor), and the
 // body rendered to HTML (for reading). notePath, when set, lets each runnable
 // block re-hydrate its last run from the cache (pass "" when the path is unknown).
-func RenderNote(source, notePath string) (props []Property, rawBody, bodyHTML string) {
+func RenderNote(nr NoteRenderer, source, notePath string) (props []Property, rawBody, bodyHTML string) {
 	props, body := frontmatter.Split(source)
-	return props, body, RenderNoteBody(body, notePath)
+	return props, body, RenderNoteBody(nr, body, notePath)
 }
 
 // propIcon picks a Shoelace icon for a frontmatter property by its key, mirroring
@@ -97,53 +199,37 @@ func propIcon(key string) string {
 	}
 }
 
-// RenderMarkdown converts a note's Markdown source to HTML for preview. Code
-// blocks render empty output panels (no run history). Use RenderNoteBody when the
-// note's path is known so cached run output can be re-hydrated.
-func RenderMarkdown(source string) string {
-	return renderBody(source, "")
-}
-
-// RenderNoteBody is RenderMarkdown for a note at a known vault path, so each
-// runnable block whose last run is cached re-hydrates its output panel.
-func RenderNoteBody(source, notePath string) string {
-	return renderBody(source, notePath)
+// RenderNoteBody converts a note's Markdown source to HTML for preview. With a
+// notePath set, each runnable block whose last run is cached re-hydrates its
+// output panel; pass "" when the path is unknown.
+func RenderNoteBody(nr NoteRenderer, source, notePath string) string {
+	return renderBody(nr, source, notePath)
 }
 
 // renderBody renders a note's Markdown to preview HTML, turning [[wikilinks]]
 // into in-vault links first, and wraps code blocks (run buttons, kernel badges,
 // and — when notePath is set — cached run output).
-func renderBody(source, notePath string) string {
-	source = wikilink.ReplaceAllStringFunc(source, func(m string) string {
-		g := wikilink.FindStringSubmatch(m)
-		target, alias := strings.TrimSpace(g[1]), strings.TrimSpace(g[2])
-		if alias == "" {
-			alias = target
-		}
-		// Emit a normal Markdown link. The URL is percent-encoded so spaces in
-		// note names don't break parsing; the click handler decodes it.
-		return "[" + alias + "](" + NoteLinkScheme + url.PathEscape(target) + ")"
-	})
-
+func renderBody(nr NoteRenderer, source, notePath string) string {
 	// Per-block data recovered from the source (chroma drops it from the rendered
 	// HTML): the {kernel=FAMILY}{version=VER} override and the block's raw source.
 	// Overrides are only needed when one is actually present; sources only when a
-	// note path lets us look up cached output.
+	// note path lets us look up cached output. Both read the note as written, so a
+	// block's source hashes to the same key the app stores it under.
 	var overrides []blockFence
 	var sources []string
 	if strings.Contains(source, "{kernel=") || strings.Contains(source, "{version=") {
 		overrides = blockKernels(source)
 	}
-	if notePath != "" && RunResultLoader != nil {
+	if notePath != "" && nr.RunResult != nil {
 		sources = blockSources(source)
 	}
 
 	var buf bytes.Buffer
-	if err := md.Convert([]byte(source), &buf); err != nil {
+	if err := md.Convert([]byte(rewriteWikilinks(source)), &buf); err != nil {
 		// Fall back to the raw text rather than failing the preview.
 		return "<pre>" + strings.ReplaceAll(source, "<", "&lt;") + "</pre>"
 	}
-	return wrapCodeBlocksWithRuns(resolveImageSrcs(renderCallouts(buf.String())), overrides, sources, notePath)
+	return wrapCodeBlocksWithRuns(nr, resolveImageSrcs(renderCallouts(buf.String())), overrides, sources, notePath)
 }
 
 // blockFence is a block's per-block kernel override, recovered from its fence
@@ -211,26 +297,37 @@ var preBlock = regexp.MustCompile(`(?s)<pre[ >].*?</pre>`)
 // data-lang in a rendered block).
 var preLang = regexp.MustCompile(`<pre[^>]* data-lang="([^"]*)"`)
 
+// preFenced tells a rendered fenced block from an indented one: codeWrapper marks
+// every fence's <pre> with class="chroma", while an indented block falls through
+// to goldmark's plain <pre><code>. Only fences are numbered, so a block's DOM id
+// matches the app's fenced-block index (see app.extractCodeBlocks).
+var preFenced = regexp.MustCompile(`^<pre[^>]*\bclass="chroma"`)
+
 // wrapCodeBlocks wraps each rendered code block in a relative box and pins a copy
 // button to it; blocks tagged with a language a kernel could run also get a Run
 // button and an (initially hidden) output panel. The buttons are plain
 // server-rendered markup; the webview delegates their clicks (see initCopy /
 // initRun). The <pre> scrolls horizontally, so the buttons can't live inside it —
-// the non-scrolling wrapper holds them instead. Each block gets a positional id
-// so run output can be streamed into its own panel.
-// KernelResolver, when set, returns the label and version of the kernel that will
-// run a block of the given language with the given per-block family/version
-// override. ok is false when the language isn't runnable. The app wires this at
-// startup so the render layer can show which kernel a block uses without
-// depending on the kernel registry directly.
-var KernelResolver func(lang, family, version string) (label, version2 string, ok bool)
-
-// RunResultLoader, when set, returns a block's last run for the note at notePath,
-// looked up by the block's source (the app hashes it to the stored key). ok is
-// false when the block was never run or its code changed since. The app wires
-// this at startup so a reopened note re-hydrates each block's saved output
-// without the render layer depending on the run-result store.
-var RunResultLoader func(notePath, code string) (RunResult, bool)
+// the non-scrolling wrapper holds them instead. Each fenced block gets a
+// positional id so run output can be streamed into its own panel.
+// NoteRenderer carries the vault-specific lookups a note render needs. The
+// daemon serves many vaults at once, so these ride with each render rather than
+// living in package state: the caller builds one from the vault's service and
+// passes it down. The zero value renders plain Markdown — no run buttons, no
+// re-hydrated output.
+type NoteRenderer struct {
+	// Kernel, when set, returns the label and version of the kernel that will run
+	// a block of the given language with the given per-block family/version
+	// override. ok is false when the language isn't runnable — the render layer
+	// asks rather than depending on the kernel registry directly.
+	Kernel func(lang, family, version string) (label, version2 string, ok bool)
+	// RunResult, when set, returns a block's last run for the note at notePath,
+	// looked up by the block's source (the app hashes it to the stored key). ok is
+	// false when the block was never run or its code changed since, so a reopened
+	// note re-hydrates its saved output without the render layer depending on the
+	// run-result store.
+	RunResult func(notePath, code string) (RunResult, bool)
+}
 
 // RunResult is a block's persisted last run, mirrored from the app/runs layer so
 // the render layer can paint it without importing the store. Items are output
@@ -259,8 +356,8 @@ const (
 	MIMEHTML = "text/html"
 )
 
-func wrapCodeBlocks(rendered string, overrides []blockFence) string {
-	return wrapCodeBlocksWithRuns(rendered, overrides, nil, "")
+func wrapCodeBlocks(nr NoteRenderer, rendered string, overrides []blockFence) string {
+	return wrapCodeBlocksWithRuns(nr, rendered, overrides, nil, "")
 }
 
 // wrapCodeBlocksWithRuns is wrapCodeBlocks with each block's raw source and the
@@ -268,11 +365,19 @@ func wrapCodeBlocks(rendered string, overrides []blockFence) string {
 // (saved output + footer + time) instead of starting empty. sources is indexed
 // the same as overrides (document order); an empty notePath or nil loader leaves
 // every panel empty, as before.
-func wrapCodeBlocksWithRuns(rendered string, overrides []blockFence, sources []string, notePath string) string {
+func wrapCodeBlocksWithRuns(
+	nr NoteRenderer, rendered string, overrides []blockFence, sources []string, notePath string,
+) string {
 	i := -1
 	return preBlock.ReplaceAllStringFunc(rendered, func(block string) string {
-		i++
 		copyBtn := `<sl-icon-button class="g-code-copy" name="copy" label="Copy code"></sl-icon-button>`
+		if !preFenced.MatchString(block) {
+			// An indented code block: copyable, but no id and no run plumbing. The
+			// app only knows fenced blocks, so numbering this one would shift every
+			// later block's id away from the index a run targets.
+			return `<div class="g-code-block">` + block + copyBtn + `</div>`
+		}
+		i++
 		lang := ""
 		if m := preLang.FindStringSubmatch(block); m != nil {
 			lang = m[1]
@@ -288,8 +393,8 @@ func wrapCodeBlocksWithRuns(rendered string, overrides []blockFence, sources []s
 		// copy button (no Run, no badge), like a plain no-language block.
 		var label string
 		runnable := false
-		if lang != "" && KernelResolver != nil {
-			label, _, runnable = KernelResolver(lang, ov.Family, ov.Version)
+		if lang != "" && nr.Kernel != nil {
+			label, _, runnable = nr.Kernel(lang, ov.Family, ov.Version)
 		}
 		id := strconv.Itoa(i)
 		if !runnable {
@@ -325,8 +430,8 @@ func wrapCodeBlocksWithRuns(rendered string, overrides []blockFence, sources []s
 		// reopening the note shows the previous output. A miss (never run, or edited
 		// since) leaves the panel empty and hidden.
 		panel := `<div class="g-code-output" id="g-code-output-` + id + `" hidden></div>`
-		if RunResultLoader != nil && notePath != "" && i < len(sources) {
-			if res, ok := RunResultLoader(notePath, sources[i]); ok {
+		if nr.RunResult != nil && notePath != "" && i < len(sources) {
+			if res, ok := nr.RunResult(notePath, sources[i]); ok {
 				panel = runResultPanelHTML(id, res)
 			}
 		}
@@ -388,12 +493,18 @@ func isAbsoluteURL(src string) bool {
 		strings.HasPrefix(src, VaultFileRoute)
 }
 
-// calloutBlockquote matches a blockquote whose first paragraph opens with an
+// calloutHead matches a blockquote's opening paragraph when it carries an
 // Obsidian callout marker "[!type]" (optionally followed by a title on the same
-// line), capturing the type, the title, and the remaining body of that paragraph.
-// goldmark renders a callout as a plain <blockquote><p>[!type] Title\nbody…</p>;
-// we rewrite it into a styled callout box.
-var calloutBlockquote = regexp.MustCompile(`(?is)<blockquote>\s*<p>\s*\[!([a-z]+)\]([^\n<]*)\n?(.*?)</p>(.*?)</blockquote>`)
+// line), capturing the type, the title, and the rest of that paragraph. goldmark
+// renders a callout as a plain <blockquote><p>[!type] Title\nbody…</p>; we
+// rewrite it into a styled callout box.
+var calloutHead = regexp.MustCompile(`(?is)^\s*<p>\s*\[!([a-z]+)\]([^\n<]*)\n?(.*?)</p>`)
+
+// The blockquote tags goldmark emits, matched literally while scanning.
+const (
+	blockquoteOpen  = "<blockquote>"
+	blockquoteClose = "</blockquote>"
+)
 
 // calloutIcons maps a callout type to a Shoelace icon, with a default for
 // unrecognized types. Aliases mirror Obsidian's common set.
@@ -409,32 +520,83 @@ var calloutIcons = map[string]string{
 // renderCallouts rewrites goldmark's blockquote rendering of Obsidian callouts
 // ("> [!note] Title") into styled callout boxes: a header with an icon and title,
 // then the body. The title defaults to the capitalized type when omitted. A
-// blockquote that isn't a callout is left untouched.
+// blockquote that isn't a callout is left untouched. Quotes are matched by
+// scanning rather than by regexp, so a callout holding a nested quote isn't cut
+// short at the inner </blockquote>; nested quotes are rewritten in turn.
 func renderCallouts(html string) string {
-	return calloutBlockquote.ReplaceAllStringFunc(html, func(m string) string {
-		g := calloutBlockquote.FindStringSubmatch(m)
-		typ := strings.ToLower(g[1])
-		title := strings.TrimSpace(g[2])
-		if title == "" {
-			title = strings.ToUpper(typ[:1]) + typ[1:]
+	var b strings.Builder
+	rest := html
+	for {
+		i := strings.Index(rest, blockquoteOpen)
+		if i < 0 {
+			break
 		}
-		icon := calloutIcons[typ]
-		if icon == "" {
-			icon = "info-circle"
+		inner, end, ok := blockquoteAt(rest, i)
+		if !ok {
+			break // Unbalanced markup: leave the remainder as it came.
 		}
-		// The first paragraph's remaining text (g[3]) plus any following blocks
-		// (g[4]) form the body. Wrap the first-paragraph remainder back in a <p> so
-		// it keeps paragraph spacing alongside the rest.
-		body := strings.TrimSpace(g[3])
-		if body != "" {
-			body = "<p>" + body + "</p>"
+		b.WriteString(rest[:i])
+		b.WriteString(callout(renderCallouts(inner)))
+		rest = rest[end:]
+	}
+	b.WriteString(rest)
+	return b.String()
+}
+
+// blockquoteAt returns the content of the blockquote opening at html[i:] and the
+// offset just past its closing tag. Nested quotes are counted, so an outer quote
+// ends at its own close.
+func blockquoteAt(html string, i int) (inner string, end int, ok bool) {
+	start := i + len(blockquoteOpen)
+	depth := 0
+	for p := i; p < len(html); {
+		openAt := strings.Index(html[p:], blockquoteOpen)
+		closeAt := strings.Index(html[p:], blockquoteClose)
+		if closeAt < 0 {
+			return "", 0, false
 		}
-		body += g[4]
-		return `<div class="g-callout g-callout-` + typ + `">` +
-			`<div class="g-callout-head"><sl-icon name="` + icon + `"></sl-icon>` +
-			`<span class="g-callout-title">` + title + `</span></div>` +
-			`<div class="g-callout-body">` + body + `</div></div>`
-	})
+		if openAt >= 0 && openAt < closeAt {
+			depth++
+			p += openAt + len(blockquoteOpen)
+			continue
+		}
+		depth--
+		p += closeAt + len(blockquoteClose)
+		if depth == 0 {
+			return html[start : p-len(blockquoteClose)], p, true
+		}
+	}
+	return "", 0, false
+}
+
+// callout turns a blockquote's content into a styled callout box when it opens
+// with a callout marker, and hands back the plain blockquote when it doesn't.
+func callout(inner string) string {
+	g := calloutHead.FindStringSubmatch(inner)
+	if g == nil {
+		return blockquoteOpen + inner + blockquoteClose
+	}
+	typ := strings.ToLower(g[1])
+	title := strings.TrimSpace(g[2])
+	if title == "" {
+		title = strings.ToUpper(typ[:1]) + typ[1:]
+	}
+	icon := calloutIcons[typ]
+	if icon == "" {
+		icon = "info-circle"
+	}
+	// The marker paragraph's remaining text (g[3]) plus everything after that
+	// paragraph form the body. Wrap the remainder back in a <p> so it keeps
+	// paragraph spacing alongside the rest.
+	body := strings.TrimSpace(g[3])
+	if body != "" {
+		body = "<p>" + body + "</p>"
+	}
+	body += inner[len(g[0]):]
+	return `<div class="g-callout g-callout-` + typ + `">` +
+		`<div class="g-callout-head"><sl-icon name="` + icon + `"></sl-icon>` +
+		`<span class="g-callout-title">` + title + `</span></div>` +
+		`<div class="g-callout-body">` + body + `</div></div>`
 }
 
 //go:embed grimoire.js
@@ -468,10 +630,9 @@ type State struct {
 	// Theme is the resolved active theme name, set by RenderFullPage — it seeds
 	// the $gTheme signal.
 	Theme string
-	// TrashMode is the soft-delete policy for the Settings control: "all" (trash
-	// every delete), "agents" (trash only AI-agent deletes), or "off"
-	// (permanent for everyone).
-	TrashMode string
+	// TrashEnabled seeds the Settings trash switch: deletes move to the vault's
+	// trash (restorable) rather than being permanent.
+	TrashEnabled bool
 	// Recents are the vaults Grimoire knows about, shown as quick-pick rows in the
 	// empty state (ignored when HasVault is true).
 	Recents []VaultRef
@@ -484,10 +645,31 @@ type State struct {
 }
 
 // VaultRef is one vault in the empty-state picker: its display name (the folder's
-// base name) and absolute path (what open-vault binds).
+// base name) and absolute path (what api/vaults/add opens).
 type VaultRef struct {
 	Name string
 	Path string
+}
+
+// VaultRow is one row of the sidebar's Vaults tab. Detail is the pre-formatted
+// tooltip (chunk count, last sync, embedding model): the list shows name and
+// path, and the numbers stay one hover away rather than making every row three
+// lines tall.
+type VaultRow struct {
+	Name      string
+	Path      string
+	Current   bool
+	Available bool
+	Detail    string
+}
+
+// boolAttr renders a boolean as the "true"/"false" a data- attribute carries
+// (an absent attribute and a "false" one are different things to JS).
+func boolAttr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // megapixels formats a pixel count for the Vault menu's resolution input,
@@ -511,6 +693,10 @@ type ConnState struct {
 // saved values so the model selects and vault input show the current choice.
 func initialSignals(st State) string {
 	sig := map[string]any{
+		// The vault this page is for, as an absolute path. Datastar sends the whole
+		// signal store with every request, so every action the page fires carries it
+		// and the daemon resolves the right vault without a per-URL parameter.
+		"gVault":      st.Vault,
 		"gBusy":       false,
 		"gSearchBusy": false,
 		// When the restored focused tab is the graph, mark content present so the
@@ -521,17 +707,19 @@ func initialSignals(st State) string {
 		"gPreviewTitle": "",
 		"gGraphK":       6,
 		"gGraphMinSim":  0.5,
-		// Search tuning, surfaced as the session view's top-panel sliders.
-		"gSearchK":      10,
-		"gSearchMinSim": 0.5,
-		"gModel":        st.EmbedModel,
-		"gConvertModel": st.ConvertModel,
+		// Search tuning, surfaced as the session view's top-panel sliders. Search
+		// covers every vault unless gSearchThisVault narrows it to this page's.
+		"gSearchK":         10,
+		"gSearchMinSim":    0.5,
+		"gSearchThisVault": false,
+		"gModel":           st.EmbedModel,
+		"gConvertModel":    st.ConvertModel,
 		// gRunKernel/gRunVersion carry a block's per-run {kernel=FAMILY}{version=VER}
 		// override to the run path.
 		"gRunKernel":  "",
 		"gRunVersion": "",
-		// Trash setting: seeded so the control reflects the persisted mode.
-		"gTrashMode": st.TrashMode,
+		// Trash setting: seeded so the control reflects the persisted value.
+		"gTrashEnabled": st.TrashEnabled,
 		// The active theme. Theme-reactive markup (the Extensions dialog's
 		// active check) data-shows against it; themePicker.apply updates it.
 		"gTheme": st.Theme,
@@ -543,23 +731,84 @@ func initialSignals(st State) string {
 	return string(b)
 }
 
-// sourceLabel formats a hit's provenance line: its note path, and the heading
-// the match fell under when one is known.
+// sourceLabel formats a hit's provenance line: the vault it came from, its note
+// path, and the heading the match fell under when one is known. Search spans
+// every vault, so the vault is always shown when known — a label that only
+// sometimes says where a note lives is one the reader has to think about.
 func sourceLabel(h Hit) string {
+	label := h.Path
 	if h.Heading != "" {
-		return h.Path + " › " + h.Heading
+		label += " › " + h.Heading
 	}
-	return h.Path
+	if name := vaultdir.Name(h.Vault); name != "" {
+		label = name + " › " + label
+	}
+	return label
 }
 
-// snippet trims a chunk to a short preview for the search results list.
+// hitGroup is one embedding model's block of search results: the vaults its
+// hits came from and the model that ranked them, as the labels a fold shows.
+type hitGroup struct {
+	Model  string // the model id, or "keyword only" when no model ranked these.
+	Vaults string // the vaults' folder names, joined.
+	Hits   []Hit
+}
+
+// hitGroups splits a result list into its model blocks. Hits arrive grouped by
+// the model that ranked them (a cross-vault search lists one model's ranking
+// after another's), so the split is over the runs of equal Model — which leaves
+// one group for the usual single-model search and for any turn recorded before
+// hits carried a model.
+func hitGroups(hits []Hit) []hitGroup {
+	var out []hitGroup
+	for start := 0; start < len(hits); {
+		end := start + 1
+		for end < len(hits) && hits[end].Model == hits[start].Model {
+			end++
+		}
+		out = append(out, hitGroup{
+			Model:  hitGroupModel(hits[start].Model),
+			Vaults: hitGroupVaults(hits[start:end]),
+			Hits:   hits[start:end],
+		})
+		start = end
+	}
+	return out
+}
+
+func hitGroupModel(model string) string {
+	if model == "" {
+		return "keyword only"
+	}
+	return model
+}
+
+// hitGroupVaults joins the distinct vault names a group's hits came from, in
+// the order they first appear.
+func hitGroupVaults(hits []Hit) string {
+	var names []string
+	seen := map[string]bool{}
+	for _, h := range hits {
+		name := vaultdir.Name(h.Vault)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	return strings.Join(names, ", ")
+}
+
+// snippet trims a chunk to a short preview for the search results list. The cut
+// is by rune, so a multibyte character can't be split into invalid UTF-8.
 func snippet(s string) string {
-	const max = 240
+	const maxRunes = 240
 	s = strings.TrimSpace(s)
-	if len(s) <= max {
+	r := []rune(s)
+	if len(r) <= maxRunes {
 		return s
 	}
-	return strings.TrimSpace(s[:max]) + "…"
+	return strings.TrimSpace(string(r[:maxRunes])) + "…"
 }
 
 func script() string {
@@ -624,30 +873,9 @@ var styleBlock = `<style>
    so the two bottom-bar menus read as one family. Wider than the gear's 220px to
    fit the model selects, and height-capped so the taller content scrolls. */
 #app-grimoire .g-menu-panel{display:flex;flex-direction:column;gap:0.75rem;padding:0.85rem;width:248px;max-height:min(72vh,32rem);overflow-y:auto;background:var(--mass-bg-panel);border:1px solid var(--mass-border);border-radius:0.5rem}
-/* Trash-mode toggle: a pill track with a dot per stop and a round thumb that
-   slides to the active stop (like the editor's "Effort" multi-state toggle),
-   coloured by policy — blue for everyone, yellow for agents-only, the usual
-   disabled grey for off. The thumb is positioned from --g-trash-i (the active
-   stop's index, set by initTrashMode) and coloured from [data-mode]; the dots are
-   just visual stops, the whole row is clickable. */
-#app-grimoire .g-trash-field{display:flex;flex-direction:column;gap:var(--sl-spacing-3x-small,0.125rem)}
-#app-grimoire .g-trash-title{font-size:var(--sl-input-label-font-size-small,0.875rem);color:var(--mass-text-muted)}
-#app-grimoire .g-trash-row{display:flex;align-items:center;gap:0.5rem}
-#app-grimoire .g-trash-state{font-size:0.8rem;color:var(--mass-text-muted);white-space:nowrap}
-/* The track: the thumb diameter plus a tiny --g-pad on every side drives the
-   height, so the padding is real vertical room and the thumb sits centred. The
-   same --g-pad is the only horizontal edge gap, so an end-position thumb sits
-   flush to the rim like a default 2-state switch (no dead space on the ends). */
-#app-grimoire .g-trash-mode{--g-thumb:1.15rem;--g-pad:1px;box-sizing:border-box;position:relative;display:flex;align-items:center;width:4.25rem;height:calc(var(--g-thumb) + 2*var(--g-pad));padding:var(--g-pad);background:var(--mass-bg-active);border-radius:999px;cursor:pointer}
-/* The thumb's x is a concrete pixel offset initTrashMode measures from the active
-   stop's centre, so it lands dead-on at any width without fragile calc(). */
-#app-grimoire .g-trash-thumb{position:absolute;top:var(--g-pad);left:0;width:var(--g-thumb);height:var(--g-thumb);border-radius:50%;background:var(--mass-text-muted);box-shadow:0 1px 2px rgba(0,0,0,0.35);transition:transform 0.18s ease,background 0.18s ease;transform:translateX(var(--g-trash-x,0));pointer-events:none}
-#app-grimoire .g-trash-mode[data-mode="all"] .g-trash-thumb{background:var(--mass-accent-fill)}
-#app-grimoire .g-trash-mode[data-mode="agents"] .g-trash-thumb{background:var(--mass-warning)}
-#app-grimoire .g-trash-mode[data-mode="off"] .g-trash-thumb{background:var(--mass-text-muted)}
-#app-grimoire .g-trash-stop{flex:1;display:flex;align-items:center;justify-content:center;height:100%;border:0;background:transparent;cursor:pointer;padding:0}
-#app-grimoire .g-trash-dot{width:0.3rem;height:0.3rem;border-radius:50%;background:var(--mass-text-muted);opacity:0.55;transition:opacity 0.18s ease}
-#app-grimoire .g-trash-stop[aria-checked="true"] .g-trash-dot{opacity:0}
+/* Trash switch: the label reads like the menu's other control labels (muted, at
+   the select label's size) rather than Shoelace's body text. */
+#app-grimoire .g-trash-switch::part(label){font-size:var(--sl-input-label-font-size-small,0.875rem);color:var(--mass-text-muted)}
 /* Build version, the gear menu's last line: faint label, muted mono value, no
    rule above it — a footnote, not another section. It wraps rather than clips so
    a long version can't widen the 220px menu. */
@@ -852,6 +1080,30 @@ var styleBlock = `<style>
 #app-grimoire .g-new-session::part(base){min-height:0;height:var(--g-tab-top-h)}
 #app-grimoire .g-new-session::part(label){padding-top:0;padding-bottom:0}
 
+/* Vaults tab: the same column rhythm as Sessions, so the three tabs line up. */
+#app-grimoire .g-vaults-section{gap:0.4rem}
+#app-grimoire .g-vaults{display:flex;flex-direction:column;gap:1px;overflow-y:auto;flex:1;min-height:0;padding-right:10px}
+#app-grimoire .g-vaults-empty{font-size:0.74rem;padding:0.4rem 0.1rem}
+/* The path field is revealed only when the client has no native folder dialog. */
+#app-grimoire .g-vault-add-path{display:none}
+#app-grimoire .g-vault-add-path.g-vault-add-path-open{display:block}
+#app-grimoire .g-vault-row{display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0.4rem;border-radius:0.35rem;cursor:pointer;color:var(--mass-text)}
+#app-grimoire .g-vault-row:hover{background:var(--mass-bg-hover)}
+/* The dot is the status: accent = the vault this page shows, plain = another
+   available one, hollow/muted = its folder is gone. */
+#app-grimoire .g-vault-dot{flex:0 0 auto;width:0.5rem;height:0.5rem;border-radius:50%;background:var(--mass-text-muted)}
+#app-grimoire .g-vault-row-current{background:var(--mass-accent-soft)}
+#app-grimoire .g-vault-row-current .g-vault-dot{background:var(--mass-accent)}
+#app-grimoire .g-vault-row-current .g-vault-name{color:var(--mass-accent)}
+#app-grimoire .g-vault-row-gone{cursor:default;opacity:0.55}
+#app-grimoire .g-vault-row-gone .g-vault-dot{background:none;box-shadow:inset 0 0 0 1px var(--mass-text-muted)}
+#app-grimoire .g-vault-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:0.05rem}
+#app-grimoire .g-vault-name{font-size:0.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#app-grimoire .g-vault-path{font-size:0.66rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#app-grimoire .g-vault-row-menu{color:var(--mass-text-muted);opacity:0;transition:opacity 0.1s}
+#app-grimoire .g-vault-row:hover .g-vault-row-menu,#app-grimoire .g-vault-row-menu[open]{opacity:1}
+#app-grimoire .g-vault-row-menu sl-icon-button::part(base){padding:0.1rem}
+
 /* Files: vault folder tree */
 #app-grimoire .g-files-section{gap:0.4rem}
 /* Obsidian-style icon toolbar above the filter, height-matched to the sessions
@@ -988,6 +1240,12 @@ var styleBlock = `<style>
 #app-grimoire .g-hit{border:1px solid var(--mass-border);border-radius:0.45rem;padding:0.6rem 0.7rem;background:var(--mass-bg-panel);margin-top:0.5rem}
 #app-grimoire .g-hit-src{font-size:0.72rem;color:var(--mass-accent);margin-bottom:0.25rem}
 #app-grimoire .g-hit-text{font-size:0.8rem;color:var(--mass-text);white-space:pre-wrap;word-break:break-word}
+/* A vault a cross-vault search couldn't reach, named under its results. */
+#app-grimoire .g-hit-warning{font-size:0.72rem;margin-top:0.5rem}
+/* One embedding model's block, when a search spanned two: folded by default,
+   because two rankings side by side are two answers, not a longer one. */
+#app-grimoire .g-hit-group{margin-top:0.5rem;font-size:0.8rem}
+#app-grimoire .g-hit-group-model{color:var(--mass-text-muted);font-size:0.72rem;margin-left:0.4rem}
 
 /* Input bar */
 #app-grimoire .g-input-row{display:flex;gap:0.5rem;align-items:flex-end;width:100%}
@@ -1290,7 +1548,11 @@ var styleBlock = `<style>
 func RenderPage(theme, logLevel string, st State) string {
 	name := string(uikit.ParseTheme(theme))
 	var buf bytes.Buffer
-	_ = grimoirePage(settingsMenu(logLevel, name, st), name, st).Render(context.Background(), &buf)
+	if err := grimoirePage(settingsMenu(logLevel, name, st), name, st).Render(context.Background(), &buf); err != nil {
+		// Whatever was written is a half-page of broken markup; fall back to the
+		// bare container with a notice, as the run panel does.
+		return `<div id="app-grimoire">Failed to render the page.</div>`
+	}
 	return buf.String()
 }
 
@@ -1298,13 +1560,13 @@ func RenderPage(theme, logLevel string, st State) string {
 // app-specific controls — the SDK provides the shell and the reusable Log Level
 // control; the menu's contents are Grimoire's. The theme has a dedicated palette
 // picker in the bottom bar, so the menu seeds the appTheme signal (ThemeSignal)
-// without a theme picker of its own. The Trash select governs soft-delete; it
-// binds to gTrashMode and posts to /api/trash-mode. The build version closes the
-// menu as a plain footer line.
+// without a theme picker of its own. The Trash switch governs soft-delete; it
+// posts to /api/trash-enabled. The build version closes the menu as a plain
+// footer line.
 func settingsMenu(logLevel, theme string, st State) string {
 	return uikit.ThemeSignal(theme) + uikit.SettingsShell(
 		uikit.LogLevelSelect(logLevel),
-		trashModeSelect(st.TrashMode),
+		trashSwitch(st.TrashEnabled),
 		uikit.ConnectionSection(st.Conn.Endpoint, st.Conn.HasToken, st.Conn.CACert),
 		versionLine(st.Version),
 	)
@@ -1322,51 +1584,16 @@ func versionLine(version string) string {
 		html.EscapeString(version))
 }
 
-// trashModeSelect is the soft-delete policy control in the settings menu: a
-// three-stop sliding toggle (a pill track with a dot per stop and a thumb that
-// slides to the active one) for trashing every delete (restorable from the Files
-// tab), only AI-agent deletes, or none. The thumb's position and colour
-// (blue / yellow / grey) follow the track's data-mode attribute, which initTrashMode
-// (grimoire.js) sets from the current value and updates on click — and which is
-// seeded here from the persisted mode so there's no first-paint flash. The current
-// label is shown beside the title, mirroring the editor's "Effort (Max)" toggle.
-func trashModeSelect(mode string) string {
-	if mode == "" {
-		mode = string(appconfig.TrashAll)
+// trashSwitch is the soft-delete control in the settings menu: on, a delete
+// moves the note to the vault's trash (restorable from the Files tab); off, it
+// is permanent. Seeded from the persisted value so there's no first-paint flash;
+// initTrashSwitch (grimoire.js) persists a flip.
+func trashSwitch(enabled bool) string {
+	checked := ""
+	if enabled {
+		checked = " checked"
 	}
-	type stop struct{ value, state, hint string }
-	// Ordered off → agents → everyone, so the default (trash on for all) sits at
-	// the right end and "off" at the left, like a volume rising left to right. state
-	// names the current setting beside the toggle ("Trash <state>") and is the hint.
-	stops := []stop{
-		{string(appconfig.TrashOff), "Disabled", "Delete permanently for everyone"},
-		{string(appconfig.TrashAgents), "Enabled for agents", "Trash only AI-agent deletes; your own deletes are permanent"},
-		{string(appconfig.TrashAll), "Enabled", "Trash every delete (restorable)"},
-	}
-	var dots strings.Builder
-	curState := ""
-	for _, s := range stops {
-		if s.value == mode {
-			curState = s.state
-		}
-		fmt.Fprintf(&dots,
-			`<button type="button" class="g-trash-stop" role="radio" data-value=%q data-state=%q title=%q><span class="g-trash-dot"></span></button>`,
-			html.EscapeString(s.value), html.EscapeString(s.state), html.EscapeString(s.hint))
-	}
-	return fmt.Sprintf(`<div class="g-trash-field">
-			<span class="g-trash-title">Trash</span>
-			<div class="g-trash-row">
-				<div class="g-trash-mode" id="g-trash-mode" role="radiogroup" aria-label="Trash deleted notes" data-mode=%[2]q title="Deleted notes can move to the Trash (in Files) to be restored, or be removed permanently — choose for whom.">
-					<span class="g-trash-thumb" aria-hidden="true"></span>
-					%[3]s
-				</div>
-				<span class="g-trash-state" id="g-trash-value">%[1]s</span>
-			</div>
-		</div>`,
-		html.EscapeString(curState),
-		html.EscapeString(mode),
-		dots.String(),
-	)
+	return fmt.Sprintf(`<sl-switch id="g-trash-switch" class="g-trash-switch" size="small"%s title="Deleted notes move to the Trash (in Files) to be restored, instead of being removed permanently.">Trash deleted notes</sl-switch>`, checked)
 }
 
 // RenderFullPage returns a complete HTML page with the grimoire UI. theme is a

@@ -65,8 +65,8 @@ func main() {
 	// work and prints plain lines, while the parent wizard window shows the result.
 	switch {
 	case *doUninstall:
-		c := defaultCollected()
-		if err := applyFlags(&c, *installDir, *scope, *perUser); err != nil {
+		c, err := uninstallTarget(*installDir, *scope, *perUser)
+		if err != nil {
 			fmt.Fprintln(os.Stderr, term.FailMark()+err.Error())
 			os.Exit(1)
 		}
@@ -82,6 +82,24 @@ func main() {
 
 	// Interactive wizard.
 	os.Exit(runWizard(tag))
+}
+
+// uninstallTarget resolves which install the scripted --uninstall removes. With
+// no --install-dir/--scope/--user it follows the install record: the app may
+// live in a custom directory or the other scope, and the scope defaults would
+// point the removal at the wrong place (or at nothing). Any explicit flag wins —
+// which is also how the elevated child re-runs itself, with both spelled out.
+func uninstallTarget(installDir, scope string, perUser bool) (collected, error) {
+	c := defaultCollected()
+	if installDir != "" || scope != "" || perUser {
+		return c, applyFlags(&c, installDir, scope, perUser)
+	}
+	if rec, err := appSpec.LoadRecord(); err == nil && rec != nil && rec.InstallDir != "" {
+		c.installDir = rec.InstallDir
+		c.scope = scopeForInstallDir(rec.InstallDir)
+		c.perUser = c.scope == install.ScopeUser
+	}
+	return c, nil
 }
 
 // applyFlags overlays non-empty CLI flags onto a collected config. The scope

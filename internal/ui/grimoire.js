@@ -3,6 +3,21 @@
 
   var getEl = function (id) { return document.getElementById(id); };
 
+  // One daemon serves every vault, so every request has to say which one it is
+  // for. Datastar actions carry the gVault signal automatically; a plain fetch()
+  // doesn't, so it goes through apiURL, which appends the page's vault (read from
+  // the gVault signal input the page seeds).
+  function pageVault() {
+    var el = document.querySelector('[data-bind="gVault"]');
+    return el ? el.value || "" : "";
+  }
+
+  function apiURL(path) {
+    var vault = pageVault();
+    if (!vault) return path;
+    return path + (path.indexOf("?") === -1 ? "?" : "&") + "vault=" + encodeURIComponent(vault);
+  }
+
   // matchesFilter reports whether haystack contains every whitespace-separated
   // word of query, in any order and case-insensitively — so "devops kernel"
   // matches "DevOps QA - Kernel". An empty query matches everything. Shared by the
@@ -41,43 +56,47 @@
     });
   }
 
-  // Vault open/switch/close happen in-process: the backend binds the chosen vault
-  // to this running instance and reports {reload:true} on a real change, so we
-  // reload the page into the new (or empty) state. The dialog's "Switch vault…"
-  // and the empty-state "Open a vault folder…" both open the native folder picker
-  // (path omitted); the empty-state recent rows post their own path. "Close vault"
-  // returns to the empty state. The model selects, concurrency, and Reindex are
+  // Adding a vault happens in-process: the daemon opens the chosen folder (it
+  // keeps every vault it serves resident) and reports {reload:true} when it isn't
+  // the one this page is showing, so we reload onto it. With no path in the body
+  // the daemon raises the native folder dialog; a client with no window to raise
+  // it in gets {needsPath:true} back instead, and onNeedsPath (the Vaults tab's
+  // inline field) takes over. The model selects, concurrency, and Reindex are
   // wired in the templ.
-  function openVault(body, btn) {
+  function openVault(body, btn, onNeedsPath) {
     if (btn) btn.loading = true;
-    fetch("api/open-vault", { method: "POST", body: body })
+    fetch(apiURL("api/vaults/add"), { method: "POST", body: body })
       .then(function (r) { return r.json(); })
       .then(function (res) {
-        if (res && res.reload) { location.reload(); return; }
+        // Navigate to the vault by name rather than reloading: this page's URL
+        // may pin a different ?vault=, and a reload would land back on it.
+        if (res && res.reload) { location.assign(vaultURL(res.vault)); return; }
+        if (res && res.needsPath && onNeedsPath) { onNeedsPath(); return; }
         // ok:false (picker cancelled) or ok:true with no change: nothing to do.
       })
       .catch(function () { /* open failed; leave the UI as-is */ })
       .finally(function () { if (btn) btn.loading = false; });
   }
 
+  // pathBody wraps an absolute vault path as the form body api/vaults/add takes.
+  function pathBody(path) {
+    var fd = new FormData();
+    fd.append("path", path);
+    return fd;
+  }
+
+  // vaultURL is the page for one vault. Opening a vault is a navigation, not a
+  // reload: the workspace, file tree and session history all come from the
+  // vault's own state, which the page restores on load.
+  function vaultURL(path) {
+    return path ? "?vault=" + encodeURIComponent(path) : location.pathname;
+  }
+
   function initVault() {
     // The vault button is the trigger of an sl-dropdown (the gear-style Vault
-    // menu), so Shoelace opens it on click — no manual show() needed.
-
-    // Pick a folder (no path) → bind it to this instance.
-    var switchBtn = getEl("g-vault-switch");
-    if (switchBtn) switchBtn.addEventListener("click", function () { openVault(null, switchBtn); });
-
-    // Close the current vault → return to the empty state.
-    var closeBtn = getEl("g-vault-close");
-    if (closeBtn) closeBtn.addEventListener("click", function () {
-      closeBtn.loading = true;
-      fetch("api/close-vault", { method: "POST" })
-        .then(function (r) { return r.json(); })
-        .then(function (res) { if (res && res.reload) location.reload(); })
-        .catch(function () {})
-        .finally(function () { closeBtn.loading = false; });
-    });
+    // menu), so Shoelace opens it on click — no manual show() needed. The menu
+    // holds this vault's own settings; choosing a different vault is the Vaults
+    // tab in the sidebar.
 
     // Empty state: pick a new folder, or open a known vault by its path.
     var emptyOpen = getEl("g-vault-empty-open");
@@ -86,10 +105,97 @@
     if (empty) empty.addEventListener("click", function (e) {
       var row = e.target.closest(".g-vault-recent");
       if (!row) return;
-      var fd = new FormData();
-      fd.append("path", row.getAttribute("data-vault-path") || "");
-      openVault(fd, row);
+      openVault(pathBody(row.getAttribute("data-vault-path") || ""), row);
     });
+  }
+
+  // The Vaults sidebar tab: the daemon's whole vault list, with the one this page
+  // is showing highlighted. Switching is a reload onto ?vault=, not an in-place
+  // swap — every open tab, the file tree and the session history belong to the
+  // vault, and the page restores all of it from that vault's own UI state on load.
+  var vaults = (function () {
+    // Re-render by clicking the templ's data-init trigger's twin: the list is a
+    // server-rendered fragment, so a change is a re-fetch, never a DOM edit here.
+    function refresh() {
+      var t = getEl("g-vaults-render-trigger");
+      if (t) t.click();
+    }
+
+    // Reveal the absolute-path field (a browser tab has no native folder dialog)
+    // and focus it. Enter submits; the field stays open so a typo can be fixed.
+    function revealPathField() {
+      var wrap = getEl("g-vault-add-path");
+      var input = getEl("g-vault-add-input");
+      if (!wrap || !input) return;
+      wrap.classList.add("g-vault-add-path-open");
+      if (typeof input.focus === "function") input.focus();
+    }
+
+    function forget(path, name) {
+      confirmForget(name, path, function () {
+        fetch(apiURL("api/vaults/forget"), { method: "POST", body: pathBody(path) })
+          .then(function () { refresh(); })
+          .catch(function () { /* the list is unchanged; nothing to undo. */ });
+      });
+    }
+
+    function init() {
+      var addBtn = getEl("g-vault-add");
+      if (addBtn) addBtn.addEventListener("click", function () {
+        openVault(null, addBtn, revealPathField);
+      });
+      var input = getEl("g-vault-add-input");
+      if (input) input.addEventListener("keydown", function (e) {
+        if (e.key !== "Enter") return;
+        var path = (input.value || "").trim();
+        if (path) openVault(pathBody(path), null);
+      });
+
+      var list = getEl("g-vaults");
+      if (!list) return;
+      // One delegated click for the whole list: rows are replaced wholesale on
+      // every re-render, so per-row listeners would have to be re-attached.
+      list.addEventListener("click", function (e) {
+        var row = e.target.closest(".g-vault-row");
+        if (!row) return;
+        var path = row.getAttribute("data-vault-path") || "";
+        if (e.target.closest(".g-vault-forget")) {
+          forget(path, row.querySelector(".g-vault-name").textContent);
+          return;
+        }
+        // The overflow menu is not a row click.
+        if (e.target.closest(".g-vault-row-menu")) return;
+        if (row.getAttribute("data-vault-available") !== "true") return;
+        if (row.classList.contains("g-vault-row-current")) return;
+        location.assign(vaultURL(path));
+      });
+    }
+    return { init: init };
+  })();
+
+  // confirmForget asks before dropping a vault from the list. Its own dialog, not
+  // the delete one: forgetting removes nothing from disk, and the copy has to say
+  // so or it reads as a delete.
+  function confirmForget(name, path, onConfirm) {
+    var dialog = getEl("g-forget-dialog");
+    var body = getEl("g-forget-body");
+    if (!dialog) return;
+    if (body) {
+      body.textContent = "Remove “" + name + "” from the vault list? The folder " +
+        "and its notes stay on disk at " + path + " — add it again any time.";
+    }
+    var confirm = getEl("g-forget-confirm");
+    var cancel = getEl("g-forget-cancel");
+    // Fresh handlers per ask, so a previous vault's path can't be forgotten by a
+    // later confirmation.
+    function close() {
+      dialog.hide();
+      if (confirm) confirm.onclick = null;
+      if (cancel) cancel.onclick = null;
+    }
+    if (confirm) confirm.onclick = function () { close(); onConfirm(); };
+    if (cancel) cancel.onclick = close;
+    dialog.show();
   }
 
   // Hover calm-down for the scrollable lists: while content wheel-scrolls under a
@@ -313,14 +419,29 @@
     }
 
     // Call the JSON API a row's button addresses (the same endpoints the CLI
-    // uses) and re-render that tab. Returns the decoded body, or null on failure.
+    // uses) and re-render that tab. Returns the decoded body, or null on
+    // failure — a failure always toasts, so the button never dead-ends silently
+    // (an unpublished registry artifact, say, 503s here).
     function call(kind, action, body) {
-      return fetch("api/v1/" + kind + "/" + action, {
+      return fetch(apiURL("api/v1/" + kind + "/" + action), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-      }).then(function (r) { return r.ok ? r.json() : null; })
-        .catch(function () { return null; });
+      }).then(function (r) {
+        if (r.ok) return r.json();
+        return r.text().then(function (t) {
+          fail(kind, action, window.massErrorText(t) || "HTTP " + r.status);
+          return null;
+        });
+      }, function () {
+        fail(kind, action, "the app isn't responding");
+        return null;
+      });
+    }
+
+    function fail(kind, action, reason) {
+      window.massToast("Couldn't " + action + " " + kind + ": " + reason + ".",
+        { variant: "danger" });
     }
 
     // Install: a theme joins the palette dropdown but is NOT applied — the user
@@ -353,7 +474,7 @@
 
     function kernelOffers() {
       if (offers) return offers;
-      offers = fetch("api/v1/kernel/list")
+      offers = fetch(apiURL("api/v1/kernel/list"))
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (res) {
           var byFamily = {};
@@ -482,66 +603,20 @@
   // trigger. sl-input's data-bind adapter is unreliable in the webview, so we
   // read .value in JS directly.
   var seq = 0;
-  // initTrashMode drives the three-state trash toggle: a pill track with a dot per
-  // stop and a round thumb that slides to the active one. The active stop's value
-  // lives on the track's data-mode (seeded server-side from the persisted setting,
-  // so there's no first-paint flash); we position the thumb by measuring, mark the
-  // active dot, show the current label, and on click slide + persist via fetch.
-  // Plain JS (not Datastar attr-binding) keeps the slide reliable in the webview.
-  function initTrashMode() {
-    var track = getEl("g-trash-mode");
-    if (!track) return;
-    var thumb = track.querySelector(".g-trash-thumb");
-    var stops = Array.prototype.slice.call(track.querySelectorAll(".g-trash-stop"));
-    var valueLabel = getEl("g-trash-value");
-    if (!thumb || !stops.length) return;
-
-    function activeStop() {
-      var mode = track.getAttribute("data-mode");
-      for (var i = 0; i < stops.length; i++) {
-        if (stops[i].getAttribute("data-value") === mode) return stops[i];
-      }
-      return stops[0];
-    }
-    // Slide the thumb to the active stop and mark the active dot / current label.
-    // Position is by index, not by measuring stops: for stop i of N, the thumb's
-    // left = pad + (i/(N-1)) * (innerWidth - thumbWidth). So the first stop lands
-    // flush-left (x = pad) and the last flush-right, each precisely filling the
-    // rounded end like a default 2-state switch, with the middle exactly centred —
-    // width-independent, no clamp. Measured each render so it's right at any width.
-    function render() {
-      var idx = 0;
-      for (var i = 0; i < stops.length; i++) {
-        var on = stops[i] === activeStop();
-        stops[i].setAttribute("aria-checked", on ? "true" : "false");
-        if (on) idx = i;
-      }
-      var pad = parseFloat(getComputedStyle(track).paddingLeft) || 0;
-      var travel = track.clientWidth - 2 * pad - thumb.offsetWidth;
-      var frac = stops.length > 1 ? idx / (stops.length - 1) : 0;
-      thumb.style.setProperty("--g-trash-x", (pad + frac * travel) + "px");
-      var active = stops[idx];
-      if (valueLabel) valueLabel.textContent = active.getAttribute("data-state") || "";
-    }
-    function select(stop) {
-      var mode = stop.getAttribute("data-value");
-      if (mode === track.getAttribute("data-mode")) return;
-      track.setAttribute("data-mode", mode);
-      render();
-      fetch("api/trash-mode", {
+  // initTrashSwitch persists the settings menu's trash switch. The checked state
+  // is server-rendered from the persisted setting, so there's nothing to seed
+  // here — plain JS rather than Datastar binding, whose adapter is unreliable for
+  // Shoelace controls in the webview.
+  function initTrashSwitch() {
+    var sw = getEl("g-trash-switch");
+    if (!sw) return;
+    sw.addEventListener("sl-change", function () {
+      fetch(apiURL("api/trash-enabled"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gTrashMode: mode }),
+        body: JSON.stringify({ gTrashEnabled: sw.checked }),
       }).catch(function () { /* persistence is best-effort. */ });
-    }
-    stops.forEach(function (stop) {
-      stop.addEventListener("click", function () { select(stop); });
     });
-    // Re-measure when the settings menu actually opens (the track has no layout box
-    // while the dropdown is closed, so an initial measure would be zero).
-    var menu = track.closest("sl-dropdown");
-    if (menu) menu.addEventListener("sl-after-show", render);
-    render();
   }
 
   function initSearch() {
@@ -1386,7 +1461,7 @@
         if (next >= total || ctrl.signal.aborted) return;
         var file = files[next++];
         file.arrayBuffer().then(function (buf) {
-          return fetch("api/note/import", {
+          return fetch(apiURL("api/note/import"), {
             method: "POST",
             headers: { "X-Filename": encodeURIComponent(file.name), "X-Parent": "" },
             body: buf,
@@ -1528,7 +1603,7 @@
     if (statusClose) statusClose.addEventListener("click", function () {
       if (importAbort) {
         importAbort.abort();
-        fetch("api/note/import/cancel", { method: "POST" }).catch(function () {});
+        fetch(apiURL("api/note/import/cancel"), { method: "POST" }).catch(function () {});
       } else {
         clearStatus();
       }
@@ -1727,26 +1802,12 @@
     return /\.(?:md|markdown)$/i.test(href.split(/[?#]/)[0]);
   }
 
-  // showLinkNotice surfaces a transient warning toast (Shoelace sl-alert) when a
-  // rendered link can't be opened — the target is missing, a directory, or
-  // outside the vault. Used instead of navigating to a dead link.
+  // showLinkNotice warns when a rendered link can't be opened — the target is
+  // missing, a directory, or outside the vault. Used instead of navigating to a
+  // dead link.
   function showLinkNotice(path) {
-    var alert = Object.assign(document.createElement("sl-alert"), {
-      variant: "warning", closable: true, duration: 4000,
-      innerHTML: '<sl-icon slot="icon" name="exclamation-triangle"></sl-icon>' +
-        "Can't open " + escapeHTML(path) + " — it may be missing or not a file.",
-    });
-    document.body.appendChild(alert);
-    // The autoloader registers sl-alert lazily, so .toast() may not exist yet on
-    // first use; wait for the definition before calling it.
-    customElements.whenDefined("sl-alert").then(function () { alert.toast(); });
-  }
-
-  // escapeHTML escapes text for safe insertion into innerHTML.
-  function escapeHTML(s) {
-    var d = document.createElement("div");
-    d.textContent = s;
-    return d.innerHTML;
+    window.massToast("Can't open " + path + " — it may be missing or not a file.",
+      { variant: "warning" });
   }
 
   // Preview navigator: opens notes (from search-result links and [[wikilinks]])
@@ -2279,13 +2340,14 @@
     }
     // A new tab is context-aware (browser new-tab convention): on the Files
     // sidebar tab it creates a new note (a real file, opened as a tab — Grimoire
-    // notes are always files, like Obsidian); elsewhere it opens a blank session
-    // scratch tab that commits nothing until you search. Shared by the strip's "+"
-    // and the Ctrl+N shortcut.
+    // notes are always files, like Obsidian); on the Vaults tab it adds a vault;
+    // elsewhere it opens a blank session scratch tab that commits nothing until
+    // you search. Shared by the strip's "+" and the Ctrl+N shortcut.
     function newTab() {
       var group = getEl("g-tabs");
       var active = group && group.activeTab ? group.activeTab.panel : "sessions";
       if (active === "files") { var nn = getEl("g-new-note"); if (nn) nn.click(); }
+      else if (active === "vaults") { var av = getEl("g-vault-add"); if (av) av.click(); }
       else nav.openScratch();
     }
     var tabNew = getEl("g-tab-new");
@@ -2316,10 +2378,10 @@
       // Prefer sendBeacon on unload (fetch may be cancelled as the page tears
       // down); fall back to a keepalive fetch otherwise.
       if (navigator.sendBeacon) {
-        navigator.sendBeacon(TABS_URL, new Blob([body], { type: "application/json" }));
+        navigator.sendBeacon(apiURL(TABS_URL), new Blob([body], { type: "application/json" }));
         return;
       }
-      fetch(TABS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: body, keepalive: true })
+      fetch(apiURL(TABS_URL), { method: "POST", headers: { "Content-Type": "application/json" }, body: body, keepalive: true })
         .catch(function () { /* best-effort. */ });
     }
 
@@ -2327,7 +2389,7 @@
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(function () {
         saveTimer = null;
-        fetch(TABS_URL, {
+        fetch(apiURL(TABS_URL), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(buildTabsPayload()),
@@ -2338,7 +2400,7 @@
     window.addEventListener("beforeunload", flushTabs);
 
     function restoreTabs() {
-      return fetch(TABS_URL).then(function (r) { return r.json(); }).then(function (s) {
+      return fetch(apiURL(TABS_URL)).then(function (r) { return r.json(); }).then(function (s) {
         if (s && Array.isArray(s.tabs) && s.tabs.length) {
           tabs = s.tabs;
           tabSeq = typeof s.seq === "number" ? s.seq : tabs.reduce(function (m, t) { return Math.max(m, t.id); }, 0);
@@ -2574,7 +2636,7 @@
     function openVaultLink(href) {
       var path = href.split(/[?#]/)[0]; // drop any fragment/query.
       if (isNoteHref(path)) { nav.openNote(path, ""); return; }
-      fetch("api/open-file", {
+      fetch(apiURL("api/open-file"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: path }),
@@ -2590,6 +2652,14 @@
       var hit = e.target.closest("[data-note]");
       if (hit) {
         if ((e.ctrlKey || e.metaKey || e.shiftKey) && hit.classList.contains("g-tree-note")) return;
+        // A search covers every vault, but the page speaks to one: a hit from
+        // another vault navigates there with the note to open (see openPendingNote).
+        var hitVault = hit.getAttribute("data-vault");
+        if (hitVault && hitVault !== pageVault()) {
+          location.assign("/?vault=" + encodeURIComponent(hitVault) +
+            "&note=" + encodeURIComponent(hit.getAttribute("data-note")));
+          return;
+        }
         nav.openNote(hit.getAttribute("data-note"), hit.getAttribute("data-heading"));
         return;
       }
@@ -3222,8 +3292,8 @@
   // note centroids). The whole simulation + render is a small self-contained
   // canvas loop — no graph library. Nodes repel each other, edges pull their
   // endpoints together (stronger for more-similar pairs), and a weak gravity
-  // keeps the whole thing centered. Click a node to open that note; drag to
-  // rearrange; scroll to zoom; drag the background to pan.
+  // keeps the whole thing centered. Left-click a node to open that note;
+  // right-drag one to rearrange; scroll to zoom; drag the background to pan.
   function initGraph() {
     var overlay = getEl("g-graph");
     var canvas = getEl("g-graph-canvas");
@@ -3236,7 +3306,7 @@
     var maxDegree = 1;                     // busiest node, for size normalization.
     var view = { x: 0, y: 0, scale: 1 };   // pan offset + zoom.
     var running = false, raf = 0, alpha = 0;
-    var drag = null, panning = null, hover = null;
+    var drag = null, panning = null, hover = null, clicking = null;
 
     // Title filter: filterMatch holds the ids of nodes whose title matches the
     // query — the only nodes kept bright while the rest dim. Neighbours are NOT
@@ -3300,7 +3370,7 @@
     // always map to the same key.
     function graphURL() {
       var p = params();
-      return "api/graph?k=" + encodeURIComponent(p.k) + "&minSim=" + encodeURIComponent(p.minSim);
+      return apiURL("api/graph?k=" + encodeURIComponent(p.k) + "&minSim=" + encodeURIComponent(p.minSim));
     }
 
     // Built layouts are cached by URL so returning to the graph is instant — the
@@ -3706,28 +3776,35 @@
       if (nav) nav.openNotePinned(nd.id, "");
     }
 
-    // Left-press grabs a node to drag (or the background to pan). Right-click a
-    // node opens its note (handled in the contextmenu listener below).
+    // Left-click a node to open its note; right-drag a node to move it. Either
+    // button on the background pans. A left press on a node only opens if the
+    // pointer stays put (CLICK_SLOP), so a left drag across the canvas pans past
+    // nodes instead of opening one on release.
+    var CLICK_SLOP = 4; // px
     canvas.addEventListener("pointerdown", function (ev) {
-      if (ev.button !== 0) return; // left button only; right is open (contextmenu).
+      if (ev.button !== 0 && ev.button !== 2) return;
       canvas.setPointerCapture(ev.pointerId);
       interacting = true;
       var w = toWorld(ev), hit = nodeAt(w.x, w.y);
-      if (hit) { drag = { node: hit }; reheat(0.2); } // let neighbours re-settle.
-      else { panning = { x: ev.clientX, y: ev.clientY }; reheat(0); }
+      if (hit && ev.button === 2) { drag = { node: hit }; reheat(0.2); } // let neighbours re-settle.
+      else {
+        if (hit) clicking = { node: hit, x: ev.clientX, y: ev.clientY };
+        panning = { x: ev.clientX, y: ev.clientY };
+        reheat(0);
+      }
     });
-    // Right-click opens the node under the cursor (suppressing the browser menu).
-    canvas.addEventListener("contextmenu", function (ev) {
-      ev.preventDefault();
-      var w = toWorld(ev), hit = nodeAt(w.x, w.y);
-      if (hit) openNode(hit);
-    });
+    // Right-drag is the node grab, so the browser menu never gets a look in.
+    canvas.addEventListener("contextmenu", function (ev) { ev.preventDefault(); });
     canvas.addEventListener("pointermove", function (ev) {
       if (drag) {
         var w = toWorld(ev);
         drag.node.x = w.x; drag.node.y = w.y; drag.node.vx = 0; drag.node.vy = 0;
         reheat(0.1);
       } else if (panning) {
+        if (clicking &&
+          (Math.abs(ev.clientX - clicking.x) > CLICK_SLOP || Math.abs(ev.clientY - clicking.y) > CLICK_SLOP)) {
+          clicking = null; // moved: this is a pan, not a click on the node.
+        }
         view.x += ev.clientX - panning.x; view.y += ev.clientY - panning.y;
         panning.x = ev.clientX; panning.y = ev.clientY;
         reheat(0);
@@ -3741,8 +3818,10 @@
       if (hover) { hover = null; reheat(0); }
     });
     canvas.addEventListener("pointerup", function () {
-      drag = null; panning = null;
+      var open = clicking;
+      drag = null; panning = null; clicking = null;
       interacting = false; // let the loop park once it settles.
+      if (open) openNode(open.node);
     });
     canvas.addEventListener("wheel", function (ev) {
       ev.preventDefault();
@@ -4412,9 +4491,11 @@
     var group = getEl("g-tabs");
     var newBtn = getEl("g-tab-new");
     // The strip "+" tooltip reflects what it'll do for the active sidebar tab
-    // (new note on Files, new session otherwise; the click handler is in initPreview).
+    // (new note on Files, add vault on Vaults, new session otherwise; the click
+    // handler is in initPreview).
+    var NEW_TITLES = { files: "New note", vaults: "Add vault" };
     function syncNewTitle(name) {
-      if (newBtn) newBtn.title = name === "files" ? "New note" : "New session";
+      if (newBtn) newBtn.title = NEW_TITLES[name] || "New session";
     }
     if (group) group.addEventListener("sl-tab-show", function (e) {
       saveActiveTab(e.detail.name);
@@ -4427,11 +4508,13 @@
   // until then (no Sessions flash). show() runs the panel sync; call it once the
   // group has rendered. Don't pre-set the tab's active attribute — that makes the
   // group think the tab is already active and skip the panel sync.
+  var SIDEBAR_PANELS = { vaults: true, sessions: true, files: true };
   function restoreActiveTab() {
     var name;
     try { name = sessionStorage.getItem(TAB_KEY); } catch (e) { return Promise.resolve(); }
-    // "graph" is no longer a sidebar tab (it's a main-panel tab); ignore a stale value.
-    if (!name || name === "graph") return Promise.resolve();
+    // Anything that isn't a sidebar panel is a stale value ("graph" moved to the
+    // main panel); leave the group on its default rather than showing nothing.
+    if (!SIDEBAR_PANELS[name]) return Promise.resolve();
     var group = getEl("g-tabs");
     if (!group || typeof group.show !== "function") return Promise.resolve();
     var ready = group.updateComplete && group.updateComplete.then
@@ -4445,14 +4528,16 @@
   function init() {
     confirmDelete.init();
     initVault();
+    vaults.init();
     themePicker.init();
     extensions.init();
-    initTrashMode();
+    initTrashSwitch();
     initSearch();
     initSidebarCollapse();
     initSidebarTabs();
     calmHoverWhileScrolling("g-sessions");
     calmHoverWhileScrolling("g-files");
+    calmHoverWhileScrolling("g-vaults");
     initResize();
     initAutoScroll();
     initPreview();
@@ -4482,9 +4567,28 @@
       // navRestore (restoreTabs) fetches the persisted tabs server-side; reveal
       // only once it resolves so the restored view doesn't flash in after paint.
       var done = navRestore ? navRestore() : null;
-      if (done && typeof done.then === "function") done.then(revealMain, revealMain);
-      else revealMain();
+      if (done && typeof done.then === "function") done.then(finishRestore, finishRestore);
+      else finishRestore();
     });
+  }
+
+  function finishRestore() {
+    revealMain();
+    openPendingNote();
+  }
+
+  // ?note= is how a cross-vault search result opens: clicking a hit from another
+  // vault navigates here with the note named, since the page's panels all speak
+  // to one vault. Open it on top of the restored tabs, then drop it from the URL
+  // so a later refresh restores the workspace instead of reopening the note.
+  function openPendingNote() {
+    var match = /[?&]note=([^&]*)/.exec(location.search);
+    if (!match) return;
+    if (nav) nav.openNote(decodeURIComponent(match[1].replace(/\+/g, "%20")), "");
+    if (window.history && history.replaceState) {
+      var search = location.search.replace(/([?&])note=[^&]*&?/, "$1").replace(/[?&]$/, "");
+      history.replaceState(null, "", location.pathname + search + location.hash);
+    }
   }
 
   // Boot gates on the SDK layout's massDatastarReady, not on a delay after

@@ -13,12 +13,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testShared builds process-wide app state for a test: no gateway client, a
+// temp app dir, no registries.
+func testShared(t *testing.T) *app.Shared {
+	t.Helper()
+	sh, err := app.NewShared(nil, t.TempDir(), "", "", "", zerolog.Nop())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sh.Close()) })
+	return sh
+}
+
 // newAPI builds an API over a service bound to vault, with no gateway client —
 // enough for the read ops that don't embed (GetNote, ListVault, ResolveLink).
 // Search needs a real embedder and is covered by the app package's tests.
 func newAPI(t *testing.T, vault string) *API {
 	t.Helper()
-	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
+	svc := app.New(testShared(t), t.TempDir(), t.TempDir(), vault, zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	return NewStatic(svc)
 }
@@ -28,7 +38,7 @@ func TestGetNote(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "note.md"), []byte("# Title\n\nbody"), 0o644))
 	api := newAPI(t, vault)
 
-	note, err := api.GetNote(context.Background(), "note.md")
+	note, err := api.GetNote(context.Background(), "", "note.md")
 	require.NoError(t, err)
 	require.Equal(t, "note.md", note.Path)
 	require.Equal(t, "# Title\n\nbody", note.Content)
@@ -69,13 +79,13 @@ func TestListVaults(t *testing.T) {
 
 func TestGetNoteRejectsEscape(t *testing.T) {
 	api := newAPI(t, t.TempDir())
-	_, err := api.GetNote(context.Background(), "../escape.md")
+	_, err := api.GetNote(context.Background(), "", "../escape.md")
 	require.ErrorIs(t, err, app.ErrOutsideVault)
 }
 
 func TestGetNoteMissing(t *testing.T) {
 	api := newAPI(t, t.TempDir())
-	_, err := api.GetNote(context.Background(), "nope.md")
+	_, err := api.GetNote(context.Background(), "", "nope.md")
 	require.Error(t, err)
 }
 
@@ -88,7 +98,7 @@ func TestListVaultOnlyNotes(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "data.bin"), []byte("x"), 0o644))
 	api := newAPI(t, vault)
 
-	tree, err := api.ListVault(context.Background())
+	tree, err := api.ListVault(context.Background(), "")
 	require.NoError(t, err)
 
 	// Folders sort before files: [sub/, a.md].
@@ -111,20 +121,20 @@ func TestResolveLink(t *testing.T) {
 	api := newAPI(t, vault)
 
 	t.Run("by bare name", func(t *testing.T) {
-		res := api.ResolveLink(context.Background(), "My Note")
+		res := api.ResolveLink(context.Background(), "", "My Note")
 		require.True(t, res.Found)
 		require.Equal(t, "folder/My Note.md", res.Path)
 		require.Equal(t, "My Note", res.Target)
 	})
 
 	t.Run("with alias stripped", func(t *testing.T) {
-		res := api.ResolveLink(context.Background(), "My Note|shown")
+		res := api.ResolveLink(context.Background(), "", "My Note|shown")
 		require.True(t, res.Found)
 		require.Equal(t, "folder/My Note.md", res.Path)
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		res := api.ResolveLink(context.Background(), "Nonexistent")
+		res := api.ResolveLink(context.Background(), "", "Nonexistent")
 		require.False(t, res.Found)
 		require.Empty(t, res.Path)
 	})
@@ -134,7 +144,32 @@ func TestToHits(t *testing.T) {
 	in := []store.Hit{
 		{Chunk: store.Chunk{Path: "a.md", Heading: "H", Text: "t"}, Similarity: 0.9},
 	}
-	got := toHits(in)
+	got := toHits(in, "/vaults/notes", "model-x")
 	require.Len(t, got, 1)
-	require.Equal(t, Hit{Path: "a.md", Heading: "H", Text: "t", Similarity: 0.9}, got[0])
+	require.Equal(t,
+		Hit{Path: "a.md", Heading: "H", Text: "t", Similarity: 0.9, Vault: "/vaults/notes", Model: "model-x"},
+		got[0])
+}
+
+// A search that names no vault fans out over every vault; naming one narrows it
+// to that vault's own service, fan-out installed or not.
+func TestSearch_FansOutOnlyWithoutAVault(t *testing.T) {
+	vault := t.TempDir()
+	var fannedOut int
+	api := newAPI(t, vault).WithSearchFanout(
+		func(_ context.Context, query string, k int, _ float64) ([]Hit, []string, error) {
+			fannedOut++
+			return []Hit{{Path: "x.md", Vault: "/other"}}, []string{"gone: unreachable"}, nil
+		})
+
+	res, err := api.Search(context.Background(), "", "q", 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, fannedOut)
+	require.Equal(t, []Hit{{Path: "x.md", Vault: "/other"}}, res.Hits)
+	require.Equal(t, []string{"gone: unreachable"}, res.Warnings)
+
+	// Naming a vault goes to that vault's service, which has no index here.
+	_, err = api.Search(context.Background(), vault, "q", 0)
+	require.ErrorIs(t, err, app.ErrNoModel)
+	require.Equal(t, 1, fannedOut, "a named vault never fans out")
 }

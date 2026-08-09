@@ -47,8 +47,8 @@ type ThemeListResult struct {
 
 // ThemeList reports the registered themes (built-ins first, then installed
 // pluggable ones — the SDK's order) plus the registry's theme packages.
-func (a *API) ThemeList(ctx context.Context) (ThemeListResult, error) {
-	svc, err := a.service()
+func (a *API) ThemeList(ctx context.Context, vault string) (ThemeListResult, error) {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return ThemeListResult{}, err
 	}
@@ -91,8 +91,8 @@ type ThemeInstallResult struct {
 // against the uikit theme contract, and installs it live — registered for both
 // this app and, via the shared themes dir, every MASS-family app on next start.
 // version "" means the package's newest.
-func (a *API) ThemeInstall(ctx context.Context, name, version string) (ThemeInstallResult, error) {
-	svc, err := a.service()
+func (a *API) ThemeInstall(ctx context.Context, vault, name, version string) (ThemeInstallResult, error) {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return ThemeInstallResult{}, err
 	}
@@ -113,8 +113,8 @@ type ThemeRemoveResult struct {
 
 // ThemeRemove deletes an installed pluggable theme by id, live. Built-ins are
 // refused (ErrThemeBuiltin); an unknown id is ErrThemeNotInstalled.
-func (a *API) ThemeRemove(ctx context.Context, name string) (ThemeRemoveResult, error) {
-	svc, err := a.service()
+func (a *API) ThemeRemove(ctx context.Context, vault, name string) (ThemeRemoveResult, error) {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return ThemeRemoveResult{}, err
 	}

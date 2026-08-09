@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/chinese-room-solutions/grimoire/internal/app"
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
 	"github.com/rs/zerolog"
 )
@@ -75,7 +74,7 @@ func apiCreateNoteHandler(api *grimoireapi.API, logger zerolog.Logger) http.Hand
 		if !decodeBody(w, r, &in, logger) || !requireField(w, in.Path, "path", logger) {
 			return
 		}
-		note, err := api.CreateNote(r.Context(), in.Path, in.Content, in.Overwrite)
+		note, err := api.CreateNote(r.Context(), requestVault(r), in.Path, in.Content, in.Overwrite)
 		if err != nil {
 			writeServiceError(w, err, logger, "create note")
 			return
@@ -93,7 +92,7 @@ func apiUpdateNoteHandler(api *grimoireapi.API, logger zerolog.Logger) http.Hand
 		if !decodeBody(w, r, &in, logger) || !requireField(w, in.Path, "path", logger) {
 			return
 		}
-		note, err := api.UpdateNote(r.Context(), in.Path, in.Content)
+		note, err := api.UpdateNote(r.Context(), requestVault(r), in.Path, in.Content)
 		if err != nil {
 			writeServiceError(w, err, logger, "update note")
 			return
@@ -112,7 +111,7 @@ func apiEditNoteHandler(api *grimoireapi.API, logger zerolog.Logger) http.Handle
 		if !decodeBody(w, r, &in, logger) || !requireField(w, in.Path, "path", logger) || !requireField(w, in.OldText, "old_text", logger) {
 			return
 		}
-		note, err := api.EditNote(r.Context(), in.Path, in.OldText, in.NewText)
+		note, err := api.EditNote(r.Context(), requestVault(r), in.Path, in.OldText, in.NewText)
 		if err != nil {
 			writeServiceError(w, err, logger, "edit note")
 			return
@@ -130,7 +129,7 @@ func apiSetPropertiesHandler(api *grimoireapi.API, logger zerolog.Logger) http.H
 		if !decodeBody(w, r, &in, logger) || !requireField(w, in.Path, "path", logger) {
 			return
 		}
-		note, err := api.SetNoteProperties(r.Context(), in.Path, in.Properties)
+		note, err := api.SetNoteProperties(r.Context(), requestVault(r), in.Path, in.Properties)
 		if err != nil {
 			writeServiceError(w, err, logger, "set properties")
 			return
@@ -149,7 +148,7 @@ func apiRenameNoteHandler(api *grimoireapi.API, logger zerolog.Logger) http.Hand
 		if !decodeBody(w, r, &in, logger) || !requireField(w, in.From, "from", logger) || !requireField(w, in.To, "to", logger) {
 			return
 		}
-		res, err := api.RenameNote(r.Context(), in.From, in.To, in.Overwrite)
+		res, err := api.RenameNote(r.Context(), requestVault(r), in.From, in.To, in.Overwrite)
 		if err != nil {
 			writeServiceError(w, err, logger, "rename note")
 			return
@@ -164,8 +163,7 @@ func apiDeleteNoteHandler(api *grimoireapi.API, logger zerolog.Logger) http.Hand
 		if !requireField(w, path, "path", logger) {
 			return
 		}
-		permanent := r.URL.Query().Get("permanent") == "true"
-		res, err := api.DeleteNote(r.Context(), path, permanent)
+		res, err := api.DeleteNote(r.Context(), requestVault(r), path)
 		if err != nil {
 			writeServiceError(w, err, logger, "delete note")
 			return
@@ -189,10 +187,12 @@ func apiImportHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerF
 			writeAPIError(w, http.StatusBadRequest, "expected multipart/form-data with file parts", logger)
 			return
 		}
-		// One up-front vault check, so an unbound backend is a request-level 503
-		// rather than the same error repeated per file.
-		if _, open := api.CurrentVault(r.Context()); !open {
-			writeServiceError(w, app.ErrNoVault, logger, "import")
+		// One up-front probe of the vault this request targets, so an unservable
+		// vault is a request-level 503 rather than the same error repeated per
+		// file. Checking the request's vault, not the last-used one: an explicit
+		// ?vault= must work on a daemon that has no last-vault yet.
+		if err := api.Ready(r.Context(), requestVault(r)); err != nil {
+			writeServiceError(w, err, logger, "import")
 			return
 		}
 		var results []grimoireapi.ImportResult
@@ -231,30 +231,31 @@ func importPart(r *http.Request, api *grimoireapi.API, name string, part io.Read
 	case len(data) > importMaxBytes:
 		return grimoireapi.ImportResult{Name: name, Error: fmt.Sprintf("file exceeds %d MiB", importMaxBytes>>20)}
 	}
-	ref, err := api.ImportNote(r.Context(), name, data)
+	ref, err := api.ImportNote(r.Context(), requestVault(r), name, data)
 	if err != nil {
 		logger.Warn().Err(err).Str("file", name).Msg("importing file")
-		return grimoireapi.ImportResult{Name: name, Error: err.Error()}
+		return grimoireapi.ImportFailure(name, err)
 	}
 	return grimoireapi.ImportResult{Name: name, Path: ref.Path}
 }
 
-// apiReindexHandler syncs the vault into the search index. The JSON body is
-// optional: {"force": bool}, where force re-embeds every note and the default
-// (or an empty body) is an incremental pass. The call is synchronous — a
-// forced pass over a large vault runs for minutes. A partial pass (some notes
-// failed, the rest indexed) is still a 200, with failed > 0 and the retained
-// errors in message; only a pass that produced nothing (no vault or model,
-// store unavailable) maps to an error status.
+// apiReindexHandler syncs the search index. The JSON body is optional:
+// {"force": bool, "paths": []string}, where force re-embeds regardless of
+// content hash and paths narrows the pass to those notes (empty = the whole
+// vault). The call is synchronous — a forced vault pass runs for minutes. A
+// partial pass (some notes failed, the rest indexed) is still a 200, with
+// failed > 0 and the retained errors in message; only a pass that produced
+// nothing (no vault or model, store unavailable) maps to an error status.
 func apiReindexHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Force bool `json:"force"`
+			Force bool     `json:"force"`
+			Paths []string `json:"paths"`
 		}
 		if !decodeBody(w, r, &in, logger) {
 			return
 		}
-		res, err := api.Reindex(r.Context(), in.Force)
+		res, err := api.Reindex(r.Context(), requestVault(r), in.Paths, in.Force)
 		if err != nil {
 			writeServiceError(w, err, logger, "reindex")
 			return
@@ -275,7 +276,7 @@ func apiCreateFolderHandler(api *grimoireapi.API, logger zerolog.Logger) http.Ha
 		if !decodeBody(w, r, &in, logger) || !requireField(w, in.Path, "path", logger) {
 			return
 		}
-		ref, err := api.CreateFolder(r.Context(), in.Path)
+		ref, err := api.CreateFolder(r.Context(), requestVault(r), in.Path)
 		if err != nil {
 			writeServiceError(w, err, logger, "create folder")
 			return
@@ -290,8 +291,7 @@ func apiDeleteFolderHandler(api *grimoireapi.API, logger zerolog.Logger) http.Ha
 		if !requireField(w, path, "path", logger) {
 			return
 		}
-		permanent := r.URL.Query().Get("permanent") == "true"
-		res, err := api.DeleteFolder(r.Context(), path, permanent)
+		res, err := api.DeleteFolder(r.Context(), requestVault(r), path)
 		if err != nil {
 			writeServiceError(w, err, logger, "delete folder")
 			return
@@ -309,7 +309,7 @@ func apiRenameFolderHandler(api *grimoireapi.API, logger zerolog.Logger) http.Ha
 		if !decodeBody(w, r, &in, logger) || !requireField(w, in.From, "from", logger) || !requireField(w, in.To, "to", logger) {
 			return
 		}
-		ref, err := api.RenameFolder(r.Context(), in.From, in.To)
+		ref, err := api.RenameFolder(r.Context(), requestVault(r), in.From, in.To)
 		if err != nil {
 			writeServiceError(w, err, logger, "rename folder")
 			return
@@ -320,7 +320,7 @@ func apiRenameFolderHandler(api *grimoireapi.API, logger zerolog.Logger) http.Ha
 
 func apiListTrashHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		items, err := api.ListTrash(r.Context())
+		items, err := api.ListTrash(r.Context(), requestVault(r))
 		if err != nil {
 			writeServiceError(w, err, logger, "list trash")
 			return
@@ -337,7 +337,7 @@ func apiRestoreTrashHandler(api *grimoireapi.API, logger zerolog.Logger) http.Ha
 		if !decodeBody(w, r, &in, logger) || !requireField(w, in.TrashID, "trashID", logger) {
 			return
 		}
-		note, err := api.RestoreTrash(r.Context(), in.TrashID)
+		note, err := api.RestoreTrash(r.Context(), requestVault(r), in.TrashID)
 		if err != nil {
 			writeServiceError(w, err, logger, "restore trash")
 			return
@@ -352,7 +352,7 @@ func apiDeleteTrashItemHandler(api *grimoireapi.API, logger zerolog.Logger) http
 		if !requireField(w, trashID, "trashID", logger) {
 			return
 		}
-		if err := api.DeleteTrashItem(r.Context(), trashID); err != nil {
+		if err := api.DeleteTrashItem(r.Context(), requestVault(r), trashID); err != nil {
 			writeServiceError(w, err, logger, "delete trash item")
 			return
 		}
@@ -362,7 +362,7 @@ func apiDeleteTrashItemHandler(api *grimoireapi.API, logger zerolog.Logger) http
 
 func apiEmptyTrashHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := api.EmptyTrash(r.Context()); err != nil {
+		if err := api.EmptyTrash(r.Context(), requestVault(r)); err != nil {
 			writeServiceError(w, err, logger, "empty trash")
 			return
 		}

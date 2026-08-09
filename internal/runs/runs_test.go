@@ -230,6 +230,74 @@ func TestRenameNote(t *testing.T) {
 	require.Equal(t, "hi\n", got.Items[0].Data)
 }
 
+func TestRenameFolder(t *testing.T) {
+	tests := []struct {
+		name        string
+		saved       []string // note paths with a stored result
+		from, to    string
+		wantMoved   map[string]string // old path -> new path
+		wantUnmoved []string
+	}{
+		{
+			name:        "re-keys nested notes",
+			saved:       []string{"Projects/a.md", "Projects/Sub/b.md"},
+			from:        "Projects",
+			to:          "Work",
+			wantMoved:   map[string]string{"Projects/a.md": "Work/a.md", "Projects/Sub/b.md": "Work/Sub/b.md"},
+			wantUnmoved: nil,
+		},
+		{
+			name:        "leaves other folders alone",
+			saved:       []string{"Projects/a.md", "Other/a.md", "top.md"},
+			from:        "Projects",
+			to:          "Work",
+			wantMoved:   map[string]string{"Projects/a.md": "Work/a.md"},
+			wantUnmoved: []string{"Other/a.md", "top.md"},
+		},
+		{
+			name:        "a name-prefix sibling is not a child",
+			saved:       []string{"a/x.md", "ab/x.md"},
+			from:        "a",
+			to:          "c",
+			wantMoved:   map[string]string{"a/x.md": "c/x.md"},
+			wantUnmoved: []string{"ab/x.md"},
+		},
+		{
+			name:        "moves a folder under another",
+			saved:       []string{"a/x.md"},
+			from:        "a",
+			to:          "nest/a",
+			wantMoved:   map[string]string{"a/x.md": "nest/a/x.md"},
+			wantUnmoved: nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openTemp(t)
+			for _, p := range tc.saved {
+				require.NoError(t, s.Save(p, "h1", textResult(p, 0)))
+			}
+
+			require.NoError(t, s.RenameFolder(tc.from, tc.to))
+
+			for old, moved := range tc.wantMoved {
+				_, ok, err := s.Get(old, "h1")
+				require.NoError(t, err)
+				require.False(t, ok, "%s no longer holds the result", old)
+				got, ok, err := s.Get(moved, "h1")
+				require.NoError(t, err)
+				require.True(t, ok, "the result followed the note to %s", moved)
+				require.Equal(t, old, got.Items[0].Data)
+			}
+			for _, p := range tc.wantUnmoved {
+				_, ok, err := s.Get(p, "h1")
+				require.NoError(t, err)
+				require.True(t, ok, "%s is untouched", p)
+			}
+		})
+	}
+}
+
 func TestNotePaths(t *testing.T) {
 	s := openTemp(t)
 

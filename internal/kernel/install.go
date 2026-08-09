@@ -174,8 +174,7 @@ func extractFile(f *zip.File, dst string) error {
 	if err != nil {
 		return fmt.Errorf("writing kernel file: %w", err)
 	}
-	// LimitReader guards an archive whose entry lies about its size.
-	if _, err := io.Copy(out, io.LimitReader(src, maxPackageBytes+1)); err != nil {
+	if _, err := io.Copy(out, src); err != nil {
 		_ = out.Close()
 		return ctxerr.With(fmt.Errorf("%w: extracting entry %q: %v", ErrBadPackage, f.Name, err), map[string]any{"entry": f.Name})
 	}
@@ -184,15 +183,19 @@ func extractFile(f *zip.File, dst string) error {
 
 // loadInstalledManifest parses the extracted kernel's manifest(s), proving the
 // package is a working kernel before it's renamed into place. The first
-// manifest (glob order) is returned.
+// manifest (name order) is returned.
 func loadInstalledManifest(dir, family, version string) (*Manifest, error) {
-	manifests, _ := filepath.Glob(filepath.Join(dir, "*.kernel.yaml"))
-	if len(manifests) == 0 {
-		return nil, ctxerr.With(fmt.Errorf("%w: no *.kernel.yaml manifest under %s/%s/", ErrBadPackage, family, version),
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, ctxerr.With(fmt.Errorf("%w: reading %s/%s/: %v", ErrBadPackage, family, version, err),
 			map[string]any{"family": family, "version": version})
 	}
 	var first *Manifest
-	for _, p := range manifests {
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), manifestSuffix) {
+			continue
+		}
+		p := filepath.Join(dir, entry.Name())
 		data, err := os.ReadFile(p)
 		if err != nil {
 			return nil, ctxerr.With(fmt.Errorf("%w: reading manifest: %v", ErrBadPackage, err), map[string]any{"manifest": p})
@@ -204,6 +207,10 @@ func loadInstalledManifest(dir, family, version string) (*Manifest, error) {
 		if first == nil {
 			first = m
 		}
+	}
+	if first == nil {
+		return nil, ctxerr.With(fmt.Errorf("%w: no *%s manifest under %s/%s/", ErrBadPackage, manifestSuffix, family, version),
+			map[string]any{"family": family, "version": version})
 	}
 	return first, nil
 }

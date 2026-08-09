@@ -327,9 +327,10 @@ func (s *Service) dropRunsForDeleted(rel string) {
 }
 
 // sweepOrphanRunResults deletes run results whose note no longer exists in the
-// vault — orphans left by deletes and renames made while Grimoire wasn't running,
-// which the watcher never saw. Called once at watcher startup. Best-effort: a
-// stat that fails for any reason other than "not there" keeps the results.
+// vault — orphans left by deletes and renames the watcher couldn't attribute to
+// a note: those made while Grimoire wasn't running, and external folder moves,
+// which fsnotify reports only at the directory level. Best-effort: a stat that
+// fails for any reason other than "not there" keeps the results.
 func (s *Service) sweepOrphanRunResults() {
 	if s.runs == nil {
 		return

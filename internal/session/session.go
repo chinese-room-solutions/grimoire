@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/chinese-room-solutions/grimoire/internal/sqlmigrate"
@@ -45,6 +44,13 @@ type Hit struct {
 	Path    string `json:"path"`
 	Heading string `json:"heading"`
 	Text    string `json:"text"`
+	// Vault the hit came from, for sessions that search several at once. Turns
+	// written before the field existed decode with it empty: unknown vault.
+	Vault string `json:"vault,omitempty"`
+	// Model that ranked the hit, so a replayed turn folds into the same
+	// per-model blocks the live results did. Empty on turns written before the
+	// field existed, and on a vault with no model: one flat list.
+	Model string `json:"model,omitempty"`
 }
 
 // Turn is one search within a session: the user's query and the ranked results
@@ -65,7 +71,7 @@ type Store struct {
 
 // Open opens (creating if needed) the session history at path.
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite3", fileDSN(path))
+	db, err := sql.Open("sqlite3", sqlmigrate.FileDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("opening sessions: %w", err)
 	}
@@ -80,13 +86,6 @@ func Open(path string) (*Store, error) {
 // Close releases the database.
 func (s *Store) Close() error {
 	return s.db.Close()
-}
-
-// fileDSN builds the ncruces "file:" DSN for a local database path. On Windows
-// the drive-letter path is used as-is after "file:" (file:C:/dir/x.db); a
-// file:// authority form is rejected by its VFS.
-func fileDSN(path string) string {
-	return "file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 }
 
 func (s *Store) init() error {

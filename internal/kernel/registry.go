@@ -40,10 +40,12 @@ func isBuiltin(family, version string) bool {
 }
 
 const (
-	kernelsDir  = "kernels"
-	runnerPerm  = 0o755
-	kernelPerm  = 0o644
-	kernelDperm = 0o755
+	kernelsDir = "kernels"
+	// manifestSuffix marks a kernel manifest inside a <family>/<version>/ dir.
+	manifestSuffix = ".kernel.yaml"
+	runnerPerm     = 0o755
+	kernelPerm     = 0o644
+	kernelDperm    = 0o755
 )
 
 // Source says where an installed kernel was discovered: shipped in the binary
@@ -222,8 +224,16 @@ func scanInto(
 			}
 			version := ver.Name()
 			dir := filepath.Join(root, family, version)
-			manifests, _ := filepath.Glob(filepath.Join(dir, "*.kernel.yaml"))
-			for _, path := range manifests {
+			manifests, err := os.ReadDir(dir)
+			if err != nil {
+				logger.Warn().Err(err).Str("dir", dir).Msg("could not read kernel version dir")
+				continue
+			}
+			for _, entry := range manifests {
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), manifestSuffix) {
+					continue
+				}
+				path := filepath.Join(dir, entry.Name())
 				m := loadFrom(path, dir, family, version, logger)
 				if m == nil {
 					continue

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/KernelPryanic/ctxerr"
 	"github.com/chinese-room-solutions/mass-sdk/registry"
@@ -34,11 +35,6 @@ const maxThemeBytes = 1 << 20
 // theme package (or no requested version with an artifact) by that name.
 var ErrThemePackageUnknown = errors.New("no such theme package")
 
-// SetThemeRegistryURL sets the theme package index URL. Called once right
-// after New, before the service takes requests (theme installs stay disabled
-// while empty).
-func (s *Service) SetThemeRegistryURL(url string) { s.themeRegistryURL = url }
-
 // ThemePackage is one installable theme package from the registry index: its
 // package name, the theme id it installs as, and the version an unqualified
 // install picks (the newest listed with an "any" artifact — the index appends
@@ -56,7 +52,7 @@ type ThemePackage struct {
 // ThemePackages lists the theme packages the registry index offers, with the
 // same staleness/degrade contract as KernelPackages.
 func (s *Service) ThemePackages(ctx context.Context) (pkgs []ThemePackage, stale bool, err error) {
-	idx, stale, err := s.fetchIndex(ctx, s.themeRegistryURL)
+	idx, stale, err := s.fetchIndex(ctx, s.shared.themeRegistryURL)
 	if err != nil {
 		return nil, false, err
 	}
@@ -82,7 +78,7 @@ func (s *Service) ThemePackages(ctx context.Context) (pkgs []ThemePackage, stale
 // immediately. Installing an already-installed theme overwrites it (the update
 // path). version "" picks the newest listed.
 func (s *Service) InstallTheme(ctx context.Context, name, version string) (uikit.ThemeInfo, error) {
-	idx, _, err := s.fetchIndex(ctx, s.themeRegistryURL)
+	idx, _, err := s.fetchIndex(ctx, s.shared.themeRegistryURL)
 	if err != nil {
 		return uikit.ThemeInfo{}, err
 	}
@@ -91,7 +87,7 @@ func (s *Service) InstallTheme(ctx context.Context, name, version string) (uikit
 		return uikit.ThemeInfo{}, ctxerr.With(fmt.Errorf("%w: %s", ErrThemePackageUnknown, name),
 			map[string]any{"package": name})
 	}
-	artifact, err := themeArtifact(pkg, version)
+	artifact, _, err := pickArtifact(pkg, version, newestThemeVersion, ErrThemePackageUnknown)
 	if err != nil {
 		return uikit.ThemeInfo{}, err
 	}
@@ -122,34 +118,10 @@ func (s *Service) RemoveTheme(id string) error {
 	return uikit.RemoveTheme(id)
 }
 
-// themeArtifact picks the package version to install — the requested one, or
-// the newest listed with an "any" artifact when want is "".
-func themeArtifact(pkg *registry.Package, want string) (registry.Artifact, error) {
-	if want == "" {
-		newest, ok := newestThemeVersion(pkg)
-		if !ok {
-			return registry.Artifact{}, ctxerr.With(
-				fmt.Errorf("%w: %s has no installable version", ErrThemePackageUnknown, pkg.Name),
-				map[string]any{"package": pkg.Name})
-		}
-		want = newest
-	}
-	for _, v := range pkg.Versions {
-		if v.Version != want {
-			continue
-		}
-		if a, ok := v.Artifacts[artifactKeyAny]; ok {
-			return a, nil
-		}
-	}
-	return registry.Artifact{}, ctxerr.With(
-		fmt.Errorf("%w: %s@%s", ErrThemePackageUnknown, pkg.Name, want),
-		map[string]any{"package": pkg.Name, "version": want})
-}
-
 // newestThemeVersion returns the package's newest version with an "any"
 // artifact. Theme versions are plain semver maintained append-newest-last in
-// the hand-edited index, so "newest" is the last qualifying entry.
+// the hand-edited index, so "newest" is the last qualifying entry (unlike
+// kernels, which compare version numbers).
 func newestThemeVersion(pkg *registry.Package) (string, bool) {
 	for i := len(pkg.Versions) - 1; i >= 0; i-- {
 		if _, ok := pkg.Versions[i].Artifacts[artifactKeyAny]; ok {
@@ -163,8 +135,5 @@ func newestThemeVersion(pkg *registry.Package) (string, bool) {
 // neon). A name without the prefix maps to itself; uikit's name validation
 // then decides.
 func themePackageID(name string) string {
-	if len(name) > len(themePackagePrefix) && name[:len(themePackagePrefix)] == themePackagePrefix {
-		return name[len(themePackagePrefix):]
-	}
-	return name
+	return strings.TrimPrefix(name, themePackagePrefix)
 }

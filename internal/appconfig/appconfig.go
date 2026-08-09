@@ -42,55 +42,15 @@ type Config struct {
 	// IndexConcurrency is how many notes a full vault reindex embeds at once.
 	// 0 means use the indexer's default.
 	IndexConcurrency int `json:"indexConcurrency,omitempty"`
-	// TrashMode controls whether deleting a note moves it to the vault's .trash/
-	// folder (restorable) or removes it permanently, and for whom. An empty value
-	// (never configured) reads as the default, TrashAll. Use Trashes to resolve it
-	// for a given caller.
-	TrashMode TrashMode `json:"trashMode,omitempty"`
+	// TrashDisabled makes deletes permanent instead of moving the note to the
+	// vault's restorable .trash/ folder. Negative so the zero value (never
+	// configured) is the safe default: the trash is on. Read it through Trashes.
+	TrashDisabled bool `json:"trashDisabled,omitempty"`
 }
 
-// TrashMode is the soft-delete policy: who gets the restorable trash on delete.
-type TrashMode string
-
-const (
-	// TrashAll soft-deletes for everyone (the default).
-	TrashAll TrashMode = "all"
-	// TrashAgents soft-deletes only for AI-agent (API) deletes; the user's
-	// own deletes in the GUI are permanent.
-	TrashAgents TrashMode = "agents"
-	// TrashOff removes permanently for everyone.
-	TrashOff TrashMode = "off"
-)
-
-// TrashModeOrDefault returns the configured mode, defaulting to TrashAll when
-// unset or unrecognized — for seeding the settings UI.
-func (c Config) TrashModeOrDefault() TrashMode {
-	return c.trashMode()
-}
-
-// trashMode returns the configured mode, defaulting to TrashAll when unset or
-// unrecognized.
-func (c Config) trashMode() TrashMode {
-	switch c.TrashMode {
-	case TrashAll, TrashAgents, TrashOff:
-		return c.TrashMode
-	default:
-		return TrashAll
-	}
-}
-
-// Trashes reports whether a delete should soft-delete to the trash, given who is
-// deleting: byAgent is true for AI-agent (API) deletes, false for the user's
-// own GUI deletes.
-func (c Config) Trashes(byAgent bool) bool {
-	switch c.trashMode() {
-	case TrashAll:
-		return true
-	case TrashAgents:
-		return byAgent
-	default: // TrashOff
-		return false
-	}
+// Trashes reports whether a delete soft-deletes to the vault's trash.
+func (c Config) Trashes() bool {
+	return !c.TrashDisabled
 }
 
 // Load reads the config from dir, returning a zero Config if absent.

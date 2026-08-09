@@ -61,8 +61,8 @@ type KernelListResult struct {
 // installable packages. Registry unreachable (offline, bad URL) is not an
 // error — the installed list still returns, with Warning saying why Available
 // is missing (or possibly stale, when a cached index was served).
-func (a *API) KernelList(ctx context.Context) (KernelListResult, error) {
-	svc, err := a.service()
+func (a *API) KernelList(ctx context.Context, vault string) (KernelListResult, error) {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return KernelListResult{}, err
 	}
@@ -120,8 +120,8 @@ type KernelInstallResult struct {
 // version "" means the package's newest. Already installed → ErrKernelExists
 // (a conflict); unknown package/version → ErrKernelPackageUnknown; registry
 // unreachable → ErrRegistryUnavailable.
-func (a *API) KernelInstall(ctx context.Context, name, version string) (KernelInstallResult, error) {
-	svc, err := a.service()
+func (a *API) KernelInstall(ctx context.Context, vault, name, version string) (KernelInstallResult, error) {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return KernelInstallResult{}, err
 	}
@@ -143,8 +143,8 @@ type KernelRemoveResult struct {
 // Builtins are refused (ErrKernelBuiltin), as are kernels living in the vault's
 // own kernels dir (ErrKernelVaultManaged — they're listed but managed on disk,
 // not through the API); a version installed in neither is ErrKernelNotInstalled.
-func (a *API) KernelRemove(ctx context.Context, family, version string) (KernelRemoveResult, error) {
-	svc, err := a.service()
+func (a *API) KernelRemove(ctx context.Context, vault, family, version string) (KernelRemoveResult, error) {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return KernelRemoveResult{}, err
 	}

@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,8 +15,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"github.com/chinese-room-solutions/grimoire/internal/apiclient"
+	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,15 +60,15 @@ func newCLIBackend(t *testing.T, routes map[string]http.HandlerFunc) *cliBackend
 // reconnects to the same server.
 func (b *cliBackend) env(t *testing.T, jsonOut bool) (*cliEnv, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
-	client := apiclient.NewForTest(b.srv.URL)
+	client := apiclient.NewForTest(b.srv.URL, "/test/vault")
 	var out, errBuf bytes.Buffer
 	e := &cliEnv{
 		out:     &out,
 		err:     &errBuf,
 		json:    jsonOut,
 		vault:   "/test/vault",
-		connect: func() (*apiclient.Client, error) { return client, nil },
-		respawn: func() (*apiclient.Client, error) { return client, nil },
+		connect: func(context.Context) (*apiclient.Client, error) { return client, nil },
+		respawn: func(context.Context) (*apiclient.Client, error) { return client, nil },
 	}
 	return e, &out, &errBuf
 }
@@ -138,6 +143,147 @@ func TestCLINoteGet(t *testing.T) {
 	}
 }
 
+// Search covers every vault, so the human view says which vault each hit lives
+// in — unless the caller narrowed the search themselves, when the answer is
+// already about one vault. A vault that couldn't answer is reported on stderr,
+// never mistaken for a result.
+func TestCLISearchLabelsHitsWithTheirVault(t *testing.T) {
+	routes := map[string]http.HandlerFunc{
+		"GET /api/v1/search": func(w http.ResponseWriter, _ *http.Request) {
+			stubJSON(t, w, grimoireapi.SearchResult{
+				Query: "q",
+				Hits: []grimoireapi.Hit{
+					{Path: "specs/a.md", Text: "one", Similarity: 0.9, Vault: "/vaults/work"},
+					{Path: "diary.md", Text: "two", Similarity: 0.8, Vault: "/vaults/home"},
+				},
+				Warnings: []string{"archive: index not ready yet"},
+			})
+		},
+	}
+	tests := []struct {
+		name     string
+		vault    string
+		wantOut  []string
+		wantMiss string
+	}{
+		{
+			name:    "cross-vault hits carry their vault",
+			wantOut: []string{"1. work/specs/a.md", "2. home/diary.md"},
+		},
+		{
+			name:     "a narrowed search prints bare paths",
+			vault:    "/vaults/work",
+			wantOut:  []string{"1. specs/a.md", "2. diary.md"},
+			wantMiss: "work/specs",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newCLIBackend(t, routes)
+			e, out, errBuf := b.env(t, false)
+			e.vault = tt.vault
+			require.Equal(t, exitOK, e.dispatch([]string{"search", "q"}))
+			for _, want := range tt.wantOut {
+				require.Contains(t, out.String(), want)
+			}
+			if tt.wantMiss != "" {
+				require.NotContains(t, out.String(), tt.wantMiss)
+			}
+			require.Contains(t, errBuf.String(), "archive: index not ready yet")
+		})
+	}
+
+	t.Run("json carries the vault verbatim", func(t *testing.T) {
+		b := newCLIBackend(t, routes)
+		e, out, _ := b.env(t, true)
+		require.Equal(t, exitOK, e.dispatch([]string{"search", "q"}))
+		var res grimoireapi.SearchResult
+		require.NoError(t, json.Unmarshal(out.Bytes(), &res))
+		require.Equal(t, "/vaults/work", res.Hits[0].Vault)
+		require.Equal(t, []string{"archive: index not ready yet"}, res.Warnings)
+	})
+}
+
+// Hits ranked by different embedding models sit on different similarity scales,
+// so the human view says where one model's ranking ends and the next begins —
+// and says nothing at all when there is only one, which is the usual case.
+func TestCLISearchHeadsEachModelGroup(t *testing.T) {
+	hits := []grimoireapi.Hit{
+		{Path: "a.md", Similarity: 0.9, Vault: "/vaults/work", Model: "model-x"},
+		{Path: "b.md", Similarity: 0.8, Vault: "/vaults/home", Model: "model-x"},
+		{Path: "c.md", Similarity: 0.7, Vault: "/vaults/old", Model: "model-y"},
+	}
+	tests := []struct {
+		name     string
+		hits     []grimoireapi.Hit
+		wantOut  []string
+		wantMiss string
+	}{
+		{
+			name:     "one model needs no header",
+			hits:     hits[:2],
+			wantOut:  []string{"1. work/a.md", "2. home/b.md"},
+			wantMiss: "— vaults",
+		},
+		{
+			name: "two models are headed by their vaults and model",
+			hits: hits,
+			wantOut: []string{
+				"— vaults work, home (model-x)\n1. work/a.md",
+				"— vaults old (model-y)\n3. old/c.md",
+			},
+		},
+		{
+			name:    "a keyword-only group says so",
+			hits:    []grimoireapi.Hit{hits[0], {Path: "d.md", Vault: "/vaults/plain"}},
+			wantOut: []string{"— vaults plain (keyword only)"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newCLIBackend(t, map[string]http.HandlerFunc{
+				"GET /api/v1/search": func(w http.ResponseWriter, _ *http.Request) {
+					stubJSON(t, w, grimoireapi.SearchResult{Query: "q", Hits: tt.hits})
+				},
+			})
+			e, out, _ := b.env(t, false)
+			e.vault = "" // cross-vault, so hits carry their vault.
+			require.Equal(t, exitOK, e.dispatch([]string{"search", "q"}))
+			for _, want := range tt.wantOut {
+				require.Contains(t, out.String(), want)
+			}
+			if tt.wantMiss != "" {
+				require.NotContains(t, out.String(), tt.wantMiss)
+			}
+		})
+	}
+}
+
+// Search is the one verb that runs without a vault: with none named and none
+// ever opened it covers every vault the daemon knows, so it must not be turned
+// away at the door. Every other verb still needs one.
+func TestCLISearchNeedsNoVault(t *testing.T) {
+	isolateVaultDirs(t) // no last-used vault anywhere.
+	require.False(t, requiresVault("search"))
+	require.True(t, needsVault("search"), "--vault still narrows it")
+	for _, verb := range []string{"note", "vault", "resolve", "reindex", "import"} {
+		require.True(t, requiresVault(verb), verb)
+	}
+
+	// Through the real entry point, which is where the gate lives. `search --help`
+	// stops short of the daemon but only after the vault has been resolved, so it
+	// shows the resolution let it through; a vault-bound verb is still turned away.
+	var out, errBuf bytes.Buffer
+	require.Equal(t, exitOK, runCLIWith([]string{"search", "--help"}, &out, &errBuf))
+	require.Contains(t, out.String(), "search QUERY")
+	require.Empty(t, errBuf.String())
+
+	out.Reset()
+	errBuf.Reset()
+	require.Equal(t, exitUsage, runCLIWith([]string{"note", "get", "a.md"}, &out, &errBuf))
+	require.Contains(t, errBuf.String(), "no vault")
+}
+
 func TestCLINoteWriteExitCodes(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -179,6 +325,17 @@ func TestCLINoteWriteExitCodes(t *testing.T) {
 			args:     []string{"note", "edit", "n.md", "--old", "a"},
 			wantExit: exitUsage,
 		},
+		{
+			name: "rename takes dash-leading paths after --",
+			routes: map[string]http.HandlerFunc{
+				"POST /api/v1/note/rename": func(w http.ResponseWriter, _ *http.Request) {
+					stubJSON(t, w, map[string]string{"path": "-b.md"})
+				},
+			},
+			args:     []string{"note", "rename", "--", "-a.md", "-b.md"},
+			wantExit: exitOK,
+			wantBody: `{"from":"-a.md","to":"-b.md","overwrite":false}`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -189,6 +346,36 @@ func TestCLINoteWriteExitCodes(t *testing.T) {
 			if tt.wantBody != "" {
 				require.JSONEq(t, tt.wantBody, b.lastBody)
 			}
+		})
+	}
+}
+
+// TestCLIDeleteIndexWarning: the note left the vault but its index entry didn't.
+// The delete still reports as done, and the exit code is 1 so a caller can't
+// mistake a stale hit for a real one.
+func TestCLIDeleteIndexWarning(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		args  []string
+		route string
+	}{
+		{"note delete", []string{"note", "delete", "n.md"}, "DELETE /api/v1/note"},
+		{"folder delete", []string{"folder", "delete", "f"}, "DELETE /api/v1/folder"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newCLIBackend(t, map[string]http.HandlerFunc{
+				tt.route: func(w http.ResponseWriter, _ *http.Request) {
+					stubJSON(t, w, map[string]any{
+						"path": "n.md", "trashed": false,
+						"indexWarning": "index update failed: pruning \"n.md\": gateway down",
+					})
+				},
+			})
+			e, out, errBuf := b.env(t, false)
+			require.Equal(t, exitError, e.dispatch(tt.args))
+			require.Contains(t, out.String(), "deleted n.md")
+			require.Contains(t, errBuf.String(), "index update failed")
+			require.Contains(t, errBuf.String(), "reindex it to clear the stale entry")
 		})
 	}
 }
@@ -235,19 +422,67 @@ func TestCLIVaultTreeIndents(t *testing.T) {
 	require.Equal(t, "folder/\n  child\ntop\n", out.String())
 }
 
-func TestCLIVaultListMarksCurrent(t *testing.T) {
-	b := newCLIBackend(t, map[string]http.HandlerFunc{
+// TestCLIVaultList covers the status table: aligned columns, "*" on the current
+// vault, "-" for anything the daemon couldn't fill, and the same rows under a
+// "vaults" key in --json (the shape the endpoint itself returns).
+func TestCLIVaultList(t *testing.T) {
+	vaults := map[string]http.HandlerFunc{
 		"GET /api/v1/vaults": func(w http.ResponseWriter, _ *http.Request) {
 			stubJSON(t, w, map[string]any{"vaults": []map[string]any{
-				{"name": "v1", "path": "/v1", "current": false},
-				{"name": "v2", "path": "/v2", "current": true},
+				{"name": "v1", "path": "/v1", "current": false, "available": true,
+					"chunks": 12, "embedModel": "embed-a", "lastSync": "2026-08-09T10:00:00Z"},
+				{"name": "v2", "path": "/v2", "current": true, "available": true},
+				{"name": "gone", "path": "/gone", "current": false, "available": false},
 			}})
 		},
+	}
+
+	t.Run("table", func(t *testing.T) {
+		b := newCLIBackend(t, vaults)
+		e, out, _ := b.env(t, false)
+		require.Equal(t, exitOK, e.dispatch([]string{"vault", "list"}))
+		require.Equal(t, strings.Join([]string{
+			"  NAME  PATH   AVAILABLE  CHUNKS  LAST-SYNC             MODEL",
+			"  v1    /v1    yes        12      2026-08-09T10:00:00Z  embed-a",
+			"* v2    /v2    yes        -       -                     -",
+			"  gone  /gone  no         -       -                     -",
+			"",
+		}, "\n"), out.String())
 	})
+
+	t.Run("json wraps the rows", func(t *testing.T) {
+		b := newCLIBackend(t, vaults)
+		e, out, _ := b.env(t, true)
+		require.Equal(t, exitOK, e.dispatch([]string{"vault", "list"}))
+		var got struct {
+			Vaults []grimoireapi.Vault `json:"vaults"`
+		}
+		require.NoError(t, json.Unmarshal(out.Bytes(), &got))
+		require.Len(t, got.Vaults, 3)
+		require.Equal(t, 12, got.Vaults[0].Chunks)
+		require.True(t, got.Vaults[1].Current)
+		require.False(t, got.Vaults[2].Available)
+	})
+}
+
+// TestCLIVaultForget checks the verb reaches the forget endpoint with the path
+// and needs exactly one argument — there is no flag to confirm, because nothing
+// is deleted.
+func TestCLIVaultForget(t *testing.T) {
+	b := newCLIBackend(t, map[string]http.HandlerFunc{
+		"POST /api/v1/vault/forget": func(w http.ResponseWriter, _ *http.Request) {
+			stubJSON(t, w, map[string]any{"forgotten": "/v1"})
+		},
+	})
+
 	e, out, _ := b.env(t, false)
-	code := e.dispatch([]string{"vault", "list"})
-	require.Equal(t, exitOK, code)
-	require.Equal(t, "  v1\t/v1\n* v2\t/v2\n", out.String())
+	require.Equal(t, exitOK, e.dispatch([]string{"vault", "forget", "/v1"}))
+	require.JSONEq(t, `{"path":"/v1"}`, b.lastBody)
+	require.Equal(t, "forgot /v1\n", out.String())
+
+	e, _, errBuf := b.env(t, false)
+	require.Equal(t, exitUsage, e.dispatch([]string{"vault", "forget"}))
+	require.Contains(t, errBuf.String(), "exactly one PATH")
 }
 
 func TestCLITrashList(t *testing.T) {
@@ -275,14 +510,14 @@ func TestCLINoteDeleteSendsQueryAndReportsTrash(t *testing.T) {
 		{
 			name:      "soft delete sends only path and reports the restore id",
 			args:      []string{"note", "delete", "a.md"},
-			wantQuery: "path=a.md",
+			wantQuery: "path=a.md&vault=%2Ftest%2Fvault",
 			trashed:   true,
 			wantOut:   "trashed a.md (restore id: t9)\n",
 		},
 		{
-			name:      "permanent delete adds permanent=true",
-			args:      []string{"note", "delete", "a.md", "--permanent"},
-			wantQuery: "path=a.md&permanent=true",
+			name:      "a delete with the trash off reports a plain removal",
+			args:      []string{"note", "delete", "a.md"},
+			wantQuery: "path=a.md&vault=%2Ftest%2Fvault",
 			trashed:   false,
 			wantOut:   "deleted a.md\n",
 		},
@@ -348,16 +583,16 @@ func TestCLIStalePortRetry(t *testing.T) {
 			stubJSON(t, w, map[string]string{"path": "a.md", "content": "recovered"})
 		},
 	})
-	dead := apiclient.NewForTest("http://127.0.0.1:1") // nothing listens.
-	live := apiclient.NewForTest(b.srv.URL)
+	dead := apiclient.NewForTest("http://127.0.0.1:1", "/test/vault") // nothing listens.
+	live := apiclient.NewForTest(b.srv.URL, "/test/vault")
 	var out bytes.Buffer
 	respawned := false
 	e := &cliEnv{
 		out:     &out,
 		err:     &bytes.Buffer{},
 		vault:   "/test/vault",
-		connect: func() (*apiclient.Client, error) { return dead, nil },
-		respawn: func() (*apiclient.Client, error) { respawned = true; return live, nil },
+		connect: func(context.Context) (*apiclient.Client, error) { return dead, nil },
+		respawn: func(context.Context) (*apiclient.Client, error) { respawned = true; return live, nil },
 	}
 	code := e.dispatch([]string{"note", "get", "a.md"})
 	require.Equal(t, exitOK, code)
@@ -373,14 +608,14 @@ func TestCLIAPIErrorNoRetry(t *testing.T) {
 			stubErr(w, http.StatusNotFound, "note not found")
 		},
 	})
-	live := apiclient.NewForTest(b.srv.URL)
+	live := apiclient.NewForTest(b.srv.URL, "/test/vault")
 	respawned := false
 	e := &cliEnv{
 		out:     &bytes.Buffer{},
 		err:     &bytes.Buffer{},
 		vault:   "/test/vault",
-		connect: func() (*apiclient.Client, error) { return live, nil },
-		respawn: func() (*apiclient.Client, error) { respawned = true; return live, nil },
+		connect: func(context.Context) (*apiclient.Client, error) { return live, nil },
+		respawn: func(context.Context) (*apiclient.Client, error) { respawned = true; return live, nil },
 	}
 	code := e.dispatch([]string{"note", "get", "x.md"})
 	require.Equal(t, exitNotFound, code)
@@ -401,10 +636,108 @@ func TestFirstNonFlag(t *testing.T) {
 		{"combined flags then verb", []string{"--json", "--vault", "/v", "folder", "create", "f"}, "folder"},
 		{"only flags, no verb", []string{"--vault", "/v"}, ""},
 		{"empty", nil, ""},
+		{"vault flag then serve", []string{"--vault", "/v", "serve"}, "serve"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.want, firstNonFlag(tt.args))
+		})
+	}
+}
+
+// serve takes its flags on either side of the verb. --vault is accepted and
+// ignored — the daemon serves every vault — but must still parse, so scripts
+// written against the old one-backend-per-vault CLI keep running.
+func TestParseServeFlags(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantIdle time.Duration
+	}{
+		{"bare serve", []string{"serve"}, 0},
+		{"own flags after the verb", []string{"serve", "--vault", "/v", "--idle-timeout", "2m"}, 2 * time.Minute},
+		{"global vault before the verb is ignored", []string{"--vault", "/v", "serve"}, 0},
+		{"json before the verb is ignored", []string{"--json", "--vault", "/v", "serve"}, 0},
+		{"flags on both sides", []string{"--vault", "/v", "serve", "--idle-timeout", "30s"}, 30 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			i := firstNonFlagIndex(tt.args)
+			require.Equal(t, "serve", tt.args[i])
+			require.Equal(t, tt.wantIdle, parseServeFlags(tt.args, i))
+		})
+	}
+}
+
+// parseFlags intersperses flags and positionals, and stops flag parsing for good
+// at a `--` — everything after it is a positional, however it is spelled.
+func TestParseFlags(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		wantPos     []string
+		wantContent string
+		wantAll     bool
+		wantOK      bool
+	}{
+		{name: "no args", wantOK: true},
+		{
+			name: "flags interspersed with positionals", args: []string{"a.md", "--content", "x", "b.md"},
+			wantPos: []string{"a.md", "b.md"}, wantContent: "x", wantOK: true,
+		},
+		{
+			name: "everything after -- is positional", args: []string{"--", "-a.md", "-b.md"},
+			wantPos: []string{"-a.md", "-b.md"}, wantOK: true,
+		},
+		{
+			name: "flags before -- still parse", args: []string{"--all", "--content", "x", "--", "-a.md", "-b.md"},
+			wantPos: []string{"-a.md", "-b.md"}, wantContent: "x", wantAll: true, wantOK: true,
+		},
+		{
+			name: "-- mid-args, after a positional", args: []string{"a.md", "--content", "x", "--", "-b.md"},
+			wantPos: []string{"a.md", "-b.md"}, wantContent: "x", wantOK: true,
+		},
+		{
+			name: "a known flag after -- is a positional", args: []string{"--", "--content", "x"},
+			wantPos: []string{"--content", "x"}, wantOK: true,
+		},
+		{name: "unknown flag is a usage error", args: []string{"-a.md"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			content := fs.String("content", "", "")
+			all := fs.Bool("all", false, "")
+			pos, ok := parseFlags(fs, io.Discard, tt.args)
+			require.Equal(t, tt.wantOK, ok)
+			if !ok {
+				return
+			}
+			require.Equal(t, tt.wantPos, pos)
+			require.Equal(t, tt.wantContent, *content)
+			require.Equal(t, tt.wantAll, *all)
+		})
+	}
+}
+
+// firstLine caps the snippet by rune: a byte-wise cut would land inside a
+// multibyte character and emit invalid UTF-8.
+func TestFirstLine(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{"trimmed to the first line", "  head\ntail  ", "head"},
+		{"short multibyte text is untouched", "проверка", "проверка"},
+		{"blank text yields nothing", " \n ", ""},
+		{"long multibyte text is cut at 120 runes", strings.Repeat("я", 130), strings.Repeat("я", 120) + "…"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := firstLine(tt.text)
+			require.Equal(t, tt.want, got)
+			require.True(t, utf8.ValidString(got), "the snippet stays valid UTF-8")
 		})
 	}
 }
@@ -526,13 +859,15 @@ func TestCLIRespawnRetriesOnlyReadOnlyVerbs(t *testing.T) {
 			respawned := false
 			var out, errBuf bytes.Buffer
 			e := &cliEnv{
-				out:     &out,
-				err:     &errBuf,
-				vault:   "/test/vault",
-				connect: func() (*apiclient.Client, error) { return apiclient.NewForTest("http://127.0.0.1:1"), nil },
-				respawn: func() (*apiclient.Client, error) {
+				out:   &out,
+				err:   &errBuf,
+				vault: "/test/vault",
+				connect: func(context.Context) (*apiclient.Client, error) {
+					return apiclient.NewForTest("http://127.0.0.1:1", "/test/vault"), nil
+				},
+				respawn: func(context.Context) (*apiclient.Client, error) {
 					respawned = true
-					return apiclient.NewForTest(srv.URL), nil
+					return apiclient.NewForTest(srv.URL, "/test/vault"), nil
 				},
 			}
 			code := e.dispatch(tc.args)

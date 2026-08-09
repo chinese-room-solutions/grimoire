@@ -47,6 +47,23 @@ func TestRun(t *testing.T) {
 		require.Equal(t, 2, versions)
 	})
 
+	t.Run("a failing statement rolls the whole migration back", func(t *testing.T) {
+		db := openDB(t)
+		broken := fstest.MapFS{"migrations/000001_init.up.sql": {Data: []byte(
+			"CREATE TABLE a (id INTEGER PRIMARY KEY);\nCREATE TABLE a (id INTEGER PRIMARY KEY);")}}
+		require.Error(t, Run(db, broken, "migrations"))
+
+		// Neither the table nor the version survives, so the next start applies
+		// the migration cleanly instead of re-running DDL over a half-built schema.
+		require.Error(t, db.QueryRow(`SELECT COUNT(*) FROM a`).Scan(new(int)))
+		var versions int
+		require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM _migrations`).Scan(&versions))
+		require.Equal(t, 0, versions)
+
+		require.NoError(t, Run(db, fsys, "migrations"))
+		require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM a`).Scan(new(int)))
+	})
+
 	t.Run("only the new migration runs when one is added", func(t *testing.T) {
 		db := openDB(t)
 		first := fstest.MapFS{"migrations/000001_init.up.sql": fsys["migrations/000001_init.up.sql"]}

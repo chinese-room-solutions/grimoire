@@ -275,17 +275,12 @@ func installSummary(c collected, launcherOK bool, cli install.CLIResult) term.Su
 	return s
 }
 
-// runUninstall removes the launcher, the staged install, and the record. mode
-// selects the end screen (wizard Back/Exit, or plain lines for the scripted face).
+// runUninstall removes the launcher, the staged install, and the record. The
+// target is resolved by the caller — the wizard's form fields, or the scripted
+// face's flags/install record. mode selects the end screen (wizard Back/Exit, or
+// plain lines for the scripted face).
 func runUninstall(installDir string, perUser bool, tag string, mode endMode) actionOutcome {
-	// When no install dir was given (the scripted --uninstall face), recover it
-	// from the install record.
-	if installDir == "" {
-		if rec, err := appSpec.LoadRecord(); err == nil && rec != nil {
-			installDir = rec.InstallDir
-		}
-	}
-	if installDir == "" {
+	if installDir == "" { // the wizard's path field can be cleared.
 		installDir = appSpec.DefaultInstallDir()
 	}
 

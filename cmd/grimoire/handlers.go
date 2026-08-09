@@ -17,13 +17,11 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/chinese-room-solutions/grimoire/internal/app"
-	"github.com/chinese-room-solutions/grimoire/internal/appconfig"
 	"github.com/chinese-room-solutions/grimoire/internal/frontmatter"
 	"github.com/chinese-room-solutions/grimoire/internal/graph"
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
 	"github.com/chinese-room-solutions/grimoire/internal/index"
 	"github.com/chinese-room-solutions/grimoire/internal/pdfconvert"
-	"github.com/chinese-room-solutions/grimoire/internal/store"
 	"github.com/chinese-room-solutions/grimoire/internal/ui"
 	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
 	"github.com/chinese-room-solutions/mass-sdk/connstore"
@@ -32,119 +30,180 @@ import (
 	"github.com/starfederation/datastar-go/datastar"
 )
 
-// grimoireRoutes returns the GUI HTTP handler for the holder's current binding.
-// It is rebuilt on every vault swap (bind/unbind), so the per-vault action
-// handlers always close over the live service; the vault-independent surface (the
-// page, vault open/close, settings, and the agent JSON API, all holder-backed) is
-// present whether or not a vault is bound.
-func grimoireRoutes(h *serviceHolder, api *grimoireapi.API, appDir string, settings *masgui.Settings, connCfg masgui.ConnectionConfig, store *connstore.Store, client *app.GatewayClient, logger zerolog.Logger) http.Handler {
-	logger = logger.With().Str("component", "gui").Logger()
-	mux := http.NewServeMux()
-	svc := h.current()
+// vaultHandler builds a GUI handler over one vault's service. Every per-vault
+// route is registered as one of these: the mux resolves the request's vault
+// first, then hands the live service to the builder.
+type vaultHandler func(svc *app.Service, logger zerolog.Logger) http.HandlerFunc
 
-	if svc != nil {
-		// Let the render layer show which kernel a runnable block uses (and its
-		// version), resolved against the per-block override and the vault default.
-		ui.KernelResolver = svc.KernelInfo
-		// Let a reopened note re-hydrate each block's last run from the cache.
-		ui.RunResultLoader = func(notePath, code string) (ui.RunResult, bool) {
+// vaultMux registers per-vault GUI routes against the daemon's registry. The
+// routes are mounted once, for the whole process; which vault each request acts
+// on is decided per request (see requestVault).
+type vaultMux struct {
+	mux    *http.ServeMux
+	reg    *vaultRegistry
+	logger zerolog.Logger
+}
+
+// handle mounts a per-vault route: it resolves the request's vault, then runs
+// the handler built over that vault's service. An unresolvable vault answers
+// before the handler runs, so a handler never sees a nil service.
+func (vm vaultMux) handle(pattern string, build vaultHandler) {
+	vm.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+		svc, err := vm.reg.runtime(r.Context(), requestVault(r))
+		if err != nil {
+			writeVaultError(w, err, vm.logger)
+			return
+		}
+		build(svc, vm.logger)(w, r)
+	})
+}
+
+// writeVaultError answers a request whose vault couldn't be resolved. Both
+// "nothing is open" and "the folder is gone" are 503 — the condition is the
+// daemon's state, not the caller's mistake, and it can clear.
+func writeVaultError(w http.ResponseWriter, err error, logger zerolog.Logger) {
+	switch {
+	case errors.Is(err, app.ErrNoVault):
+		http.Error(w, "no vault is open — open one in the app, or pass ?vault=PATH",
+			http.StatusServiceUnavailable)
+	case errors.Is(err, errVaultUnavailable):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	default:
+		logger.Warn().Err(err).Msg("resolving the request's vault")
+		http.Error(w, "could not open the vault", http.StatusInternalServerError)
+	}
+}
+
+// noteRenderer wires the render layer to one vault: which kernel a runnable
+// block would use, and that block's cached last run.
+func noteRenderer(svc *app.Service) ui.NoteRenderer {
+	return ui.NoteRenderer{
+		Kernel: svc.KernelInfo,
+		RunResult: func(notePath, code string) (ui.RunResult, bool) {
 			res, ok := svc.RunResultFor(notePath, code)
 			if !ok {
 				return ui.RunResult{}, false
 			}
 			return toUIRunResult(res), true
-		}
-	} else {
-		ui.KernelResolver = nil
-		ui.RunResultLoader = nil
+		},
 	}
+}
 
-	mux.HandleFunc("GET /{$}", pageHandler(h, appDir, store, client, logger))
+// grimoireRoutes returns the daemon's GUI HTTP handler. Every route is mounted
+// once, for the process: the vault-independent surface (the page, the vault
+// picker, settings, the MASS connection, the agent JSON API) directly, and the
+// per-vault action surface through vaultMux, which resolves the vault each
+// request names.
+func grimoireRoutes(reg *vaultRegistry, api *grimoireapi.API, ctl *daemonControl, appDir string, settings *masgui.Settings, connCfg masgui.ConnectionConfig, store *connstore.Store, client *app.GatewayClient, logger zerolog.Logger) http.Handler {
+	logger = logger.With().Str("component", "gui").Logger()
+	mux := http.NewServeMux()
+	vm := vaultMux{mux: mux, reg: reg, logger: logger}
 
-	// Vault navigation is available in any state: opening one from the empty state,
-	// switching, or closing back to it.
-	mux.HandleFunc("POST /api/open-vault", openVaultHandler(h, logger))
-	mux.HandleFunc("POST /api/close-vault", closeVaultHandler(h))
+	// The GUI window is a webview over these same routes, so everything native it
+	// owes the daemon (the folder dialog, a capture, the title-bar theme) travels
+	// over its control channel.
+	mountClientChannel(mux, ctl.bridge, ctl, logger)
+
+	mux.HandleFunc("GET /{$}", pageHandler(reg, appDir, store, client, logger))
+
+	// Vault management is vault-independent — the Vaults tab and the empty-state
+	// picker both work with nothing open — so it hangs off the registry rather
+	// than the request's one service.
+	mux.HandleFunc("POST /api/vaults/add", openVaultHandler(reg, logger))
+	mux.HandleFunc("GET /api/vaults/render", vaultsRenderHandler(api, logger))
+	mux.HandleFunc("POST /api/vaults/forget", forgetVaultHandler(api, logger))
 	mux.HandleFunc("POST /api/settings", settings.Handler())
 	// The MASS connection (endpoint/token/CA) is global — available even in the
-	// empty state, so it can be fixed before a vault is bound.
+	// empty state, so it can be fixed before any vault is open.
 	mux.HandleFunc("POST /api/connection", masgui.ConnectionHandler(connCfg))
 	mux.HandleFunc("POST /api/connection/save", masgui.ConnectionSaveHandler(connCfg))
 
-	// The per-vault GUI action surface only exists with a vault bound; in the empty
-	// state the page shows the vault picker and none of these are reachable.
-	if svc != nil {
-		mux.HandleFunc("GET /api/extensions/themes/render", extensionThemesHandler(api, logger))
-		mux.HandleFunc("GET /api/extensions/kernels/render", extensionKernelsHandler(api, logger))
-		mux.HandleFunc("GET /api/models/render", modelOptionsHandler(svc, logger, "#g-model-select", "gModel"))
-		mux.HandleFunc("GET /api/convert-models/render", modelOptionsHandler(svc, logger, "#g-convert-model-select", "gConvertModel"))
-		mux.HandleFunc("POST /api/model", modelHandler(svc, logger))
-		mux.HandleFunc("POST /action/reindex", reindexHandler(svc, logger))
-		mux.HandleFunc("POST /api/concurrency", concurrencyHandler(svc, logger))
-		mux.HandleFunc("POST /api/trash-mode", trashModeHandler(svc, logger))
-		mux.HandleFunc("POST /api/convert-model", convertModelHandler(svc, logger))
-		mux.HandleFunc("POST /api/convert-resolution", convertResolutionHandler(svc, logger))
-		mux.HandleFunc("POST /api/convert-timeout", convertTimeoutHandler(svc, logger))
-		mux.HandleFunc("POST /action/search", searchHandler(svc, logger))
-		mux.HandleFunc("POST /action/preview", previewHandler(svc, logger))
-		mux.HandleFunc("POST /action/run-block", runBlockHandler(svc, logger))
-		mux.HandleFunc("POST /action/run-above", runAboveHandler(svc, logger))
-		mux.HandleFunc("POST /action/run-save", runSaveHandler(svc, logger))
-		mux.HandleFunc("POST /action/run-discard", runDiscardHandler(svc, logger))
-		mux.HandleFunc("POST /action/run-save-all", runSaveAllHandler(svc, logger))
-		mux.HandleFunc("POST /action/run-discard-all", runDiscardAllHandler(svc, logger))
-		mux.HandleFunc("POST /action/run-delete", runDeleteHandler(svc, logger))
-		mux.HandleFunc("POST /action/run-delete-all", runDeleteAllHandler(svc, logger))
-		mux.HandleFunc("POST /api/note/close", closeNoteHandler(svc, logger))
-		mux.HandleFunc("POST /api/note/properties", savePropertiesHandler(svc, logger))
-		mux.HandleFunc("POST /api/note/body", saveBodyHandler(svc, logger))
-		mux.HandleFunc("GET /api/files/render", filesRenderHandler(svc, logger))
-		mux.HandleFunc("GET /api/trash/render", trashRenderHandler(svc, logger))
-		mux.HandleFunc("GET /api/graph", graphHandler(svc, logger))
-		mux.HandleFunc("GET /vault-file/{path...}", vaultFileHandler(svc))
-		mux.HandleFunc("POST /api/open-file", openFileHandler(svc, logger))
-		mux.HandleFunc("GET /api/ui-state/tabs", uiStateGetHandler(svc, logger, uiStateTabsKey))
-		mux.HandleFunc("POST /api/ui-state/tabs", uiStateSetHandler(svc, logger, uiStateTabsKey))
-		mux.HandleFunc("POST /api/note/import", importNoteHandler(svc, logger))
-		mux.HandleFunc("POST /api/note/import/cancel", importCancelHandler(svc))
-		mux.HandleFunc("POST /api/note/create", createNoteHandler(svc, logger))
-		mux.HandleFunc("POST /api/note/rename", renameNoteHandler(svc, logger))
-		mux.HandleFunc("POST /api/note/delete", deleteNoteHandler(svc, logger))
-		mux.HandleFunc("POST /api/note/delete-many", deleteNotesManyHandler(svc, logger))
-		mux.HandleFunc("POST /api/trash/restore-ui", trashRestoreHandler(svc, logger))
-		mux.HandleFunc("POST /api/trash/delete-ui", trashDeleteHandler(svc, logger))
-		mux.HandleFunc("POST /api/trash/empty-ui", trashEmptyHandler(svc, logger))
-		mux.HandleFunc("POST /api/trash/restore-many-ui", trashRestoreManyHandler(svc, logger))
-		mux.HandleFunc("POST /api/trash/delete-many-ui", trashDeleteManyHandler(svc, logger))
-		mux.HandleFunc("POST /api/move", moveEntriesHandler(svc, logger))
-		mux.HandleFunc("POST /api/folder/create", createFolderHandler(svc, logger))
-		mux.HandleFunc("POST /api/folder/rename", renameFolderHandler(svc, logger))
-		mux.HandleFunc("POST /api/folder/delete", deleteFolderHandler(svc, logger))
-		mux.HandleFunc("GET /api/sessions/render", sessionsRenderHandler(svc, logger))
-		mux.HandleFunc("POST /api/sessions/clear", sessionClearHandler(svc, logger))
-		mux.HandleFunc("POST /api/sessions/{id}/open", sessionOpenHandler(svc, logger))
-		mux.HandleFunc("POST /api/sessions/delete", sessionDeleteHandler(svc, logger))
-		mux.HandleFunc("POST /api/sessions/delete-many", sessionDeleteManyHandler(svc, logger))
-		mux.HandleFunc("POST /api/sessions/rename", sessionRenameHandler(svc, logger))
-		mux.HandleFunc("POST /api/sessions/turn/delete", turnDeleteHandler(svc, logger))
-	}
+	mux.HandleFunc("GET /api/extensions/themes/render", extensionThemesHandler(api, logger))
+	mux.HandleFunc("GET /api/extensions/kernels/render", extensionKernelsHandler(api, logger))
+	vm.handle("GET /api/models/render", func(svc *app.Service, l zerolog.Logger) http.HandlerFunc {
+		return modelOptionsHandler(svc, l, "#g-model-select", "gModel")
+	})
+	vm.handle("GET /api/convert-models/render", func(svc *app.Service, l zerolog.Logger) http.HandlerFunc {
+		return modelOptionsHandler(svc, l, "#g-convert-model-select", "gConvertModel")
+	})
+	vm.handle("POST /api/model", modelHandler)
+	vm.handle("POST /action/reindex", reindexHandler)
+	vm.handle("POST /api/concurrency", concurrencyHandler)
+	vm.handle("POST /api/trash-enabled", trashHandler)
+	vm.handle("POST /api/convert-model", convertModelHandler)
+	vm.handle("POST /api/convert-resolution", convertResolutionHandler)
+	vm.handle("POST /api/convert-timeout", convertTimeoutHandler)
+	// Search spans every vault, so it is mounted over the registry rather than
+	// over the request's one service.
+	mux.HandleFunc("POST /action/search", searchHandler(reg, logger))
+	vm.handle("POST /action/preview", previewHandler)
+	vm.handle("POST /action/run-block", runBlockHandler)
+	vm.handle("POST /action/run-above", runAboveHandler)
+	vm.handle("POST /action/run-save", runSaveHandler)
+	vm.handle("POST /action/run-discard", runDiscardHandler)
+	vm.handle("POST /action/run-save-all", runSaveAllHandler)
+	vm.handle("POST /action/run-discard-all", runDiscardAllHandler)
+	vm.handle("POST /action/run-delete", runDeleteHandler)
+	vm.handle("POST /action/run-delete-all", runDeleteAllHandler)
+	vm.handle("POST /api/note/close", closeNoteHandler)
+	vm.handle("POST /api/note/properties", savePropertiesHandler)
+	vm.handle("POST /api/note/body", saveBodyHandler)
+	vm.handle("GET /api/files/render", filesRenderHandler)
+	vm.handle("GET /api/trash/render", trashRenderHandler)
+	vm.handle("GET /api/graph", graphHandler)
+	vm.handle("GET /vault-file/{path...}", func(svc *app.Service, _ zerolog.Logger) http.HandlerFunc {
+		return vaultFileHandler(svc)
+	})
+	vm.handle("POST /api/open-file", openFileHandler)
+	vm.handle("GET /api/ui-state/tabs", func(svc *app.Service, l zerolog.Logger) http.HandlerFunc {
+		return uiStateGetHandler(svc, l, uiStateTabsKey)
+	})
+	vm.handle("POST /api/ui-state/tabs", func(svc *app.Service, l zerolog.Logger) http.HandlerFunc {
+		return uiStateSetHandler(svc, l, uiStateTabsKey)
+	})
+	vm.handle("POST /api/note/import", importNoteHandler)
+	vm.handle("POST /api/note/import/cancel", func(svc *app.Service, _ zerolog.Logger) http.HandlerFunc {
+		return importCancelHandler(svc)
+	})
+	vm.handle("POST /api/note/create", createNoteHandler)
+	vm.handle("POST /api/note/rename", renameNoteHandler)
+	vm.handle("POST /api/note/delete", deleteNoteHandler)
+	vm.handle("POST /api/note/delete-many", deleteNotesManyHandler)
+	vm.handle("POST /api/trash/restore-ui", trashRestoreHandler)
+	vm.handle("POST /api/trash/delete-ui", trashDeleteHandler)
+	vm.handle("POST /api/trash/empty-ui", trashEmptyHandler)
+	vm.handle("POST /api/trash/restore-many-ui", trashRestoreManyHandler)
+	vm.handle("POST /api/trash/delete-many-ui", trashDeleteManyHandler)
+	vm.handle("POST /api/move", moveEntriesHandler)
+	vm.handle("POST /api/folder/create", createFolderHandler)
+	vm.handle("POST /api/folder/rename", renameFolderHandler)
+	vm.handle("POST /api/folder/delete", deleteFolderHandler)
+	vm.handle("GET /api/sessions/render", sessionsRenderHandler)
+	vm.handle("POST /api/sessions/clear", sessionClearHandler)
+	vm.handle("POST /api/sessions/{id}/open", sessionOpenHandler)
+	vm.handle("POST /api/sessions/delete", sessionDeleteHandler)
+	vm.handle("POST /api/sessions/delete-many", sessionDeleteManyHandler)
+	vm.handle("POST /api/sessions/rename", sessionRenameHandler)
+	vm.handle("POST /api/sessions/turn/delete", turnDeleteHandler)
 
 	// Read/write JSON HTTP surface for external consumers (the CLI is built on it),
-	// over the holder-backed grimoireapi operations (so it reports ErrNoVault in the
-	// empty state rather than failing to mount).
-	mountAPI(mux, api, logger)
+	// over the registry-backed grimoireapi operations.
+	mountAPI(mux, api, ctl, logger)
 
 	return mux
 }
 
-// pageHandler renders the full app page: the workspace when a vault is bound, or
-// the "open a vault" empty state (listing known vaults) when none is. Both states
-// seed the settings menu's MASS connection fields from the live client + store,
-// and its version line from the build stamp.
-func pageHandler(h *serviceHolder, appDir string, store *connstore.Store, client *app.GatewayClient, logger zerolog.Logger) http.HandlerFunc {
+// pageHandler renders the full app page for one vault: an explicit ?vault=, else
+// the last-used one. Naming a vault explicitly is a user action (a bookmark, a
+// window opened on a second vault), so it also becomes the new last-used vault —
+// the one a bare launch reopens. With no vault to render (none known, or its
+// folder is gone) the page is the "open a vault" empty state, listing the vaults
+// Grimoire knows about. Both states seed the settings menu's MASS connection
+// fields from the live client + store, and its version line from the build stamp.
+func pageHandler(reg *vaultRegistry, appDir string, store *connstore.Store, client *app.GatewayClient, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cfg := masgui.LoadConfig(appDir)
-		svc := h.current()
+		svc := pageService(reg, r, logger)
 		endpoint := client.BaseURL()
 		conn, _ := store.GetConn(endpoint)
 		connState := ui.ConnState{
@@ -188,11 +247,52 @@ func pageHandler(h *serviceHolder, appDir string, store *connstore.Store, client
 			ChunkCount:            count,
 			IndexConcurrency:      concurrency,
 			GraphOpen:             focusedTabIsGraph(svc, logger),
-			TrashMode:             string(ac.TrashModeOrDefault()),
+			TrashEnabled:          ac.Trashes(),
 			Conn:                  connState,
 			Version:               version,
 		}))
 	}
+}
+
+// pageService resolves the vault the page load is for and returns its runtime,
+// or nil to render the empty state. An explicit ?vault= is a deliberate choice
+// and is recorded as the last-used vault; a missing one is not an error, it just
+// lands on the picker.
+func pageService(reg *vaultRegistry, r *http.Request, logger zerolog.Logger) *app.Service {
+	vault := strings.TrimSpace(r.URL.Query().Get("vault"))
+	if vault == "" {
+		last, err := vaultdir.LastVault()
+		if err != nil {
+			logger.Warn().Err(err).Msg("reading the last-used vault")
+			return nil
+		}
+		vault = last
+	} else if err := vaultdir.SetLastVault(vault); err != nil {
+		logger.Warn().Err(err).Str("vault", vault).Msg("recording last vault")
+	}
+	if vault == "" {
+		return nil
+	}
+	svc, err := reg.runtime(r.Context(), vault)
+	if err != nil {
+		logger.Warn().Err(err).Str("vault", vault).Msg("opening vault for the page; showing the picker")
+		return nil
+	}
+	return svc
+}
+
+// sameVault reports whether two vault paths name the same vault, comparing the
+// canonical form so spelling differences don't read as a switch.
+func sameVault(a, b string) bool {
+	ca, err := vaultdir.Canonical(a)
+	if err != nil {
+		return false
+	}
+	cb, err := vaultdir.Canonical(b)
+	if err != nil {
+		return false
+	}
+	return ca == cb
 }
 
 // knownVaultRefs lists the vaults Grimoire has opened, for the empty-state picker.
@@ -209,51 +309,138 @@ func knownVaultRefs(logger zerolog.Logger) []ui.VaultRef {
 	return out
 }
 
-// openVaultHandler binds the chosen vault to this running instance — no separate
-// process. A path form value (an empty-state recent click) is used directly;
-// otherwise the native folder dialog picks one. The client reloads on a real
-// change so the page rebuilds for the new vault. {"ok":false} = picker cancelled
-// or unavailable; {"ok":true} = already on it; {"ok":true,"reload":true} = bound.
-func openVaultHandler(h *serviceHolder, logger zerolog.Logger) http.HandlerFunc {
+// openVaultHandler opens a vault in this daemon and makes it the page's vault —
+// the Vaults tab's "Add vault…" and the empty-state picker alike. A path form
+// value (a recent row, or the fallback path field) is used directly; otherwise
+// the native folder dialog picks one. The vault becomes the last-used one and
+// the client reloads onto it.
+//
+//	{"ok":false}                        picker cancelled
+//	{"ok":false,"needsPath":true}       no native dialog here — ask for a path
+//	{"ok":true}                         already the page's vault
+//	{"ok":true,"reload":true,"vault":…} opened; navigate onto it
+//
+// The answer carries the vault because the page can't reload its way there: its
+// URL may pin a different ?vault=, which a plain reload would land on again.
+func openVaultHandler(reg *vaultRegistry, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// The page's own vault, read before the last-vault pointer moves, so the
+		// answer can say whether anything actually changed.
+		pageVault := requestVault(r)
 		path := strings.TrimSpace(r.FormValue("path"))
 		if path == "" {
-			picked, ok, err := h.pickFolder("Select a vault folder")
-			if err != nil {
+			picked, ok, err := reg.pickFolder(r.Context(), "Select a vault folder")
+			switch {
+			case errors.Is(err, errNoClient):
+				// A browser tab or a headless daemon: no window to raise a dialog in,
+				// so the client asks for a path instead. Distinct from a cancelled
+				// dialog, which means the user said no and wants nothing to happen.
+				writeJSONString(w, `{"ok":false,"needsPath":true}`)
+				return
+			case err != nil:
 				logger.Warn().Err(err).Msg("folder dialog failed")
 				http.Error(w, "folder dialog failed", http.StatusInternalServerError)
 				return
-			}
-			if !ok {
+			case !ok:
 				writeJSONString(w, `{"ok":false}`)
 				return
 			}
 			path = picked
 		}
-		if path == h.currentVault() {
-			writeJSONString(w, `{"ok":true}`) // already on this vault; nothing to do.
-			return
-		}
-		if err := h.bind(r.Context(), path); err != nil {
+		// Warm the runtime first: it validates the folder, so a bad pick can't move
+		// the last-vault pointer onto a vault that won't open.
+		svc, err := reg.runtime(r.Context(), path)
+		if err != nil {
 			logger.Warn().Err(err).Str("vault", path).Msg("opening vault")
-			http.Error(w, "could not open vault", http.StatusInternalServerError)
+			writeVaultError(w, err, logger)
 			return
 		}
-		writeJSONString(w, `{"ok":true,"reload":true}`)
+		current := svc.Vault()
+		if err := vaultdir.SetLastVault(current); err != nil {
+			logger.Warn().Err(err).Str("vault", current).Msg("recording last vault")
+		}
+		if sameVault(pageVault, current) {
+			writeJSONString(w, `{"ok":true}`) // already the page's vault; nothing to reload.
+			return
+		}
+		writeJSON(w, struct {
+			OK     bool   `json:"ok"`
+			Reload bool   `json:"reload"`
+			Vault  string `json:"vault"`
+		}{OK: true, Reload: true, Vault: current}, logger)
 	}
 }
 
-// closeVaultHandler unbinds the current vault, returning the instance to the empty
-// state; the client reloads into it.
-func closeVaultHandler(h *serviceHolder) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		if h.currentVault() == "" {
-			writeJSONString(w, `{"ok":true}`) // already empty.
+// vaultsRenderHandler repaints the sidebar's Vaults tab. It goes through the same
+// grimoireapi listing the CLI reads, so the tab and `grimoire vault list` can
+// never disagree about a vault's state.
+func vaultsRenderHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sse := datastar.NewSSE(w, r)
+		vaults, err := api.ListVaults(r.Context())
+		if err != nil {
+			logger.Warn().Err(err).Msg("listing vaults for the vaults tab")
 			return
 		}
-		h.unbind()
-		writeJSONString(w, `{"ok":true,"reload":true}`)
+		_ = sse.PatchElementTempl(ui.VaultList(toVaultRows(vaults)),
+			datastar.WithSelector("#g-vaults"), datastar.WithModeInner())
 	}
+}
+
+// forgetVaultHandler drops the posted path from the vault list. It answers
+// {"ok":true} — the client re-renders the list rather than trusting a payload —
+// and an unknown path is still a success, since the end state is what was asked
+// for.
+func forgetVaultHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimSpace(r.FormValue("path"))
+		if path == "" {
+			http.Error(w, "path is required", http.StatusBadRequest)
+			return
+		}
+		if err := api.ForgetVault(r.Context(), path); err != nil {
+			logger.Warn().Err(err).Str("vault", path).Msg("forgetting vault")
+			http.Error(w, "could not forget the vault", http.StatusInternalServerError)
+			return
+		}
+		writeJSONString(w, `{"ok":true}`)
+	}
+}
+
+// toVaultRows adapts the API's vault status to the sidebar's display shape. The
+// numbers go into the row tooltip rather than the row, which shows name and path.
+func toVaultRows(vaults []grimoireapi.Vault) []ui.VaultRow {
+	out := make([]ui.VaultRow, len(vaults))
+	for i, v := range vaults {
+		out[i] = ui.VaultRow{
+			Name:      v.Name,
+			Path:      v.Path,
+			Current:   v.Current,
+			Available: v.Available,
+			Detail:    vaultDetail(v),
+		}
+	}
+	return out
+}
+
+// vaultDetail is a vault row's tooltip: its path, plus whatever is known about
+// its index. An unavailable vault says so first — that's the reason it can't be
+// opened.
+func vaultDetail(v grimoireapi.Vault) string {
+	parts := []string{v.Path}
+	if !v.Available {
+		parts = append(parts, "folder not found")
+	}
+	if v.Chunks > 0 {
+		parts = append(parts, fmt.Sprintf("%d chunks", v.Chunks))
+	}
+	if v.EmbedModel != "" {
+		parts = append(parts, v.EmbedModel)
+	}
+	if v.LastSync != "" {
+		parts = append(parts, "synced "+v.LastSync)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // modelHandler records the embedding model and (re)opens the store.
@@ -262,7 +449,7 @@ func modelHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 		var body struct {
 			Model string `json:"gModel"`
 		}
-		if err := readSignals(r, &body); err != nil {
+		if err := datastar.ReadSignals(r, &body); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -289,7 +476,7 @@ func concurrencyHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFun
 		var body struct {
 			Concurrency string `json:"gConcurrency"`
 		}
-		if err := readSignals(r, &body); err != nil {
+		if err := datastar.ReadSignals(r, &body); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -307,25 +494,18 @@ func concurrencyHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFun
 	}
 }
 
-// trashModeHandler records the soft-delete policy from the Settings control:
-// trash for all deletes, for AI-agent (API) deletes only, or off.
-func trashModeHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
+// trashHandler records the soft-delete setting from the Settings control:
+// deletes move to the vault's trash, or are permanent.
+func trashHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Mode string `json:"gTrashMode"`
+			Enabled bool `json:"gTrashEnabled"`
 		}
-		if err := readSignals(r, &body); err != nil {
+		if err := datastar.ReadSignals(r, &body); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		mode := appconfig.TrashMode(body.Mode)
-		switch mode {
-		case appconfig.TrashAll, appconfig.TrashAgents, appconfig.TrashOff:
-		default:
-			http.Error(w, "invalid trash mode", http.StatusBadRequest)
-			return
-		}
-		if err := svc.SetTrashMode(mode); err != nil {
+		if err := svc.SetTrashEnabled(body.Enabled); err != nil {
 			logger.Warn().Err(err).Msg("saving trash setting")
 			http.Error(w, "could not save trash setting", http.StatusInternalServerError)
 			return
@@ -368,7 +548,7 @@ func reindexHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 
 		progress := func(done, total int, path string) {
 			patchSignals(sse, map[string]any{
-				"gStatus": fmt.Sprintf("Reindexing %d/%d: %s", done+1, total, path),
+				"gStatus": fmt.Sprintf("Reindexing %d/%d: %s", done, total, path),
 				"gBusy":   true,
 			})
 		}
@@ -409,7 +589,7 @@ func convertModelHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFu
 		var body struct {
 			Model string `json:"gConvertModel"`
 		}
-		if err := readSignals(r, &body); err != nil {
+		if err := datastar.ReadSignals(r, &body); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -429,7 +609,7 @@ func convertResolutionHandler(svc *app.Service, logger zerolog.Logger) http.Hand
 		var body struct {
 			Resolution string `json:"gConvertRes"`
 		}
-		if err := readSignals(r, &body); err != nil {
+		if err := datastar.ReadSignals(r, &body); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -454,7 +634,7 @@ func convertTimeoutHandler(svc *app.Service, logger zerolog.Logger) http.Handler
 		var body struct {
 			Timeout string `json:"gConvertTimeout"`
 		}
-		if err := readSignals(r, &body); err != nil {
+		if err := datastar.ReadSignals(r, &body); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -472,22 +652,33 @@ func convertTimeoutHandler(svc *app.Service, logger zerolog.Logger) http.Handler
 	}
 }
 
-// searchHandler runs a hybrid search and patches the results list.
-func searchHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
+// searchHandler runs a hybrid search and patches the results list. It covers
+// every vault by default — knowledge spans them, and a searcher rarely knows
+// which one holds the answer — and narrows to the page's vault when the tuning
+// bar's "this vault only" is ticked. It is mounted over the registry rather than
+// over one service because of that; the page's own vault is still resolved, for
+// the narrow case and to record the turn.
+func searchHandler(reg *vaultRegistry, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		svc, err := reg.runtime(r.Context(), requestVault(r))
+		if err != nil {
+			writeVaultError(w, err, logger)
+			return
+		}
 		// ReadSignals before NewSSE — NewSSE closes the request body. gSeq is a
 		// string signal (a hidden input written by JS), so read it as one.
 		var sig struct {
-			Query  string  `json:"gQuery"`
-			Seq    string  `json:"gSeq"`
-			K      int     `json:"gSearchK"`
-			MinSim float64 `json:"gSearchMinSim"`
+			Query     string  `json:"gQuery"`
+			Seq       string  `json:"gSeq"`
+			K         int     `json:"gSearchK"`
+			MinSim    float64 `json:"gSearchMinSim"`
+			ThisVault bool    `json:"gSearchThisVault"`
 		}
 		if err := datastar.ReadSignals(r, &sig); err != nil {
 			logger.Warn().Err(err).Msg("reading search signals")
 		}
 		sse := datastar.NewSSE(w, r)
-		logger.Debug().Str("query", sig.Query).Msg("search request")
+		logger.Debug().Str("query", sig.Query).Bool("thisVault", sig.ThisVault).Msg("search request")
 		if sig.Query == "" {
 			return
 		}
@@ -502,7 +693,7 @@ func searchHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 		if k <= 0 {
 			k = 10
 		}
-		hits, err := svc.Search(r.Context(), sig.Query, k, sig.MinSim)
+		groups, warnings, err := runSearch(r.Context(), reg, svc, sig.ThisVault, sig.Query, k, sig.MinSim)
 		if err != nil {
 			_ = sse.PatchElementTempl(ui.Notice("Error: "+shortErr(err)),
 				datastar.WithSelector(resultsSel), datastar.WithModeInner())
@@ -511,12 +702,38 @@ func searchHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 			return
 		}
 		patchSignals(sse, map[string]any{"gSearchBusy": false})
-		_ = sse.PatchElementTempl(ui.SearchResults(toUIHits(hits)),
+		hits := flatten(groups)
+		_ = sse.PatchElementTempl(ui.SearchResults(toUIHits(hits), warnings),
 			datastar.WithSelector(resultsSel), datastar.WithModeInner())
 
-		svc.RecordSearch(sig.Query, hits)
+		svc.RecordSearchHits(sig.Query, toSessionHits(hits))
 		renderSessions(sse, svc, logger)
 	}
+}
+
+// runSearch answers a GUI search: every vault, or only the page's when the user
+// narrowed it. Both paths return model groups of vault-tagged hits, so the
+// results render and record identically whichever ran — narrowing to one vault
+// is just the one-group case.
+func runSearch(
+	ctx context.Context, reg *vaultRegistry, svc *app.Service, thisVault bool, query string, k int, minSim float64,
+) ([]searchGroup, []string, error) {
+	if !thisVault {
+		return multiSearch(ctx, reg, query, k, minSim)
+	}
+	hits, err := svc.Search(ctx, query, k, minSim)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(hits) == 0 {
+		return nil, nil, nil
+	}
+	model := svc.EmbedModelName()
+	group := searchGroup{Model: model, Vaults: []string{svc.Vault()}}
+	for _, h := range hits {
+		group.Hits = append(group.Hits, vaultHit{Hit: h, Vault: svc.Vault(), Model: model})
+	}
+	return []searchGroup{group}, nil, nil
 }
 
 // appendTurn appends a conversation turn to the stream and scrolls it into view.
@@ -559,7 +776,7 @@ func previewHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 			logger.Warn().Err(err).Str("target", sig.Path).Msg("preview failed")
 			return
 		}
-		_ = sse.PatchElementTempl(ui.Preview(source, rel),
+		_ = sse.PatchElementTempl(ui.Preview(noteRenderer(svc), source, rel),
 			datastar.WithSelector("#g-preview-body"), datastar.WithModeInner())
 		modified, created, _ := svc.NoteTimes(rel) // dates are best-effort.
 		_ = sse.PatchElementTempl(ui.NoteDates(modified, created),
@@ -773,62 +990,58 @@ func runDiscardHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc
 	}
 }
 
-// runSaveAllHandler commits every unsaved run in the open note (the per-note Save
-// all), then re-renders the preview so all blocks show as saved. The note path
-// arrives as gNotePath.
-func runSaveAllHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
+// runAllHandler is the shared body of the per-note run-panel buttons (Save all,
+// Discard all, Delete all): the open note arrives as gNotePath, apply changes it,
+// and the preview is re-rendered so every block re-hydrates from the new state.
+// An apply that changed nothing leaves the view alone. label names the action in
+// the logs.
+func runAllHandler(
+	svc *app.Service, logger zerolog.Logger, label string, apply func(notePath string) (bool, error),
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var sig struct {
 			NotePath string `json:"gNotePath"`
 		}
 		if err := datastar.ReadSignals(r, &sig); err != nil {
-			logger.Warn().Err(err).Msg("reading run-save-all signals")
+			logger.Warn().Err(err).Msg("reading " + label + " signals")
 		}
 		sse := datastar.NewSSE(w, r)
 		if sig.NotePath == "" {
 			return
 		}
-		if n := svc.SaveAllPendingRuns(sig.NotePath); n == 0 {
-			return // nothing was pending; leave the view as-is.
-		}
-		// Re-render so every just-saved block re-hydrates clean (no Unsaved marker).
-		source, err := svc.ReadNote(sig.NotePath)
+		changed, err := apply(sig.NotePath)
 		if err != nil {
-			logger.Warn().Err(err).Str("note", sig.NotePath).Msg("re-reading note after save-all")
+			logger.Warn().Err(err).Str("note", sig.NotePath).Msg(label)
 			return
 		}
-		_ = sse.PatchElementTempl(ui.Preview(source, sig.NotePath),
+		if !changed {
+			return
+		}
+		source, err := svc.ReadNote(sig.NotePath)
+		if err != nil {
+			logger.Warn().Err(err).Str("note", sig.NotePath).Msg("re-reading note after " + label)
+			return
+		}
+		_ = sse.PatchElementTempl(ui.Preview(noteRenderer(svc), source, sig.NotePath),
 			datastar.WithSelector("#g-preview-body"), datastar.WithModeInner())
 	}
 }
 
+// runSaveAllHandler commits every unsaved run in the open note (the per-note Save
+// all), so all blocks re-render as saved.
+func runSaveAllHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
+	return runAllHandler(svc, logger, "saving all run results", func(notePath string) (bool, error) {
+		return svc.SaveAllPendingRuns(notePath) > 0, nil
+	})
+}
+
 // runDiscardAllHandler drops every unsaved re-run in the open note (the per-note
-// Discard all), then re-renders the preview so each block reverts to its saved
-// output (or clears where nothing was saved). The note path arrives as gNotePath.
+// Discard all), so each block reverts to its saved output (or clears where
+// nothing was saved).
 func runDiscardAllHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var sig struct {
-			NotePath string `json:"gNotePath"`
-		}
-		if err := datastar.ReadSignals(r, &sig); err != nil {
-			logger.Warn().Err(err).Msg("reading run-discard-all signals")
-		}
-		sse := datastar.NewSSE(w, r)
-		if sig.NotePath == "" {
-			return
-		}
-		if n := svc.DiscardAllPendingRuns(sig.NotePath); n == 0 {
-			return // nothing was pending; leave the view as-is.
-		}
-		// Re-render so every reverted block re-hydrates from its saved result.
-		source, err := svc.ReadNote(sig.NotePath)
-		if err != nil {
-			logger.Warn().Err(err).Str("note", sig.NotePath).Msg("re-reading note after discard-all")
-			return
-		}
-		_ = sse.PatchElementTempl(ui.Preview(source, sig.NotePath),
-			datastar.WithSelector("#g-preview-body"), datastar.WithModeInner())
-	}
+	return runAllHandler(svc, logger, "discarding all pending runs", func(notePath string) (bool, error) {
+		return svc.DiscardAllPendingRuns(notePath) > 0, nil
+	})
 }
 
 // runDeleteHandler removes a block's saved output (the per-block trash button) and
@@ -859,32 +1072,13 @@ func runDeleteHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc 
 }
 
 // runDeleteAllHandler removes every saved result in the open note (the per-note
-// trash button), then re-renders the preview so all panels clear. The note path
-// arrives as gNotePath.
+// trash button), so all panels clear. Unlike save/discard it always re-renders:
+// the service reports no count, and a delete over a note with nothing saved is
+// already a no-op.
 func runDeleteAllHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var sig struct {
-			NotePath string `json:"gNotePath"`
-		}
-		if err := datastar.ReadSignals(r, &sig); err != nil {
-			logger.Warn().Err(err).Msg("reading run-delete-all signals")
-		}
-		sse := datastar.NewSSE(w, r)
-		if sig.NotePath == "" {
-			return
-		}
-		if err := svc.DeleteNoteRunResults(sig.NotePath); err != nil {
-			logger.Warn().Err(err).Str("note", sig.NotePath).Msg("deleting note run results")
-			return
-		}
-		source, err := svc.ReadNote(sig.NotePath)
-		if err != nil {
-			logger.Warn().Err(err).Str("note", sig.NotePath).Msg("re-reading note after delete-all")
-			return
-		}
-		_ = sse.PatchElementTempl(ui.Preview(source, sig.NotePath),
-			datastar.WithSelector("#g-preview-body"), datastar.WithModeInner())
-	}
+	return runAllHandler(svc, logger, "deleting note run results", func(notePath string) (bool, error) {
+		return true, svc.DeleteNoteRunResults(notePath)
+	})
 }
 
 // runErrorMessage turns a RunBlock failure into a user-facing panel message,
@@ -983,7 +1177,7 @@ func saveBodyHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 			logger.Warn().Err(err).Str("note", sig.Path).Msg("re-reading note after save")
 			return
 		}
-		_ = sse.PatchElementTempl(ui.Preview(source, sig.Path),
+		_ = sse.PatchElementTempl(ui.Preview(noteRenderer(svc), source, sig.Path),
 			datastar.WithSelector("#g-preview-body"), datastar.WithModeInner())
 		modified, created, _ := svc.NoteTimes(sig.Path) // dates are best-effort.
 		_ = sse.PatchElementTempl(ui.NoteDates(modified, created),
@@ -1007,11 +1201,24 @@ func toUIRunResult(r app.RunResult) ui.RunResult {
 	}
 }
 
-// toUIHits adapts store hits to the UI's display shape.
-func toUIHits(hits []store.Hit) []ui.Hit {
+// toUIHits adapts vault-tagged hits to the UI's display shape.
+func toUIHits(hits []vaultHit) []ui.Hit {
 	out := make([]ui.Hit, len(hits))
 	for i, h := range hits {
-		out[i] = ui.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text}
+		out[i] = ui.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: h.Vault, Model: h.Model}
+	}
+	return out
+}
+
+// toSessionHits projects search hits to the shape the history persists, each
+// keeping the vault it came from so a replayed cross-vault turn still says where
+// every hit lives.
+func toSessionHits(hits []vaultHit) []app.SessionHit {
+	out := make([]app.SessionHit, len(hits))
+	for i, h := range hits {
+		out[i] = app.SessionHit{
+			Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: h.Vault, Model: h.Model,
+		}
 	}
 	return out
 }
@@ -1283,7 +1490,7 @@ func importNoteHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc
 			case errors.Is(err, app.ErrUnsupportedImport):
 				http.Error(w, "unsupported file type", http.StatusUnsupportedMediaType)
 			case errors.Is(err, app.ErrNoConvertModel):
-				http.Error(w, "select a PDF model in the Vault tab to import PDFs", http.StatusBadRequest)
+				http.Error(w, noConvertModelHint, http.StatusBadRequest)
 			default:
 				logger.Warn().Err(err).Str("file", name).Msg("importing note")
 				http.Error(w, "could not convert "+name, http.StatusInternalServerError)
@@ -1371,9 +1578,8 @@ func deleteNoteHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc
 		if sig.Path == "" {
 			return
 		}
-		// permanent=false, byAgent=false: a user GUI delete, so the trash mode
-		// decides (soft-delete to .trash/ or permanent removal).
-		if _, _, err := svc.RemoveNote(r.Context(), sig.Path, false, false); err != nil {
+		// The trash setting decides: soft-delete to .trash/, or permanent removal.
+		if _, _, err := svc.RemoveNote(r.Context(), sig.Path); err != nil {
 			logger.Warn().Err(err).Str("note", sig.Path).Msg("deleting note")
 		}
 		renderFiles(sse, svc, logger)
@@ -1524,8 +1730,8 @@ func renameFolderHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFu
 }
 
 // deleteFolderHandler deletes a folder and all its contents — honouring the
-// vault's trash mode like a note delete (soft-deleting the folder as a unit when
-// enabled) — repaints the tree, and closes the preview if the open note was
+// vault's trash setting like a note delete (soft-deleting the folder as a unit
+// when enabled) — repaints the tree, and closes the preview if the open note was
 // inside the deleted folder. The folder path arrives as a signal.
 func deleteFolderHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1541,7 +1747,7 @@ func deleteFolderHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFu
 		if sig.Path == "" {
 			return
 		}
-		if _, _, err := svc.RemoveFolder(r.Context(), sig.Path, false, false); err != nil {
+		if _, _, err := svc.RemoveFolder(r.Context(), sig.Path); err != nil {
 			logger.Warn().Err(err).Str("folder", sig.Path).Msg("deleting folder")
 		}
 		renderFiles(sse, svc, logger)
@@ -1575,9 +1781,13 @@ func deleteNotesManyHandler(svc *app.Service, logger zerolog.Logger) http.Handle
 			if path == "" {
 				continue
 			}
-			if _, _, err := svc.RemoveNote(r.Context(), path, false, false); err != nil {
+			if _, _, err := svc.RemoveNote(r.Context(), path); err != nil {
 				logger.Warn().Err(err).Str("note", path).Msg("batch-deleting note")
-				continue
+				// A stale index still means the note left the vault, so the
+				// preview bookkeeping below must run; anything else didn't delete.
+				if !errors.Is(err, app.ErrIndexStale) {
+					continue
+				}
 			}
 			if path == sig.PreviewPath {
 				closedPreview = true
@@ -1698,7 +1908,7 @@ func sessionOpenHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFun
 			return
 		}
 		svc.SetActiveSession(id)
-		_ = sse.PatchElementTempl(ui.ConversationPanel(toUITurns(turns)),
+		_ = sse.PatchElementTempl(ui.ConversationPanel(toUITurns(turns, svc.Vault())),
 			datastar.WithSelector("#g-conversation"), datastar.WithModeReplace())
 		patchSignals(sse, map[string]any{"gHasContent": len(turns) > 0})
 		renderSessions(sse, svc, logger)
@@ -1779,7 +1989,7 @@ func turnDeleteHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc
 			logger.Warn().Err(err).Int64("session", sessionID).Msg("reloading turns after delete")
 			return
 		}
-		_ = sse.PatchElementTempl(ui.ConversationPanel(toUITurns(turns)),
+		_ = sse.PatchElementTempl(ui.ConversationPanel(toUITurns(turns, svc.Vault())),
 			datastar.WithSelector("#g-conversation"), datastar.WithModeReplace())
 		patchSignals(sse, map[string]any{"gHasContent": len(turns) > 0})
 	}
@@ -1823,23 +2033,31 @@ func sessionDeleteManyHandler(svc *app.Service, logger zerolog.Logger) http.Hand
 
 // toUITurns adapts stored search turns to the UI's display shape, carrying each
 // turn's ranked hits (with snippets) so reopening renders the same result cards.
-func toUITurns(turns []app.Turn) []ui.Turn {
+// pageVault is where a hit recorded before searches spanned vaults came from —
+// the only vault there was then.
+func toUITurns(turns []app.Turn, pageVault string) []ui.Turn {
 	out := make([]ui.Turn, len(turns))
 	for i, t := range turns {
 		out[i] = ui.Turn{
 			ID:    t.ID,
 			Query: t.Query,
-			Hits:  toUISessionHits(t.Hits),
+			Hits:  toUISessionHits(t.Hits, pageVault),
 		}
 	}
 	return out
 }
 
-// toUISessionHits adapts a search turn's persisted hits to the UI's hit shape.
-func toUISessionHits(hits []app.SessionHit) []ui.Hit {
+// toUISessionHits adapts a search turn's persisted hits to the UI's hit shape,
+// resolving a hit with no recorded vault (written before turns carried one) to
+// the page's.
+func toUISessionHits(hits []app.SessionHit, pageVault string) []ui.Hit {
 	out := make([]ui.Hit, len(hits))
 	for i, h := range hits {
-		out[i] = ui.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text}
+		vault := h.Vault
+		if vault == "" {
+			vault = pageVault
+		}
+		out[i] = ui.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: vault, Model: h.Model}
 	}
 	return out
 }
@@ -1886,14 +2104,6 @@ func parseJSONList(raw string, logger zerolog.Logger) []string {
 		return nil
 	}
 	return out
-}
-
-func readSignals(r *http.Request, v any) error {
-	data, err := io.ReadAll(r.Body)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, v)
 }
 
 func writeOK(w http.ResponseWriter) {

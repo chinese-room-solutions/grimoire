@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -64,7 +63,7 @@ type Store struct {
 
 // Open opens (creating if needed) the run-result store at path.
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite3", fileDSN(path))
+	db, err := sql.Open("sqlite3", sqlmigrate.FileDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("opening run results: %w", err)
 	}
@@ -234,9 +233,21 @@ func (s *Store) RenameNote(oldPath, newPath string) error {
 	return nil
 }
 
-// fileDSN builds the ncruces "file:" DSN for a local database path. On Windows
-// the drive-letter path is used as-is after "file:" (file:C:/dir/x.db); a
-// file:// authority form is rejected by its VFS.
-func fileDSN(path string) string {
-	return "file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(5000)"
+// RenameFolder re-keys the results of every note under a folder (vault-relative
+// slash paths) onto the folder's new path, called when the folder is renamed or
+// moved so each contained note's output follows it. substr (not LIKE) so %/_ in
+// a path can't widen the match, and the prefix carries its trailing separator so
+// renaming "a" leaves "ab/x.md" alone. OR REPLACE because the destination may
+// still hold rows from an earlier folder of that name; those are stale.
+func (s *Store) RenameFolder(oldPath, newPath string) error {
+	oldPrefix := strings.TrimSuffix(oldPath, "/") + "/"
+	newPrefix := strings.TrimSuffix(newPath, "/") + "/"
+	n := utf8.RuneCountInString(oldPrefix)
+	if _, err := s.db.Exec(
+		`UPDATE OR REPLACE run_results SET note_path = ? || substr(note_path, ?)
+		 WHERE substr(note_path, 1, ?) = ?`,
+		newPrefix, n+1, n, oldPrefix); err != nil {
+		return fmt.Errorf("moving folder run results: %w", err)
+	}
+	return nil
 }

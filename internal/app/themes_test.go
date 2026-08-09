@@ -51,8 +51,8 @@ func TestThemeInstallListRemove(t *testing.T) {
 	css := "/* label: Neon Test */\n/* base: dark */\n--mass-bg-base: #0b0b12;\n"
 	srv := themeRegistryServer(t, css)
 
-	s := New(nil, t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "vault"), "", "", zerolog.Nop())
-	s.SetThemeRegistryURL(srv.URL + "/index.yml")
+	s := New(testSharedThemes(t, srv.URL+"/index.yml"),
+		t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
 	t.Cleanup(func() { _ = uikit.RemoveTheme("neon-test") })
 
 	pkgs, stale, err := s.ThemePackages(context.Background())
@@ -91,16 +91,16 @@ func TestThemeInstallRejectsInvalidCSS(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	srv := themeRegistryServer(t, "body { color: red }")
 
-	s := New(nil, t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "vault"), "", "", zerolog.Nop())
-	s.SetThemeRegistryURL(srv.URL + "/index.yml")
+	s := New(testSharedThemes(t, srv.URL+"/index.yml"),
+		t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
 
 	_, err := s.InstallTheme(context.Background(), "theme-neon-test", "")
 	require.ErrorContains(t, err, "forbidden character")
 }
 
 func TestThemePackagesOffline(t *testing.T) {
-	s := New(nil, t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "vault"), "", "", zerolog.Nop())
-	s.SetThemeRegistryURL("http://127.0.0.1:1/index.yml")
+	s := New(testSharedThemes(t, "http://127.0.0.1:1/index.yml"),
+		t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
 	_, _, err := s.ThemePackages(context.Background())
 	require.ErrorIs(t, err, ErrRegistryUnavailable)
 }

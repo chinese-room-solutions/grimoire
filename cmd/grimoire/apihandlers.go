@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/chinese-room-solutions/grimoire/internal/app"
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
@@ -17,8 +18,10 @@ import (
 // processes (the server binds to loopback only). Reads are GET; the writes
 // (create/update/delete/rename, folders, trash) use POST/PATCH/DELETE and
 // mutate the vault through the service's safety layer.
-func mountAPI(mux *http.ServeMux, api *grimoireapi.API, logger zerolog.Logger) {
+func mountAPI(mux *http.ServeMux, api *grimoireapi.API, ctl *daemonControl, logger zerolog.Logger) {
 	logger = logger.With().Str("component", "api").Logger()
+	mux.HandleFunc("GET /api/v1/ping", apiPingHandler(ctl, logger))
+	mux.HandleFunc("POST /api/v1/shutdown", apiShutdownHandler(ctl, logger))
 	mux.HandleFunc("GET /api/v1/search", apiSearchHandler(api, logger))
 	mux.HandleFunc("GET /api/v1/note", apiNoteHandler(api, logger))
 	mux.HandleFunc("GET /api/v1/vault", apiVaultHandler(api, logger))
@@ -32,7 +35,12 @@ func mountAPI(mux *http.ServeMux, api *grimoireapi.API, logger zerolog.Logger) {
 }
 
 // apiSearchHandler runs a hybrid search. Query params: q (required), k
-// (optional result count). Returns {"query","hits":[…]}.
+// (optional result count), vault (optional). Returns {"query","hits":[…]}.
+//
+// Search is the one route that does NOT fall back to the last-used vault: with
+// no vault named it searches every vault, which is the useful default for a
+// caller looking for something it doesn't know the home of. Naming one narrows
+// it to that vault.
 func apiSearchHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("q")
@@ -41,7 +49,7 @@ func apiSearchHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerF
 			return
 		}
 		k, _ := strconv.Atoi(r.URL.Query().Get("k")) // 0 (or junk) → API default.
-		res, err := api.Search(r.Context(), query, k)
+		res, err := api.Search(r.Context(), strings.TrimSpace(r.URL.Query().Get("vault")), query, k)
 		if err != nil {
 			writeServiceError(w, err, logger, "search")
 			return
@@ -59,7 +67,7 @@ func apiNoteHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFun
 			writeAPIError(w, http.StatusBadRequest, "missing query parameter path", logger)
 			return
 		}
-		note, err := api.GetNote(r.Context(), path)
+		note, err := api.GetNote(r.Context(), requestVault(r), path)
 		if err != nil {
 			writeServiceError(w, err, logger, "get note")
 			return
@@ -71,7 +79,7 @@ func apiNoteHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFun
 // apiVaultHandler returns the vault's folder/note tree. Returns {"tree":[…]}.
 func apiVaultHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tree, err := api.ListVault(r.Context())
+		tree, err := api.ListVault(r.Context(), requestVault(r))
 		if err != nil {
 			writeServiceError(w, err, logger, "list vault")
 			return
@@ -103,7 +111,7 @@ func apiResolveHandler(api *grimoireapi.API, logger zerolog.Logger) http.Handler
 			writeAPIError(w, http.StatusBadRequest, "missing query parameter target", logger)
 			return
 		}
-		writeJSON(w, api.ResolveLink(r.Context(), target), logger)
+		writeJSON(w, api.ResolveLink(r.Context(), requestVault(r), target), logger)
 	}
 }
 
@@ -112,7 +120,7 @@ func apiResolveHandler(api *grimoireapi.API, logger zerolog.Logger) http.Handler
 // user sees. Returns 503 when no capture backend is available.
 func apiScreenshotHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		data, err := api.Screenshot(r.Context())
+		data, err := api.Screenshot(r.Context(), requestVault(r))
 		if err != nil {
 			writeServiceError(w, err, logger, "screenshot")
 			return
@@ -127,14 +135,16 @@ func apiScreenshotHandler(api *grimoireapi.API, logger zerolog.Logger) http.Hand
 // writeServiceError maps a service error to an HTTP status: configuration gaps
 // (no vault/model) are 503 (the index is warming up or unconfigured), a path
 // escaping the vault is 400, a missing note is 404, anything else 500. The
-// detail is the error text — safe here since the surface is local + authed.
+// detail is the error text — safe here since the surface is loopback-only,
+// behind the loopback/origin guard (there is no auth).
 func writeServiceError(w http.ResponseWriter, err error, logger zerolog.Logger, op string) {
 	switch {
 	case errors.Is(err, app.ErrOutsideVault), errors.Is(err, grimoireapi.ErrKernelBuiltin),
 		errors.Is(err, grimoireapi.ErrKernelVaultManaged), errors.Is(err, grimoireapi.ErrThemeBuiltin):
 		writeAPIError(w, http.StatusBadRequest, err.Error(), logger)
-	case errors.Is(err, app.ErrNoVault), errors.Is(err, app.ErrNoModel), errors.Is(err, app.ErrStoreNotReady),
-		errors.Is(err, app.ErrNoScreenshot), errors.Is(err, grimoireapi.ErrRegistryUnavailable):
+	case errors.Is(err, app.ErrNoVault), errors.Is(err, errVaultUnavailable), errors.Is(err, app.ErrNoModel),
+		errors.Is(err, app.ErrStoreNotReady), errors.Is(err, app.ErrNoScreenshot),
+		errors.Is(err, grimoireapi.ErrRegistryUnavailable):
 		writeAPIError(w, http.StatusServiceUnavailable, err.Error(), logger)
 	case errors.Is(err, app.ErrNotAFile), errors.Is(err, app.ErrTrashNotFound),
 		errors.Is(err, grimoireapi.ErrEditNotFound), errors.Is(err, grimoireapi.ErrKernelNotInstalled),

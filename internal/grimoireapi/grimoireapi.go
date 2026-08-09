@@ -12,7 +12,7 @@ package grimoireapi
 
 import (
 	"context"
-	"path/filepath"
+	"strings"
 
 	"github.com/chinese-room-solutions/grimoire/internal/app"
 	"github.com/chinese-room-solutions/grimoire/internal/store"
@@ -23,51 +23,95 @@ import (
 // one, matching the GUI's search default so the API and the UI agree.
 const defaultSearchK = 10
 
-// API is the read surface over the service. It holds no state of its own; it
-// adapts service results into stable DTOs.
+// API is the operation surface over the vault services. It holds no state of its
+// own; it adapts service results into stable DTOs.
 //
-// The service is resolved per call through svcFn rather than captured, so the
-// backend can swap which vault is bound (or none) under a stable API: every
-// operation sees the live service, and svcFn returns app.ErrNoVault when no vault
-// is open. open/switch/close drive that swap through the bind/unbind hooks; both
-// are nil in a single-vault backend, where the vault is fixed and these are
-// unsupported.
+// Every operation names the vault it acts on and resolves it per call through
+// resolve, so one API serves however many vaults the daemon has open. resolve
+// reports app.ErrNoVault when the caller named none and there is no fallback, and
+// its own error when the named vault can't be served.
 type API struct {
-	svcFn  func() (*app.Service, error)
-	bind   func(ctx context.Context, vault string) error
-	unbind func() error
+	resolve func(ctx context.Context, vault string) (*app.Service, error)
+	// open makes a vault the one a bare invocation acts on (the last-used vault),
+	// warming its runtime; nil where opening isn't supported (a fixed-vault API).
+	open func(ctx context.Context, vault string) error
+	// fanout runs a search across every vault at once; nil where there is only
+	// one to search, in which case a search that names no vault falls back to
+	// resolve like every other operation.
+	fanout SearchFanout
+	// live snapshots the resident runtimes by canonical vault path, so the vault
+	// listing can report an open vault's index without forcing shut ones open;
+	// nil where the daemon keeps no registry.
+	live func() map[string]*app.Service
+	// closeVault stops a vault's resident runtime; nil where there is none to
+	// stop. ForgetVault calls it before dropping the vault from the registry.
+	closeVault func(vault string)
 }
 
-// New returns an API that resolves its service through svcFn. bind/unbind are the
-// open/close hooks for runtime vault switching; pass nil for a backend whose vault
-// is fixed for its lifetime.
-func New(svcFn func() (*app.Service, error), bind func(context.Context, string) error, unbind func() error) *API {
-	return &API{svcFn: svcFn, bind: bind, unbind: unbind}
+// SearchFanout runs one query across every vault the daemon serves and returns
+// the fused hits, each tagged with the vault it came from, plus a warning per
+// vault that couldn't answer. It is the seam the daemon's cross-vault
+// coordinator plugs into: the operations here stay transport-agnostic and the
+// coordinator stays with the vault registry that owns the runtimes.
+type SearchFanout func(ctx context.Context, query string, k int, minSim float64) ([]Hit, []string, error)
+
+// New returns an API that resolves each call's vault through resolve. open is the
+// hook OpenVault drives; pass nil for a context where the vault is fixed.
+func New(
+	resolve func(ctx context.Context, vault string) (*app.Service, error),
+	open func(ctx context.Context, vault string) error,
+) *API {
+	return &API{resolve: resolve, open: open}
 }
 
-// NewStatic returns an API bound to a single fixed service, with no runtime vault
-// switching (OpenVault/CloseVault report ErrSwitchUnsupported). It's the simple
-// construction for a one-vault context.
+// WithSearchFanout installs the cross-vault search seam and returns the API, so
+// a daemon that serves many vaults searches them all when a caller names none.
+func (a *API) WithSearchFanout(fn SearchFanout) *API {
+	a.fanout = fn
+	return a
+}
+
+// WithVaultRegistry installs the seams onto the daemon's resident runtimes and
+// returns the API: live reads their state for the vault listing, closeVault
+// retires one when it is forgotten. Both are optional — without them the listing
+// reports only what's on disk and forgetting leaves nothing to stop.
+func (a *API) WithVaultRegistry(live func() map[string]*app.Service, closeVault func(vault string)) *API {
+	a.live, a.closeVault = live, closeVault
+	return a
+}
+
+// NewStatic returns an API over a single fixed service, ignoring the vault every
+// operation names (OpenVault reports ErrSwitchUnsupported). It's the simple
+// construction for a one-vault context, such as a test.
 func NewStatic(svc *app.Service) *API {
-	return New(func() (*app.Service, error) { return svc, nil }, nil, nil)
+	return New(func(context.Context, string) (*app.Service, error) { return svc, nil }, nil)
 }
 
-// service resolves the currently bound service, or app.ErrNoVault when none is
-// open. Every operation calls it first, so a no-vault backend reports the same
-// error the GUI and transport layers already handle.
-func (a *API) service() (*app.Service, error) {
-	return a.svcFn()
+// service resolves the service for the vault an operation names. Every operation
+// calls it first, so an unknown or unavailable vault reports the same error the
+// GUI and transport layers already handle.
+func (a *API) service(ctx context.Context, vault string) (*app.Service, error) {
+	return a.resolve(ctx, vault)
 }
 
-// currentVault is the path of the bound vault, or "" when none is open. Unlike
-// service it never errors — it's for operations (vault listing, current-vault
-// reporting) that are meaningful in the empty state.
+// Ready reports whether the vault an operation names (or the last-used
+// fallback, when vault is empty) can be served. Batch endpoints probe it once
+// up front so an unservable vault is one request-level error, not the same
+// failure repeated per item.
+func (a *API) Ready(ctx context.Context, vault string) error {
+	_, err := a.service(ctx, vault)
+	return err
+}
+
+// currentVault is the vault a caller that names none acts on: the last-used one,
+// or "" on a first run. Unlike service it never errors — it's for the operations
+// (vault listing, current-vault reporting) that are meaningful with nothing open.
 func (a *API) currentVault() string {
-	svc, err := a.service()
+	current, err := vaultdir.LastVault()
 	if err != nil {
 		return ""
 	}
-	return svc.Vault()
+	return current
 }
 
 // Hit is one search result: the source note, the heading breadcrumb, the
@@ -79,23 +123,48 @@ type Hit struct {
 	Heading    string  `json:"heading"`    // breadcrumb of enclosing headings.
 	Text       string  `json:"text"`       // the matched chunk text.
 	Similarity float64 `json:"similarity"` // cosine similarity to the query, [-1, 1]; 0 for keyword-only matches.
+	// Vault is the absolute path of the vault the hit lives in — the value to
+	// pass as `vault` when reading or writing the note. A search spans every
+	// vault unless one is named, so a hit that didn't say which would be
+	// unresolvable.
+	Vault string `json:"vault"`
+	// Model is the embedding model that ranked the hit, empty when none did
+	// (a keyword-only vault). A cross-vault search ranks the vaults sharing a
+	// model together and lists one model's hits after another's, so Model says
+	// which similarities are comparable with which: within a model they are,
+	// across models the order is presentational.
+	Model string `json:"model,omitempty"`
 }
 
 // SearchResult wraps the ranked hits for a query. The query is echoed back so a
-// caller batching searches can correlate responses.
+// caller batching searches can correlate responses. Warnings name the vaults a
+// cross-vault search couldn't reach, so partial results never pass for complete
+// ones; it is absent when every vault answered.
 type SearchResult struct {
-	Query string `json:"query"`
-	Hits  []Hit  `json:"hits"`
+	Query    string   `json:"query"`
+	Hits     []Hit    `json:"hits"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
-// Search runs a hybrid (vector + keyword) search over the vault and returns
-// the relevant chunks, already filtered to those about the query. k ≤ 0 uses
-// the default.
-func (a *API) Search(ctx context.Context, query string, k int) (SearchResult, error) {
+// Search runs a hybrid (vector + keyword) search and returns the relevant
+// chunks, already filtered to those about the query. k ≤ 0 uses the default.
+//
+// With no vault named it searches every vault at once (the default: knowledge
+// spans them), fusing the per-vault rankings; naming one narrows it to that
+// vault. Without a fan-out installed a nameless search falls back to the
+// last-used vault, like every other operation.
+func (a *API) Search(ctx context.Context, vault, query string, k int) (SearchResult, error) {
 	if k <= 0 {
 		k = defaultSearchK
 	}
-	svc, err := a.service()
+	if strings.TrimSpace(vault) == "" && a.fanout != nil {
+		hits, warnings, err := a.fanout(ctx, query, k, 0)
+		if err != nil {
+			return SearchResult{}, err
+		}
+		return SearchResult{Query: query, Hits: hits, Warnings: warnings}, nil
+	}
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -103,11 +172,12 @@ func (a *API) Search(ctx context.Context, query string, k int) (SearchResult, er
 	if err != nil {
 		return SearchResult{}, err
 	}
-	return SearchResult{Query: query, Hits: toHits(hits)}, nil
+	return SearchResult{Query: query, Hits: toHits(hits, svc.Vault(), svc.EmbedModelName())}, nil
 }
 
-// toHits projects store hits to the API's slim hit shape.
-func toHits(hits []store.Hit) []Hit {
+// toHits projects store hits from one vault to the API's slim hit shape, tagged
+// with the vault they came from and the model that ranked them.
+func toHits(hits []store.Hit, vault, model string) []Hit {
 	out := make([]Hit, len(hits))
 	for i, h := range hits {
 		out[i] = Hit{
@@ -115,6 +185,8 @@ func toHits(hits []store.Hit) []Hit {
 			Heading:    h.Heading,
 			Text:       h.Text,
 			Similarity: h.Similarity,
+			Vault:      vault,
+			Model:      model,
 		}
 	}
 	return out
@@ -129,8 +201,8 @@ type Note struct {
 
 // GetNote returns a note's raw Markdown by vault-relative path. The path is
 // resolved against the vault and rejected if it escapes it.
-func (a *API) GetNote(ctx context.Context, path string) (Note, error) {
-	svc, err := a.service()
+func (a *API) GetNote(ctx context.Context, vault, path string) (Note, error) {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return Note{}, err
 	}
@@ -153,8 +225,8 @@ type TreeNode struct {
 // ListVault returns the vault's folders and notes as a tree. Unlike the GUI's
 // file browser it omits non-note files (an agent can't read them through the
 // API), and it drops the per-note tags/aliases the browser uses for filtering.
-func (a *API) ListVault(ctx context.Context) ([]TreeNode, error) {
-	svc, err := a.service()
+func (a *API) ListVault(ctx context.Context, vault string) ([]TreeNode, error) {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return nil, err
 	}
@@ -183,45 +255,11 @@ func toTree(nodes []app.TreeNode) []TreeNode {
 	return out
 }
 
-// NoteRef is a single note in the flat vault listing: its display name and
-// vault-relative path. The flat form exists for consumers (notably the CLI's
-// vault listing) that want a simple enumerable list rather than a nested tree —
-// and because it is non-recursive, unlike TreeNode.
+// NoteRef names one note or folder a write returned: its display name and
+// vault-relative path.
 type NoteRef struct {
 	Name string `json:"name"` // display name (without .md).
 	Path string `json:"path"` // vault-relative slash path.
-}
-
-// ListVaultFlat returns every note in the vault as a flat, depth-first list of
-// (name, path) refs — the same notes ListVault surfaces, without the folder
-// nesting. Folders themselves aren't listed; only notes.
-func (a *API) ListVaultFlat(ctx context.Context) ([]NoteRef, error) {
-	svc, err := a.service()
-	if err != nil {
-		return nil, err
-	}
-	root, err := svc.VaultTree()
-	if err != nil {
-		return nil, err
-	}
-	var out []NoteRef
-	flatten(root.Children, &out)
-	return out, nil
-}
-
-// flatten appends every note under nodes (depth-first) to out, descending into
-// folders and skipping non-note files.
-func flatten(nodes []app.TreeNode, out *[]NoteRef) {
-	for _, n := range nodes {
-		if n.IsDir {
-			flatten(n.Children, out)
-			continue
-		}
-		if !n.IsNote {
-			continue
-		}
-		*out = append(*out, NoteRef{Name: n.Name, Path: n.Path})
-	}
 }
 
 // Resolution is the outcome of resolving a wikilink/name to a note path: the
@@ -235,8 +273,8 @@ type Resolution struct {
 // ResolveLink maps a wikilink target or bare note name to a vault-relative note
 // path, matching Obsidian's resolution (path or basename, case-insensitive,
 // optional .md, "|alias" stripped). Found is false when nothing matches.
-func (a *API) ResolveLink(ctx context.Context, target string) Resolution {
-	svc, err := a.service()
+func (a *API) ResolveLink(ctx context.Context, vault, target string) Resolution {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return Resolution{Target: target, Found: false}
 	}
@@ -247,38 +285,10 @@ func (a *API) ResolveLink(ctx context.Context, target string) Resolution {
 // Screenshot captures the app window's rendered UI and returns it as PNG bytes,
 // so an external agent can see what the user sees. It returns app.ErrNoScreenshot
 // when no capture backend is available (headless, or the browser fallback).
-func (a *API) Screenshot(ctx context.Context) ([]byte, error) {
-	svc, err := a.service()
+func (a *API) Screenshot(ctx context.Context, vault string) ([]byte, error) {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return nil, err
 	}
 	return svc.Screenshot()
-}
-
-// Vault identifies a vault an agent can navigate to: its display name (the
-// folder's base name), its absolute path (what to pass as --vault when bridging
-// to it), and whether it's the one this instance is serving.
-type Vault struct {
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	Current bool   `json:"current"`
-}
-
-// ListVaults returns the vaults Grimoire knows about (every one it has opened
-// whose folder still exists), flagging the one this instance currently has open
-// (none, when no vault is bound). An agent uses this to discover which vaults
-// exist, then opens one with OpenVault (or targets it through the bridge's vault
-// argument). It works with no vault bound, so it's the entry point from an empty
-// backend.
-func (a *API) ListVaults(ctx context.Context) ([]Vault, error) {
-	paths, err := vaultdir.KnownVaults()
-	if err != nil {
-		return nil, err
-	}
-	current := a.currentVault()
-	out := make([]Vault, len(paths))
-	for i, p := range paths {
-		out[i] = Vault{Name: filepath.Base(p), Path: p, Current: p == current}
-	}
-	return out, nil
 }

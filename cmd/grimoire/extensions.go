@@ -27,7 +27,7 @@ func extensionThemesHandler(api *grimoireapi.API, logger zerolog.Logger) http.Ha
 	return func(w http.ResponseWriter, r *http.Request) {
 		sse := datastar.NewSSE(w, r)
 		sections := ui.ExtensionSections{Kind: ui.ExtKindTheme}
-		res, err := api.ThemeList(r.Context())
+		res, err := api.ThemeList(r.Context(), requestVault(r))
 		if err != nil {
 			logger.Warn().Err(err).Msg("listing themes for the extensions dialog")
 			sections.Warning = shortErr(err)
@@ -67,7 +67,7 @@ func extensionKernelsHandler(api *grimoireapi.API, logger zerolog.Logger) http.H
 	return func(w http.ResponseWriter, r *http.Request) {
 		sse := datastar.NewSSE(w, r)
 		sections := ui.ExtensionSections{Kind: ui.ExtKindKernel}
-		res, err := api.KernelList(r.Context())
+		res, err := api.KernelList(r.Context(), requestVault(r))
 		if err != nil {
 			logger.Warn().Err(err).Msg("listing kernels for the extensions dialog")
 			sections.Warning = shortErr(err)

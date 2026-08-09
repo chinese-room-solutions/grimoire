@@ -25,6 +25,10 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 		     their own signals via data-on:sl-change in the templ; the signals JS still
 		     drives directly (query, paths, session edits, concurrency-for-importLimit)
 		     remain hidden data-bind inputs below. -->
+		<!-- The vault this page is for. Datastar sends it with every action, so the
+		     daemon knows which of the vaults it serves the request is about; the JS
+		     reads it here to stamp its own fetch() URLs (apiURL). -->
+		<input type="hidden" data-bind="gVault" value={ st.Vault }/>
 		<input type="hidden" data-bind="gQuery" value=""/>
 		<input type="hidden" data-bind="gSeq" value="0"/>
 		<input type="hidden" data-bind="gPreviewPath" value=""/>
@@ -102,6 +106,8 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 		     or the vault tree. The toolbar Trash toggle fires these. -->
 		<button id="g-trash-open-trigger" style="display:none" data-on:click="@get('api/trash/render')"></button>
 		<button id="g-trash-close-trigger" style="display:none" data-on:click="@get('api/files/render')"></button>
+		<!-- Repaint the Vaults tab after an add or a forget. -->
+		<button id="g-vaults-render-trigger" style="display:none" data-on:click="@get('api/vaults/render')"></button>
 		<!-- Extensions dialog: each tab's list is fetched when it's first shown. -->
 		<button id="g-ext-themes-trigger" style="display:none" data-on:click="@get('api/extensions/themes/render')"></button>
 		<button id="g-ext-kernels-trigger" style="display:none" data-on:click="@get('api/extensions/kernels/render')"></button>
@@ -125,8 +131,33 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 			</div>
 
 			<sl-tab-group id="g-tabs" class="g-tabs flex flex-col flex-1" style="min-height:0">
+				<sl-tab slot="nav" panel="vaults">Vaults</sl-tab>
 				<sl-tab slot="nav" panel="sessions">Sessions</sl-tab>
 				<sl-tab slot="nav" panel="files">Files</sl-tab>
+
+				<!-- Vaults tab: every vault the daemon knows, with an Add button. It is
+				     the only vault-management surface (the Vault settings menu keeps just
+				     the current vault's own settings) and works in the empty state too,
+				     so it lists unconditionally. Clicking an available vault reloads the
+				     page onto it — the workspace is restored from that vault's own UI
+				     state, so there is nothing to tear down in place. -->
+				<sl-tab-panel name="vaults" class="g-tab-panel">
+					<div class="g-vaults-section flex flex-col" style="height:100%">
+						<sl-button id="g-vault-add" class="g-new-session" size="small" variant="primary" style="width:100%">
+							<sl-icon slot="prefix" name="plus-lg"></sl-icon>
+							Add vault…
+						</sl-button>
+						<!-- Fallback for a client with no native folder dialog (a browser
+						     tab, a headless daemon): the server says needsPath and JS
+						     reveals this field for an absolute path. -->
+						<div id="g-vault-add-path" class="g-vault-add-path">
+							<sl-input id="g-vault-add-input" size="small" clearable autocomplete="off" placeholder="Absolute path to a vault folder…">
+								<sl-icon slot="prefix" name="folder2"></sl-icon>
+							</sl-input>
+						</div>
+						<div id="g-vaults" class="g-vaults" data-init="@get('api/vaults/render')"></div>
+					</div>
+				</sl-tab-panel>
 
 				<!-- Sessions tab: new-session button + the session history list. -->
 				<sl-tab-panel name="sessions" class="g-tab-panel">
@@ -258,6 +289,12 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 							data-on:input="$gSearchMinSim = evt.target.value"/>
 						<span class="g-muted g-graph-ctl-val" data-text="$gSearchMinSim"></span>
 					</label>
+					<!-- Search covers every vault by default; this narrows it to the one
+					     this page has open. -->
+					<label class="g-graph-ctl">
+						<span class="g-muted g-ctl-tip" title="Search only the vault this window has open. Off, search covers every vault Grimoire knows about.">This vault only</span>
+						<input type="checkbox" id="g-search-this-vault" data-bind="gSearchThisVault"/>
+					</label>
 				</div>
 			</div>
 			<div id="g-stream" class="g-stream flex-1">
@@ -323,7 +360,8 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 
 			<!-- Similarity graph: a full-panel canvas overlay (peer of the preview)
 			     shown while the Graph tab's view is open. The canvas is drawn and
-			     simulated entirely in JS; clicking a node opens that note. Visibility
+			     simulated entirely in JS; left-clicking a node opens that note,
+			     right-dragging one moves it. Visibility
 			     is a plain class (g-graph-open) the workspace toggles directly — not a
 			     Datastar data-show — so showing it is synchronous and deterministic
 			     (data-show's reactive display churn left the overlay flickering hidden
@@ -435,6 +473,15 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 		</sl-dialog>
 
 
+		<!-- Forgetting a vault only takes it off the list — nothing on disk is
+		     touched — so it gets its own confirmation rather than the delete
+		     dialog, whose red "Delete" would misdescribe it. -->
+		<sl-dialog id="g-forget-dialog" label="Forget vault" class="mass-dialog">
+			<span id="g-forget-body"></span>
+			<sl-button id="g-forget-cancel" slot="footer" variant="default">Cancel</sl-button>
+			<sl-button id="g-forget-confirm" slot="footer" variant="primary">Forget</sl-button>
+		</sl-dialog>
+
 		<!-- Keyboard shortcuts reference, opened from the sidebar header (or "?"). -->
 		<sl-dialog id="g-shortcuts-dialog" label="Keyboard shortcuts" class="mass-dialog">
 			@shortcutsDialog()
@@ -452,6 +499,15 @@ type Hit struct {
 	Path    string
 	Heading string
 	Text    string
+	// Vault is the absolute path of the vault the hit lives in. Search spans
+	// every vault, so a result says which one it came from, and a hit from
+	// another vault opens by navigating there.
+	Vault string
+	// Model is the embedding model that ranked the hit. Rankings from different
+	// models are not comparable, so results spanning two of them are shown as
+	// one block per model instead of one list. Empty on hits recorded before
+	// the field existed, and on a vault with no model.
+	Model string
 }
 
 // SearchTurn is the shell appended when a search runs: a query bubble and a
@@ -467,13 +523,41 @@ templ SearchTurn(seq string, query string) {
 }
 
 // SearchResults renders the ranked hits into a search turn's results block.
-templ SearchResults(hits []Hit) {
+// warnings name the vaults that couldn't answer, so a partial cross-vault
+// search never passes for a complete one; nil when every vault answered (and
+// when replaying a stored turn, which kept only the hits).
+//
+// Hits ranked by two different embedding models are two rankings, not one, so
+// they fold into a collapsed block per model rather than pretending to be a
+// single list — one model (the usual case, and every replayed turn recorded
+// before models were tracked) renders flat, exactly as before.
+templ SearchResults(hits []Hit, warnings []string) {
 	if len(hits) == 0 {
 		<div class="g-muted">No matches.</div>
 	}
+	if groups := hitGroups(hits); len(groups) > 1 {
+		for _, g := range groups {
+			<sl-details class="g-hit-group">
+				<span slot="summary">
+					{ g.Vaults }
+					<span class="g-hit-group-model">{ g.Model }</span>
+				</span>
+				@hitCards(g.Hits)
+			</sl-details>
+		}
+	} else {
+		@hitCards(hits)
+	}
+	for _, w := range warnings {
+		<div class="g-muted g-hit-warning">{ w }</div>
+	}
+}
+
+// hitCards renders one ranking's result cards (label + snippet).
+templ hitCards(hits []Hit) {
 	for _, h := range hits {
 		<div class="g-hit">
-			@previewLink(h.Path, h.Heading, sourceLabel(h))
+			@previewLink(h.Path, h.Heading, h.Vault, sourceLabel(h))
 			<div class="g-hit-text">{ snippet(h.Text) }</div>
 		</div>
 	}
@@ -623,17 +707,19 @@ templ RunTime(blockID string, at time.Time) {
 // preview navigator (initPreview) delegates clicks via the data-note attribute,
 // so opening here goes through the same history stack as wikilink clicks. When
 // the result came from a specific section, data-heading carries that heading so
-// the preview scrolls to it.
-templ previewLink(path, heading, label string) {
-	<button type="button" class="g-hit-src g-preview-link" data-note={ path } data-heading={ heading }>{ label }</button>
+// the preview scrolls to it. data-vault is the vault the note lives in: a hit
+// from another one navigates there with the note open, since the page's panels
+// all speak to one vault.
+templ previewLink(path, heading, vault, label string) {
+	<button type="button" class="g-hit-src g-preview-link" data-note={ path } data-heading={ heading } data-vault={ vault }>{ label }</button>
 }
 
 // Preview renders a note for the preview panel: an always-editable properties
 // panel (like Obsidian's Properties — no edit mode, changes auto-save), then the
 // Markdown body as HTML. Always renders, even with no properties, so a note
 // without frontmatter can still have some added.
-templ Preview(source, notePath string) {
-	{{ props, rawBody, bodyHTML := RenderNote(source, notePath) }}
+templ Preview(nr NoteRenderer, source, notePath string) {
+	{{ props, rawBody, bodyHTML := RenderNote(nr, source, notePath) }}
 	<div id="g-props" class="g-props">
 		<div class="g-props-list">
 			for _, p := range props {
@@ -758,6 +844,12 @@ var shortcutGroups = []shortcutGroup{
 		{[]string{"Esc"}, "Cancel editing"},
 		{[]string{"Ctrl", "Z"}, "Undo a property change"},
 		{[]string{"Ctrl", "Y"}, "Redo a property change"},
+	}},
+	{"Graph", []shortcut{
+		{[]string{"Click"}, "Open the note under the cursor"},
+		{[]string{"Right-drag"}, "Move a node"},
+		{[]string{"Drag"}, "Pan the graph"},
+		{[]string{"Scroll"}, "Zoom in / out"},
 	}},
 }
 
@@ -966,12 +1058,9 @@ templ vaultMenu(st State) {
 		<div class="g-menu-panel">
 			<div>
 				<span class="g-label">Vault</span>
-				<!-- The bound vault is swapped in-process: switching picks a folder and
-				     binds it to this running instance (the page reloads into it); closing
-				     returns to the empty state. -->
+				<!-- The page's vault, for reference. Everything below applies to it
+				     alone; choosing a different one is the sidebar's Vaults tab. -->
 				<div id="g-vault-current" class="g-vault-current">{ st.Vault }</div>
-				<sl-button id="g-vault-switch" size="small" variant="default" style="width:100%;margin-top:0.35rem">Switch vault…</sl-button>
-				<sl-button id="g-vault-close" size="small" variant="default" style="width:100%;margin-top:0.35rem">Close vault</sl-button>
 			</div>
 			<!-- Each model select loads its option list on init (so the saved value's
 			     label shows) and on open; sl-change writes the signal and posts. No
@@ -1044,7 +1133,7 @@ templ vaultMenu(st State) {
 // one, plus the vaults Grimoire already knows about as a quick-pick list. Opening
 // any of them (or picking a new folder) binds it to this running instance and the
 // page reloads into it — handled by initVault in grimoire.js, which posts to
-// api/open-vault and reloads on success.
+// api/vaults/add and navigating onto the opened vault.
 templ vaultEmptyState(recents []VaultRef) {
 	<div id="g-vault-empty" class="g-vault-empty">
 		<sl-icon name="book-half" style="font-size:2.4rem;color:var(--mass-accent);opacity:0.8"></sl-icon>
@@ -1187,6 +1276,40 @@ type Session struct {
 	UpdatedAt time.Time // last use: bumped on every turn.
 }
 
+// VaultList renders the Vaults tab: one row per vault Grimoire knows about. The
+// status dot reads at a glance — accent for the vault this page is showing, plain
+// for another available one, muted for a vault whose folder is gone. Unavailable
+// rows can't be opened (JS ignores the click) but keep their menu, since forgetting
+// them is the whole reason they are still listed. The row's tooltip carries the
+// index detail that would crowd the list.
+templ VaultList(vaults []VaultRow) {
+	if len(vaults) == 0 {
+		<div class="g-vaults-empty g-muted">No vaults yet. Add one to get started.</div>
+	}
+	for _, v := range vaults {
+		<div
+			class={ "g-vault-row",
+				templ.KV("g-vault-row-current", v.Current),
+				templ.KV("g-vault-row-gone", !v.Available) }
+			data-vault-path={ v.Path }
+			data-vault-available={ boolAttr(v.Available) }
+			title={ v.Detail }
+		>
+			<span class="g-vault-dot"></span>
+			<div class="g-vault-main">
+				<span class="g-vault-name">{ v.Name }</span>
+				<span class="g-vault-path g-muted">{ v.Path }</span>
+			</div>
+			<sl-dropdown class="g-vault-row-menu" placement="bottom-end" hoist>
+				<sl-icon-button slot="trigger" name="three-dots-vertical" title="Vault actions" tabindex="-1"></sl-icon-button>
+				<sl-menu>
+					<sl-menu-item class="g-vault-forget" value="forget">Forget</sl-menu-item>
+				</sl-menu>
+			</sl-dropdown>
+		</div>
+	}
+}
+
 // SessionList renders the sidebar history; the active session is highlighted.
 // Each row carries its open URL (data-open-url) and id/title; JS single-clicks to
 // preview, double-clicks to open pinned, right-clicks to rename inline, and the ×
@@ -1248,7 +1371,7 @@ templ Conversation(turns []Turn) {
 	for _, t := range turns {
 		<div class="g-turn" data-turn-id={ strconv.FormatInt(t.ID, 10) }>
 			<div class="g-bubble g-bubble-user">{ t.Query }</div>
-			@SearchResults(t.Hits)
+			@SearchResults(t.Hits, nil)
 		</div>
 	}
 }

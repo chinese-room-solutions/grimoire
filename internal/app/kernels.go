@@ -100,7 +100,7 @@ func (s *Service) KernelPackages(ctx context.Context) (pkgs []KernelPackage, sta
 // artifact. The kernel registry is reloaded on success, so the kernel resolves
 // immediately — no backend restart. Returns the installed kernel's manifest.
 func (s *Service) InstallKernel(ctx context.Context, name, version string) (*kernel.Manifest, error) {
-	if s.sharedKernels == "" {
+	if s.shared.sharedKernels == "" {
 		return nil, fmt.Errorf("%w: no shared kernels dir", ErrRegistryUnavailable)
 	}
 	idx, _, err := s.fetchRegistryIndex(ctx)
@@ -111,7 +111,7 @@ func (s *Service) InstallKernel(ctx context.Context, name, version string) (*ker
 	if pkg == nil || pkg.Kind != KindKernel {
 		return nil, ctxerr.With(fmt.Errorf("%w: %s", ErrKernelPackageUnknown, name), map[string]any{"package": name})
 	}
-	artifact, version, err := kernelArtifact(pkg, version)
+	artifact, version, err := pickArtifact(pkg, version, newestKernelVersion, ErrKernelPackageUnknown)
 	if err != nil {
 		return nil, err
 	}
@@ -132,13 +132,14 @@ func (s *Service) InstallKernel(ctx context.Context, name, version string) (*ker
 			map[string]any{"package": pkg.Name, "url": artifact.URL})
 	}
 
-	s.kernelMu.Lock()
-	defer s.kernelMu.Unlock()
-	m, err := kernel.InstallArchive(s.sharedKernels, family, version, zipPath)
+	s.shared.kernelMu.Lock()
+	defer s.shared.kernelMu.Unlock()
+	m, err := kernel.InstallArchive(s.shared.sharedKernels, family, version, zipPath)
 	if err != nil {
 		return nil, err
 	}
 	s.reloadKernels()
+	s.shared.kernelsChanged()
 	return m, nil
 }
 
@@ -146,18 +147,19 @@ func (s *Service) InstallKernel(ctx context.Context, name, version string) (*ker
 // and reloads the kernel registry. Builtins and vault-dir kernels are refused
 // (kernel.ErrKernelBuiltin / kernel.ErrKernelVaultManaged).
 func (s *Service) RemoveKernel(family, version string) error {
-	s.kernelMu.Lock()
-	defer s.kernelMu.Unlock()
-	if err := kernel.Remove(s.sharedKernels, kernel.VaultKernelsDir(s.configDir), family, version); err != nil {
+	s.shared.kernelMu.Lock()
+	defer s.shared.kernelMu.Unlock()
+	if err := kernel.Remove(s.shared.sharedKernels, kernel.VaultKernelsDir(s.configDir), family, version); err != nil {
 		return err
 	}
 	s.reloadKernels()
+	s.shared.kernelsChanged()
 	return nil
 }
 
 // fetchRegistryIndex fetches the kernel package index.
 func (s *Service) fetchRegistryIndex(ctx context.Context) (idx *registry.Index, stale bool, err error) {
-	return s.fetchIndex(ctx, s.registryURL)
+	return s.fetchIndex(ctx, s.shared.registryURL)
 }
 
 // fetchIndex fetches a package index through the SDK client (ETag cache under
@@ -177,17 +179,21 @@ func (s *Service) fetchIndex(ctx context.Context, url string) (idx *registry.Ind
 	return res.Index, res.Stale, nil
 }
 
-// kernelArtifact picks the package version to install — the requested one, or
-// the newest with an "any" artifact when want is "" — and returns its artifact.
-func kernelArtifact(pkg *registry.Package, want string) (registry.Artifact, string, error) {
+// pickArtifact resolves the package version to install — the requested one, or
+// newest(pkg) when want is "" — and returns its "any" artifact alongside the
+// version chosen. Shared by kernels and themes, which differ only in how they
+// order versions and in the sentinel (unknown) a miss reports.
+func pickArtifact(
+	pkg *registry.Package, want string, newest func(*registry.Package) (string, bool), unknown error,
+) (registry.Artifact, string, error) {
 	if want == "" {
-		newest, ok := newestKernelVersion(pkg)
+		v, ok := newest(pkg)
 		if !ok {
 			return registry.Artifact{}, "", ctxerr.With(
-				fmt.Errorf("%w: %s has no installable version", ErrKernelPackageUnknown, pkg.Name),
+				fmt.Errorf("%w: %s has no installable version", unknown, pkg.Name),
 				map[string]any{"package": pkg.Name})
 		}
-		want = newest
+		want = v
 	}
 	for _, v := range pkg.Versions {
 		if v.Version != want {
@@ -198,7 +204,7 @@ func kernelArtifact(pkg *registry.Package, want string) (registry.Artifact, stri
 		}
 	}
 	return registry.Artifact{}, "", ctxerr.With(
-		fmt.Errorf("%w: %s@%s", ErrKernelPackageUnknown, pkg.Name, want),
+		fmt.Errorf("%w: %s@%s", unknown, pkg.Name, want),
 		map[string]any{"package": pkg.Name, "version": want})
 }
 
@@ -232,17 +238,34 @@ func (s *Service) kernelManager() *kernel.Manager {
 	return s.kernels
 }
 
+// ActiveKernelRuns reports how many code blocks this vault's kernels are
+// executing right now, so the daemon can tell a quiet backend from one that is
+// merely between HTTP requests.
+func (s *Service) ActiveKernelRuns() int {
+	m := s.kernelManager()
+	if m == nil {
+		return 0
+	}
+	return m.ActiveRuns()
+}
+
+// ReloadKernels rebuilds this vault's kernel registry from the shared and vault
+// kernels dirs. The daemon calls it on every resident runtime after an install
+// or remove made through another one, so a kernel installed from one vault
+// resolves in all of them.
+func (s *Service) ReloadKernels() { s.reloadKernels() }
+
 // reloadKernels rebuilds the kernel registry from both kernels dirs and swaps
 // it into the live manager, so an install or remove takes effect without a
 // backend restart — the invalidation counterpart of the resolve cache. Caller
-// holds kernelMu. When kernel discovery failed at startup there is no manager
+// holds Shared.kernelMu. When kernel discovery failed at startup there is no manager
 // to swap into; the shared dir still changed, so the next start picks it up.
 func (s *Service) reloadKernels() {
 	m := s.kernelManager()
 	if m == nil {
 		return
 	}
-	reg, err := kernel.NewRegistry(s.configDir, s.sharedKernels, s.logger)
+	reg, err := kernel.NewRegistry(s.configDir, s.shared.sharedKernels, s.logger)
 	if err != nil {
 		s.logger.Warn().Err(err).Msg("reloading kernels after install/remove; keeping the previous set")
 		return

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/chinese-room-solutions/grimoire/internal/sqlmigrate"
 	"github.com/ncruces/go-sqlite3/driver"
 	"github.com/stretchr/testify/require"
 )
@@ -126,7 +127,7 @@ func TestReopen_IncompatibleFingerprint(t *testing.T) {
 // incompatible, not silently adopted.
 func TestOpen_PreFingerprintDatabaseIsIncompatible(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.db")
-	db, err := driver.Open(fileDSN(path))
+	db, err := driver.Open(sqlmigrate.FileDSN(path))
 	require.NoError(t, err)
 	_, err = db.Exec(`
 CREATE TABLE _migrations (version INTEGER PRIMARY KEY);
@@ -147,6 +148,30 @@ func TestSearch_QueryDimensionValidated(t *testing.T) {
 	s := openTemp(t, 4)
 	_, err := vectorSearch(s, vec(1, 2, 3), 5)
 	require.Error(t, err)
+}
+
+// With no query embedding at all (the model is unreachable) the search still
+// runs the keyword leg rather than refusing — a degraded search, not a broken
+// one. The vector leg contributes nothing, so hits carry no rank and no
+// similarity from it.
+func TestSearch_NoQueryVectorIsKeywordOnly(t *testing.T) {
+	s := openTemp(t, 2)
+	require.NoError(t, s.ReplaceNote("hit.md", []Chunk{
+		{Path: "hit.md", Index: 0, Text: "the ULID spec", DocHash: "h", Vector: vec(1, 0)},
+	}))
+	require.NoError(t, s.ReplaceNote("miss.md", []Chunk{
+		{Path: "miss.md", Index: 0, Text: "unrelated text", DocHash: "h", Vector: vec(0, 1)},
+	}))
+
+	for _, qvec := range [][]float32{nil, {}} {
+		hits, err := s.Search("ULID", qvec, SearchOptions{K: 5, MinSim: 0.5, TopRatio: 0.88})
+		require.NoError(t, err)
+		require.Len(t, hits, 1)
+		require.Equal(t, "hit.md", hits[0].Path)
+		require.Equal(t, 1, hits[0].FTSRank)
+		require.Zero(t, hits[0].VecRank)
+		require.Zero(t, hits[0].Similarity)
+	}
 }
 
 func TestSanitizeFTSQuery(t *testing.T) {
@@ -256,6 +281,49 @@ func TestSearch_ExactKeywordWinsRRFTie(t *testing.T) {
 	require.Len(t, hits, 2)
 	require.Equal(t, "exact.md", hits[0].Path)
 	require.Equal(t, "vectop.md", hits[1].Path)
+}
+
+// Every hit reports the 1-based rank it held in each leg, 0 where it was
+// absent — the input a caller needs to re-fuse hits from several stores.
+func TestSearch_ReportsPerLegRanks(t *testing.T) {
+	s := openTemp(t, 2)
+	// "ulid-spec.md" matches the query in its path (the heaviest BM25 column),
+	// so it leads the keyword leg; its vector is orthogonal, banding it out of
+	// the vector leg entirely.
+	require.NoError(t, s.ReplaceNote("ulid-spec.md", []Chunk{
+		{Path: "ulid-spec.md", Index: 0, Text: "ULID identifiers", DocHash: "h", Vector: vec(0, 1)},
+	}))
+	require.NoError(t, s.ReplaceNote("both.md", []Chunk{
+		{Path: "both.md", Index: 0, Text: "we picked ULID", DocHash: "h", Vector: vec(1, 0)},
+	}))
+	require.NoError(t, s.ReplaceNote("vec-only.md", []Chunk{
+		{Path: "vec-only.md", Index: 0, Text: "generic prose", DocHash: "h", Vector: vec(0.99, 0.14106736)},
+	}))
+
+	hits, err := s.Search("ULID", vec(1, 0), SearchOptions{K: 5, TopRatio: 0.88})
+	require.NoError(t, err)
+	byPath := make(map[string]Hit, len(hits))
+	for _, h := range hits {
+		byPath[h.Path] = h
+	}
+	require.Len(t, byPath, 3)
+
+	tests := []struct {
+		path    string
+		vecRank int
+		ftsRank int
+	}{
+		{"both.md", 1, 2},      // both legs: vector rank 1 (sim 1.0), keyword runner-up.
+		{"vec-only.md", 2, 0},  // vector only: no keyword match.
+		{"ulid-spec.md", 0, 1}, // keyword only: banded out of the vector leg.
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			h := byPath[tt.path]
+			require.Equal(t, tt.vecRank, h.VecRank)
+			require.Equal(t, tt.ftsRank, h.FTSRank)
+		})
+	}
 }
 
 func TestSearch_BandFiltersVectorLeg(t *testing.T) {

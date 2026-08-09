@@ -9,28 +9,26 @@ import (
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
 )
 
-// runReindex handles `grimoire reindex [--force]`: a synchronous sync of the
-// vault into the search index — incremental by default, --force re-embeds
-// every note (e.g. after an embedding-model change). Embedding needs the MASS
-// gateway, and a forced pass over a large vault runs for minutes; the request
-// carries no deadline, so it waits as long as the pass takes. Prints the pass
-// stats; when some notes failed (a partial pass — the rest indexed) the
-// failure summary goes to stderr and the exit code is 1.
+// runReindex handles `grimoire reindex [PATH...] [--force]`: a synchronous sync
+// of the search index — the whole vault, or just the named notes. Incremental by
+// default (unchanged notes are skipped by content hash); --force re-embeds
+// regardless, which is the only way to pick up an embedding-model or chunker
+// change, since the note's bytes haven't moved. A named note gone from disk is
+// pruned from the index. Embedding needs the MASS gateway, and a forced vault
+// pass runs for minutes; the request carries no deadline, so it waits as long as
+// the pass takes. Prints the pass stats; when some notes failed (a partial pass —
+// the rest indexed) the failure summary goes to stderr and the exit code is 1.
 func (e *cliEnv) runReindex(args []string) int {
 	fs := flag.NewFlagSet("reindex", flag.ContinueOnError)
-	force := fs.Bool("force", false, "re-embed every note (full rebuild) instead of an incremental sync")
-	rest, ok := parseFlags(fs, e.err, args)
+	force := fs.Bool("force", false, "re-embed regardless of content hash, instead of an incremental sync")
+	paths, ok := parseFlags(fs, e.err, args)
 	if !ok {
-		return exitUsage
-	}
-	if len(rest) != 0 {
-		e.usageErrf("reindex takes no positional arguments")
 		return exitUsage
 	}
 	var res grimoireapi.ReindexResult
 	err := e.doWrite(context.Background(), func(ctx context.Context, c *apiclient.Client) error {
 		var callErr error
-		res, callErr = c.Reindex(ctx, *force)
+		res, callErr = c.Reindex(ctx, paths, *force)
 		return callErr
 	})
 	if err != nil {

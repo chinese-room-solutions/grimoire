@@ -50,7 +50,7 @@ func (s *Service) Watch(ctx context.Context) {
 	defer func() { _ = w.Close() }()
 
 	watched := s.rewatch(w, "") // watch the current vault, if any.
-	pending := make(map[string]time.Time)
+	pending := &watchPending{notes: make(map[string]time.Time)}
 	tick := time.NewTicker(watchDebounce)
 	defer tick.Stop()
 
@@ -69,21 +69,40 @@ func (s *Service) Watch(ctx context.Context) {
 			}
 			s.logger.Warn().Err(err).Msg("filesystem watcher")
 		case <-tick.C:
-			// Re-assert the watch in case the vault directory was (re)created
-			// after startup; a no-op once it's already watched.
+			// Re-assert the watch: a no-op while the vault root is watched, a
+			// retry once it isn't (it was deleted, or hasn't been created yet).
 			watched = s.rewatch(w, watched)
 			s.flushPending(ctx, pending)
 		}
 	}
 }
 
+// watchPending is the watch loop's debounce state: notes whose reindex is due,
+// each keyed to its last event, plus the time a directory-level event asked for
+// a whole-vault pass (zero when none is due).
+type watchPending struct {
+	notes map[string]time.Time
+	vault time.Time
+}
+
 // onWatchEvent records a debounced reindex for a changed note, and starts
-// watching any newly-created directory so notes added under it are seen too.
-func (s *Service) onWatchEvent(w *fsnotify.Watcher, e fsnotify.Event, pending map[string]time.Time) {
+// watching any newly-created directory so notes added under it are seen too. A
+// directory-level event schedules a vault-wide pass instead: fsnotify reports a
+// folder rename as one event on the folder and nothing at all per contained
+// note, so there is no per-note work to queue.
+func (s *Service) onWatchEvent(w *fsnotify.Watcher, e fsnotify.Event, pending *watchPending) {
 	if e.Op&(fsnotify.Create) != 0 {
 		if fi, err := os.Stat(e.Name); err == nil && fi.IsDir() && !hidden(e.Name) {
-			_ = w.Add(e.Name)
+			if err := w.Add(e.Name); err != nil {
+				s.logger.Warn().Err(err).Str("folder", e.Name).
+					Msg("watching a new folder; notes added under it won't auto-index")
+			}
 		}
+	}
+	if s.dirEvent(w, e) {
+		s.invalidateResolveCache()
+		pending.vault = time.Now()
+		return
 	}
 	if !isMarkdownName(e.Name) {
 		return
@@ -92,21 +111,59 @@ func (s *Service) onWatchEvent(w *fsnotify.Watcher, e fsnotify.Event, pending ma
 		// An external change may have added, moved, or removed a note under the
 		// resolver's cached walk.
 		s.invalidateResolveCache()
-		pending[rel] = time.Now()
+		pending.notes[rel] = time.Now()
 	}
 }
 
-// flushPending reindexes notes whose last event is older than the debounce
-// window, so a burst of writes settles into a single reindex. Notes are processed
-// concurrently — the shared embed gate bounds how many embed at once — so a large
-// batch dropped onto the filesystem indexes in parallel like an in-app import.
-func (s *Service) flushPending(ctx context.Context, pending map[string]time.Time) {
+// dirEvent reports whether an event plausibly created, renamed, or removed a
+// directory in the vault. A Rename's subject no longer exists by the time the
+// event lands, so it can't be stat'd; the watch list still holds it in the
+// common case, and a name without an extension is the fallback. The response is
+// one debounced incremental pass, which skips unchanged notes by hash, so an
+// occasional false positive (an attachment named without an extension) is cheap.
+func (s *Service) dirEvent(w *fsnotify.Watcher, e fsnotify.Event) bool {
+	if isMarkdownName(e.Name) || hidden(e.Name) {
+		return false
+	}
+	if _, ok := s.vaultRel(e.Name); !ok {
+		return false
+	}
+	switch {
+	case e.Op&fsnotify.Create != 0:
+		fi, err := os.Stat(e.Name)
+		return err == nil && fi.IsDir()
+	case e.Op&(fsnotify.Rename|fsnotify.Remove) != 0:
+		return filepath.Ext(e.Name) == "" || watching(w, e.Name)
+	default:
+		return false
+	}
+}
+
+// flushPending runs the reindexes whose debounce window has elapsed, so a burst
+// of writes settles into a single pass. A due vault-wide pass supersedes the
+// queued notes — it covers all of them — and pairs with the orphan sweep, since
+// a folder rename leaves every contained note's saved run output keyed to a path
+// that no longer exists. Otherwise notes are processed concurrently, the shared
+// embed gate bounding how many embed at once, so a large batch dropped onto the
+// filesystem indexes in parallel like an in-app import.
+func (s *Service) flushPending(ctx context.Context, pending *watchPending) {
 	now := time.Now()
+	if !pending.vault.IsZero() && now.Sub(pending.vault) >= watchDebounce {
+		pending.vault = time.Time{}
+		clear(pending.notes)
+		go func() {
+			s.sweepOrphanRunResults()
+			if err := s.reindexVaultSync(ctx); err != nil {
+				s.logger.Warn().Err(err).Msg("indexing an externally-changed folder")
+			}
+		}()
+		return
+	}
 	var ready []string
-	for rel, last := range pending {
+	for rel, last := range pending.notes {
 		if now.Sub(last) >= watchDebounce {
 			ready = append(ready, rel)
-			delete(pending, rel)
+			delete(pending.notes, rel)
 		}
 	}
 	// Fire each off without blocking the watch loop; the shared embed gate bounds
@@ -125,19 +182,29 @@ func (s *Service) flushPending(ctx context.Context, pending map[string]time.Time
 
 // rewatch points the watcher at the current vault when it differs from prev,
 // removing the old tree's watches and adding the new one's (fsnotify isn't
-// recursive, so every directory is added). Returns the now-watched vault.
+// recursive, so every directory is added). It returns the vault it is actually
+// watching, or "" when the root couldn't be added — a vault that doesn't exist
+// (yet) walks without error, so "watched" has to mean the root is in the watch
+// list, not that the walk returned. Returning "" makes the next tick try again,
+// which is how a vault deleted and recreated after startup gets picked up.
 func (s *Service) rewatch(w *fsnotify.Watcher, prev string) string {
 	s.mu.Lock()
 	vault := s.cfg.Vault
 	s.mu.Unlock()
-	if vault == prev {
+	// prev alone isn't proof: a vault removed after startup leaves prev set while
+	// nothing is watched any more.
+	if vault == prev && (vault == "" || watching(w, vault)) {
 		return prev
 	}
 	// The watch target changed (first bind, or a future in-place vault switch):
 	// whatever walk the resolver cached belongs to the old target.
 	s.invalidateResolveCache()
 	for _, p := range w.WatchList() {
-		_ = w.Remove(p)
+		// A watch the kernel already dropped (its directory is gone) fails here;
+		// that is the expected case when the vault disappeared, hence debug.
+		if err := w.Remove(p); err != nil {
+			s.logger.Debug().Err(err).Str("folder", p).Msg("dropping a watch")
+		}
 	}
 	if vault == "" {
 		return ""
@@ -153,7 +220,24 @@ func (s *Service) rewatch(w *fsnotify.Watcher, prev string) string {
 	}); err != nil {
 		s.logger.Warn().Err(err).Msg("adding vault to watcher")
 	}
+	if !watching(w, vault) {
+		return "" // the vault root isn't there (yet) — retry on the next tick.
+	}
 	return vault
+}
+
+// watching reports whether dir is currently in the watcher's list. A nil watcher
+// watches nothing.
+func watching(w *fsnotify.Watcher, dir string) bool {
+	if w == nil {
+		return false
+	}
+	for _, p := range w.WatchList() {
+		if p == dir {
+			return true
+		}
+	}
+	return false
 }
 
 // vaultRel maps an absolute path under the vault to its vault-relative slash key,

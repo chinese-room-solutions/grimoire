@@ -9,9 +9,11 @@ import (
 
 	"github.com/chinese-room-solutions/grimoire/internal/apiclient"
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
+	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
 )
 
-// runSearch handles `grimoire search QUERY [-k N]`.
+// runSearch handles `grimoire search QUERY [-k N]`. With no --vault it searches
+// every vault at once, so each hit is printed with the vault it came from.
 func (e *cliEnv) runSearch(args []string) int {
 	fs := flag.NewFlagSet("search", flag.ContinueOnError)
 	k := fs.Int("k", 0, "number of results (0 = server default)")
@@ -36,12 +38,19 @@ func (e *cliEnv) runSearch(args []string) int {
 		e.writeJSON(e.out, res)
 		return exitOK
 	}
+	for _, w := range res.Warnings {
+		e.warnf("%s", w)
+	}
 	if len(res.Hits) == 0 {
 		e.outln("no results")
 		return exitOK
 	}
+	headers := modelHeaders(res.Hits)
 	for i, h := range res.Hits {
-		e.outf("%d. %s  (%.3f)\n", i+1, h.Path, h.Similarity)
+		if header := headers[i]; header != "" {
+			e.outln(header)
+		}
+		e.outf("%d. %s  (%.3f)\n", i+1, hitLabel(h, e.vault), h.Similarity)
 		if h.Heading != "" {
 			e.outf("   %s\n", h.Heading)
 		}
@@ -52,17 +61,70 @@ func (e *cliEnv) runSearch(args []string) int {
 	return exitOK
 }
 
+// modelHeaders returns, per hit position, the group header to print above it —
+// empty for every position but the first of each model's run. Hits arrive
+// grouped by the model that ranked them, and only within a group are the
+// similarities comparable, so a result set spanning two models says where one
+// ranking ends and the next begins. One model needs no saying: no headers.
+func modelHeaders(hits []grimoireapi.Hit) []string {
+	out := make([]string, len(hits))
+	models := map[string]bool{}
+	for _, h := range hits {
+		models[h.Model] = true
+	}
+	if len(models) < 2 {
+		return out
+	}
+	for start := 0; start < len(hits); {
+		end := start + 1
+		for end < len(hits) && hits[end].Model == hits[start].Model {
+			end++
+		}
+		out[start] = groupHeader(hits[start:end])
+		start = end
+	}
+	return out
+}
+
+// groupHeader names one model group: the vaults its hits came from, and the
+// model that ranked them ("keyword only" when none did).
+func groupHeader(hits []grimoireapi.Hit) string {
+	var names []string
+	seen := map[string]bool{}
+	for _, h := range hits {
+		if name := vaultdir.Name(h.Vault); !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	model := hits[0].Model
+	if model == "" {
+		model = "keyword only"
+	}
+	return fmt.Sprintf("— vaults %s (%s)", strings.Join(names, ", "), model)
+}
+
+// hitLabel names a hit's note: bare when the search was narrowed to one vault
+// (the caller already knows which), prefixed with the vault's folder name when
+// it covered them all.
+func hitLabel(h grimoireapi.Hit, vault string) string {
+	if vault != "" || h.Vault == "" {
+		return h.Path
+	}
+	return vaultdir.Name(h.Vault) + "/" + h.Path
+}
+
 // firstLine is a one-line snippet of a hit's chunk text for the human view,
-// collapsed to a single trimmed line and capped so a long chunk doesn't flood
-// the terminal.
+// collapsed to a single trimmed line and capped (in runes, so the cut can't
+// split a multibyte character) so a long chunk doesn't flood the terminal.
 func firstLine(text string) string {
 	line := strings.TrimSpace(text)
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = line[:i]
 	}
-	const cap = 120
-	if len(line) > cap {
-		line = line[:cap] + "…"
+	const maxRunes = 120
+	if r := []rune(line); len(r) > maxRunes {
+		line = string(r[:maxRunes]) + "…"
 	}
 	return line
 }
@@ -217,10 +279,9 @@ func (e *cliEnv) runNoteEdit(args []string) int {
 	return exitOK
 }
 
-// runNoteDelete handles `grimoire note delete PATH [--permanent]`.
+// runNoteDelete handles `grimoire note delete PATH`.
 func (e *cliEnv) runNoteDelete(args []string) int {
 	fs := flag.NewFlagSet("note delete", flag.ContinueOnError)
-	permanent := fs.Bool("permanent", false, "delete outright instead of moving to the trash")
 	rest, ok := parseFlags(fs, e.err, args)
 	if !ok {
 		return exitUsage
@@ -232,7 +293,7 @@ func (e *cliEnv) runNoteDelete(args []string) int {
 	var res grimoireapi.DeleteResult
 	err := e.doWrite(context.Background(), func(ctx context.Context, c *apiclient.Client) error {
 		var callErr error
-		res, callErr = c.DeleteNote(ctx, rest[0], *permanent)
+		res, callErr = c.DeleteNote(ctx, rest[0])
 		return callErr
 	})
 	if err != nil {
@@ -240,9 +301,15 @@ func (e *cliEnv) runNoteDelete(args []string) int {
 	}
 	if e.json {
 		e.writeJSON(e.out, res)
-		return exitOK
+	} else {
+		e.outln(deleteMessage(res))
 	}
-	e.outln(deleteMessage(res))
+	if res.IndexWarning != "" {
+		// The file is gone; only the index lags. Say so and exit non-zero, or a
+		// search that still returns it reads as a real hit.
+		e.errorf("%s — reindex it to clear the stale entry", res.IndexWarning)
+		return exitError
+	}
 	return exitOK
 }
 

@@ -36,11 +36,11 @@ func DocxToMarkdown(data []byte) (Result, error) {
 	// in the body resolves to a file under word/.
 	mediaByRelID := docxRelTargetsByType(rels, "/image")
 
-	blocks, usedRels, err := docxBlocks(doc, ordered, links, mediaByRelID)
+	blocks, namer, err := docxBlocks(doc, ordered, links, mediaByRelID)
 	if err != nil {
 		return Result{}, err
 	}
-	images, err := extractImages(zr, "word/", mediaByRelID, usedRels)
+	images, err := extractImages(zr, "word/", namer)
 	if err != nil {
 		return Result{}, err
 	}
@@ -51,11 +51,11 @@ func DocxToMarkdown(data []byte) (Result, error) {
 // bold/italic and a hyperlink's wrapped runs are handled in document order, which
 // a struct unmarshal of the deeply-nested, mixed-content body can't do cleanly.
 // mediaByRelID maps an image relationship id to its media path; an <a:blip
-// r:embed> in the body emits an ![](attachments/name) image and records the rel
-// in usedRels so only referenced images are extracted.
-func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaByRelID map[string]string) (blocks []block, usedRels map[string]bool, err error) {
+// r:embed> in the body emits an ![](attachments/name) image and records the
+// target in the returned namer so only referenced images are extracted.
+func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaByRelID map[string]string) (blocks []block, namer *imageNamer, err error) {
 	dec := xml.NewDecoder(bytes.NewReader(doc))
-	usedRels = map[string]bool{}
+	namer = newImageNamer()
 
 	// Per-paragraph state, reset on each <w:p>.
 	var (
@@ -70,9 +70,30 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 		indent     int  // paragraph left indent in twips (w:ind), for heuristic nesting.
 		// Per-run state.
 		bold, italic bool
-		// Hyperlink: the target wrapping the current runs (empty = none).
+		// Hyperlink: the target wrapping the current runs (empty = none) and the
+		// Markdown its runs have contributed so far. A link's text often spans
+		// several runs, and it must come out as one [text](target).
 		linkTarget string
+		linkText   strings.Builder
 	)
+
+	resetPara := func() {
+		para.Reset()
+		plain.Reset()
+		paraImages = nil
+		heading, listLvl, ordered, styled, allBold, indent = 0, 0, false, false, true, 0
+		linkTarget = ""
+		linkText.Reset()
+	}
+	// writeMarkup appends to the paragraph, or to the open hyperlink's text when
+	// one is active, so a link's runs stay together and in order.
+	writeMarkup := func(s string) {
+		if linkTarget != "" {
+			linkText.WriteString(s)
+			return
+		}
+		para.WriteString(s)
+	}
 
 	for {
 		tok, terr := dec.Token()
@@ -87,21 +108,24 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 		case xml.StartElement:
 			switch t.Name.Local {
 			case "p":
-				para.Reset()
-				plain.Reset()
-				paraImages = nil
-				heading, listLvl, ordered, styled, allBold, indent = 0, 0, false, false, true, 0
+				resetPara()
+			case "Fallback":
+				// <mc:AlternateContent> offers the same content twice: <mc:Choice>
+				// (the branch Word maintains) and <mc:Fallback> (a legacy redraw of
+				// it). Reading both duplicates the text, so keep the Choice only.
+				if serr := dec.Skip(); serr != nil {
+					return nil, nil, ctxerr.With(fmt.Errorf("skipping alternate content fallback: %w", serr), nil)
+				}
 			case "ind":
 				indent = atoiDefault(attr(t, "left"), 0)
 			case "blip":
 				// An embedded image: r:embed names its media rel. Collect it as a
 				// standalone image (emitted as its own block so a heading/list
-				// heuristic on the surrounding text can't swallow it) and mark the rel
-				// used so its file is extracted.
-				if rel := attrNS(t, "embed"); rel != "" {
+				// heuristic on the surrounding text can't swallow it); naming it also
+				// marks it for extraction.
+				if rel := attr(t, "embed"); rel != "" {
 					if target := mediaByRelID[rel]; target != "" {
-						usedRels[rel] = true
-						paraImages = append(paraImages, "![]("+AttachmentDir+"/"+imageName(target)+")")
+						paraImages = append(paraImages, "![]("+AttachmentDir+"/"+namer.name(target)+")")
 					}
 				}
 			case "pStyle":
@@ -124,8 +148,15 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 				bold = attrBool(t, "val", true)
 			case "i":
 				italic = attrBool(t, "val", true)
+			case "tabs":
+				// <w:pPr><w:tabs> defines tab *stops*; its <w:tab> children are
+				// positions, not characters. Skip the subtree so only a run-level
+				// <w:tab/> emits one.
+				if serr := dec.Skip(); serr != nil {
+					return nil, nil, ctxerr.With(fmt.Errorf("skipping tab stops: %w", serr), nil)
+				}
 			case "hyperlink":
-				linkTarget = linkByRelID[attrNS(t, "id")]
+				linkTarget = linkByRelID[attr(t, "id")]
 			case "t":
 				text, rerr := readText(dec, t)
 				if rerr != nil {
@@ -135,31 +166,35 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 					allBold = allBold && bold
 				}
 				plain.WriteString(text)
-				frag := emphasize(escapeMarkdown(text), bold, italic)
-				if linkTarget != "" && frag != "" {
-					frag = "[" + frag + "](" + linkTarget + ")"
-				}
-				para.WriteString(frag)
+				writeMarkup(emphasize(escapeMarkdown(text), bold, italic))
 			case "tab":
-				para.WriteByte('\t')
+				writeMarkup("\t")
 				plain.WriteByte('\t')
 			case "br":
-				para.WriteString("  \n") // a soft line break within a paragraph.
+				writeMarkup("  \n") // a soft line break within a paragraph.
 				plain.WriteByte('\n')
 			}
 		case xml.EndElement:
 			switch t.Name.Local {
 			case "hyperlink":
+				if text := linkText.String(); text != "" {
+					para.WriteString("[" + text + "](" + linkTarget + ")")
+				}
 				linkTarget = ""
+				linkText.Reset()
 			case "p":
 				blocks = append(blocks, finishParagraph(para.String(), plain.String(), heading, listLvl, ordered, styled, allBold, indent)...)
 				for _, img := range paraImages {
 					blocks = append(blocks, block{text: img})
 				}
+				// A text box nests a whole <w:p> inside the paragraph that anchors
+				// it; without clearing here the inner paragraph's text is emitted
+				// again when the outer one ends.
+				resetPara()
 			}
 		}
 	}
-	return blocks, usedRels, nil
+	return blocks, namer, nil
 }
 
 // docxOrderedByNumID maps a w:numId to whether its list is ordered (decimal etc.)

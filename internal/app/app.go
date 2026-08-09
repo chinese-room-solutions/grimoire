@@ -2,6 +2,11 @@
 // the persisted config (vault + embedding model), the vector store, and the
 // indexer, exposing the operations the GUI handlers call.
 //
+// State splits in two. A Service is one open vault — its config, index, kernels,
+// and UI state. A Shared is the process: the gateway client and its embed
+// budget, the PDF renderer, the shared kernels dir, and the search history.
+// Several Services can run over one Shared.
+//
 // The store is bound to the embedding model's dimension, so it is (re)opened
 // when the model is set. Changing the model points at a different store file
 // keyed by model id, so switching models doesn't corrupt an existing index and
@@ -58,6 +63,12 @@ var (
 	// ErrUnsupportedImport is returned when importing a file Grimoire can't turn
 	// into a Markdown note (an unknown extension).
 	ErrUnsupportedImport = errors.New("unsupported file type")
+	// ErrIndexStale wraps a vault change that landed on disk but whose index
+	// update didn't: the delete or move stands, the index still describes the old
+	// state until the next pass. Callers that own the filesystem view (the tree,
+	// the tab strip) treat it as success; callers that promise a searchable index
+	// report it, so a stale hit never passes for a real one.
+	ErrIndexStale = errors.New("index update failed")
 	// ErrNoSessions is returned by session operations when the history store
 	// failed to open at startup.
 	ErrNoSessions = errors.New("session history unavailable")
@@ -77,37 +88,15 @@ const (
 	dirPerm  = 0o755
 )
 
-// Service is Grimoire's stateful core. Safe for concurrent use.
+// Service is Grimoire's stateful core, one per open vault. Safe for concurrent
+// use. Everything that belongs to the process rather than to the vault — the
+// gateway client, the embed budget, the PDF renderer, the search history — lives
+// in the Shared it points at, so several Services can run side by side.
 type Service struct {
-	client        *GatewayClient
-	configDir     string // the vault's durable data dir (config, sessions, runs, UI state).
-	cacheDir      string // the vault's cache dir: per-model index files only (purgeable).
-	sharedKernels string // the app-level kernels dir every vault shares ("" = none).
-	registryURL   string // the kernel package index (grimoire-registry index.yml); "" = installs disabled.
-
-	// themeRegistryURL is the theme package index (mass-registry index.yml —
-	// themes are shared with MASS); "" = theme installs disabled. Set once via
-	// SetThemeRegistryURL right after New, before the service takes requests.
-	themeRegistryURL string
-	logger           zerolog.Logger
-
-	// embedGate caps concurrent embed calls across every indexing path (reindex,
-	// import, watcher), sized by the IndexConcurrency setting and resized live.
-	embedGate *gate
-
-	// renderer is the long-lived PDFium (WASM) page renderer for PDF import. It
-	// is created lazily on the first PDF (its startup cost is wasted otherwise)
-	// and closed on shutdown; guarded by mu.
-	renderer *pdfconvert.Renderer
-	// pdfMu serializes PDF conversions: each is a long, vision/GPU-bound job and
-	// the gateway runs one at a time, so a multi-PDF drop must not fan out.
-	pdfMu sync.Mutex
-	// pdfCancel cancels the in-flight conversion's context, set while ConvertPDF
-	// runs (nil otherwise). CancelImport calls it so the operator can stop a long
-	// conversion directly, without waiting for the dropped HTTP connection to be
-	// noticed. Guarded by pdfCancelMu.
-	pdfCancelMu sync.Mutex
-	pdfCancel   context.CancelFunc
+	shared    *Shared
+	configDir string // the vault's durable data dir (config, runs, UI state).
+	cacheDir  string // the vault's cache dir: per-model index files only (purgeable).
+	logger    zerolog.Logger
 
 	// writeMu serializes every read-modify-write of a note file (body/frontmatter
 	// rewrites, renames, deletes, trash moves), so concurrent API/GUI edits can't
@@ -127,25 +116,17 @@ type Service struct {
 	resolveNotes []string
 	resolveGen   uint64
 
-	mu            sync.Mutex
-	cfg           appconfig.Config
-	store         *store.Store
-	embedder      *embed.Embedder
-	storeGen      uint64 // bumped each time store/embedder are replaced.
-	pickFolder    func(title string) (string, bool, error)
-	screenshot    func() ([]byte, error)
-	sessions      *session.Store
-	ui            *uistate.Store
-	runs          *runs.Store
-	activeSession int64 // 0 == no session selected yet.
+	mu       sync.Mutex
+	cfg      appconfig.Config
+	store    *store.Store
+	embedder *embed.Embedder
+	storeGen uint64 // bumped each time store/embedder are replaced.
+	ui       *uistate.Store
+	runs     *runs.Store
 
 	// kernels runs code blocks through pluggable, out-of-process kernels, one
 	// per note so a note's blocks share a shell session. nil if discovery failed.
 	kernels *kernel.Manager
-	// kernelMu serializes kernel installs/removes and the registry reload that
-	// follows, so two writers can't interleave on the shared kernels dir. It is
-	// never held across a registry fetch or artifact download.
-	kernelMu sync.Mutex
 
 	// pendingRuns holds blocks whose latest run hasn't been saved over the stored
 	// result, keyed by notePath\x00blockHash. A re-run of a block that already has
@@ -156,33 +137,25 @@ type Service struct {
 	pendingRuns map[string]pendingRun
 }
 
-// New builds the service for one vault. configDir is that vault's durable data
-// dir (which holds its sessions, run results, and UI state); cacheDir is where
-// its per-model vector index files live (a purgeable cache); vault is the
-// absolute path to its note folder, fixed for the service's lifetime;
-// sharedKernels is the app-level kernels dir every vault shares ("" to scan
-// none); registryURL is the resolved kernel package index ("" disables
-// registry-backed installs and listings — the caller applies the app-config
-// default, so a blank here is deliberate, e.g. in tests). The session history
-// and UI state are opened here; the index opens once a model is set.
-func New(client *GatewayClient, configDir, cacheDir, vault, sharedKernels, registryURL string, logger zerolog.Logger) *Service {
+// New builds the service for one vault over the process-wide shared state.
+// configDir is that vault's durable data dir (which holds its run results and UI
+// state); cacheDir is where its per-model vector index files live (a purgeable
+// cache); vault is the absolute path to its note folder, fixed for the service's
+// lifetime. The UI state and run results are opened here; the index opens once a
+// model is set.
+func New(shared *Shared, configDir, cacheDir, vault string, logger zerolog.Logger) *Service {
 	cfg := appconfig.Load(configDir)
 	cfg.Vault = vault // the vault is owned by the data dir, not the config file.
 	s := &Service{
-		client:        client,
-		configDir:     configDir,
-		cacheDir:      cacheDir,
-		sharedKernels: sharedKernels,
-		registryURL:   registryURL,
-		logger:        logger.With().Str("component", "app").Logger(),
-		cfg:           cfg,
+		shared:    shared,
+		configDir: configDir,
+		cacheDir:  cacheDir,
+		logger:    logger.With().Str("component", "app").Logger(),
+		cfg:       cfg,
 	}
-	s.embedGate = newGate(effectiveConcurrency(s.cfg.IndexConcurrency))
-	if sess, err := session.Open(filepath.Join(configDir, "sessions.db")); err != nil {
-		s.logger.Warn().Err(err).Msg("could not open session history; searches won't persist")
-	} else {
-		s.sessions = sess
-	}
+	// The embed budget is the gateway's, not the vault's: this vault's setting
+	// resizes the one shared gate (last vault opened wins).
+	shared.embedGate.resize(effectiveConcurrency(cfg.IndexConcurrency))
 	if ui, err := uistate.Open(filepath.Join(configDir, "uistate.db")); err != nil {
 		s.logger.Warn().Err(err).Msg("could not open UI state; tabs won't be restored")
 	} else {
@@ -193,7 +166,7 @@ func New(client *GatewayClient, configDir, cacheDir, vault, sharedKernels, regis
 	} else {
 		s.runs = rr
 	}
-	if reg, err := kernel.NewRegistry(configDir, sharedKernels, s.logger); err != nil {
+	if reg, err := kernel.NewRegistry(configDir, shared.sharedKernels, s.logger); err != nil {
 		s.logger.Warn().Err(err).Msg("could not load code-block kernels; running blocks disabled")
 	} else {
 		s.kernels = kernel.NewManager(reg, s.logger)
@@ -201,18 +174,14 @@ func New(client *GatewayClient, configDir, cacheDir, vault, sharedKernels, regis
 	return s
 }
 
-// Close releases the store and session history.
+// Close releases this vault's stores. The process-wide state it borrows (the
+// search history, the PDF renderer) belongs to Shared and outlives the service.
 func (s *Service) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var firstErr error
 	if s.store != nil {
 		if err := s.store.Close(); err != nil {
-			firstErr = err
-		}
-	}
-	if s.sessions != nil {
-		if err := s.sessions.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -223,11 +192,6 @@ func (s *Service) Close() error {
 	}
 	if s.runs != nil {
 		if err := s.runs.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if s.renderer != nil {
-		if err := s.renderer.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -246,43 +210,12 @@ func (s *Service) Config() appconfig.Config {
 	return s.cfg
 }
 
-// SetFolderPicker installs the native folder-selection dialog (wired from the
-// webview window after it opens). Without it, PickFolder reports unsupported.
-func (s *Service) SetFolderPicker(fn func(title string) (string, bool, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pickFolder = fn
-}
-
-// PickFolder opens the native folder dialog and returns the chosen path. ok is
-// false when the user cancels or no picker is available (e.g. running in a
-// browser instead of the webview).
-func (s *Service) PickFolder(title string) (path string, ok bool, err error) {
-	s.mu.Lock()
-	fn := s.pickFolder
-	s.mu.Unlock()
-	if fn == nil {
-		return "", false, nil
-	}
-	return fn(title)
-}
-
-// SetScreenshotter installs the native window-capture function (wired from the
-// webview window after it opens). Without it, Screenshot returns
-// ErrNoScreenshot.
-func (s *Service) SetScreenshotter(fn func() ([]byte, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.screenshot = fn
-}
-
 // Screenshot captures the app window's rendered UI as PNG bytes, for a local
-// agent to see what the user sees. Returns ErrNoScreenshot when no capture
-// backend is wired (headless or browser fallback).
+// agent to see what the user sees. The window is process-wide (Shared owns the
+// capture function). Returns ErrNoScreenshot when no capture backend is wired
+// (headless or browser fallback).
 func (s *Service) Screenshot() ([]byte, error) {
-	s.mu.Lock()
-	fn := s.screenshot
-	s.mu.Unlock()
+	fn := s.shared.screenshotter()
 	if fn == nil {
 		return nil, ErrNoScreenshot
 	}
@@ -291,7 +224,8 @@ func (s *Service) Screenshot() ([]byte, error) {
 
 // SetIndexConcurrency records how many notes are embedded at once across all
 // indexing (reindex, import, watcher), clamped to a sane range, and resizes the
-// shared embed gate live. 0 keeps the default.
+// embed gate live. 0 keeps the default. The gate is process-wide (the budget is
+// the gateway's), while the setting is per-vault: last one set wins.
 func (s *Service) SetIndexConcurrency(n int) error {
 	if n < 0 {
 		n = 0
@@ -303,7 +237,7 @@ func (s *Service) SetIndexConcurrency(n int) error {
 	s.cfg.IndexConcurrency = n
 	cfg := s.cfg
 	s.mu.Unlock()
-	s.embedGate.resize(effectiveConcurrency(n))
+	s.shared.embedGate.resize(effectiveConcurrency(n))
 	return appconfig.Save(s.configDir, cfg)
 }
 
@@ -378,7 +312,7 @@ func (s *Service) SetModel(ctx context.Context, model string) error {
 
 // ListModels returns the gateway's available model ids for the picker.
 func (s *Service) ListModels(ctx context.Context) ([]string, error) {
-	models, err := s.client.ListModels(ctx)
+	models, err := s.shared.client.ListModels(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing models: %w", err)
 	}
@@ -397,15 +331,37 @@ func (s *Service) ListModels(ctx context.Context) ([]string, error) {
 // and the error is an *index.SyncError counting the rest, so callers should treat
 // it as a partial pass rather than a total failure.
 func (s *Service) Reindex(ctx context.Context, progress index.Progress, force bool) (index.Stats, error) {
+	ix, err := s.indexer(ctx)
+	if err != nil {
+		return index.Stats{}, err
+	}
+	return ix.Sync(ctx, progress, force)
+}
+
+// ReindexNotes syncs just the named notes (vault-relative paths) into the store,
+// skipping the vault walk and pruning nothing else. Same force semantics and same
+// partial-pass contract as Reindex; a path that no longer exists on disk is
+// pruned from the store and counted in Stats.Pruned.
+func (s *Service) ReindexNotes(ctx context.Context, rels []string, force bool) (index.Stats, error) {
+	ix, err := s.indexer(ctx)
+	if err != nil {
+		return index.Stats{}, err
+	}
+	return ix.SyncNotes(ctx, rels, force)
+}
+
+// indexer builds an Indexer over the bound vault, store, and embedder for a
+// caller-driven pass.
+func (s *Service) indexer(ctx context.Context) (*index.Indexer, error) {
 	s.mu.Lock()
 	cfg, st, emb := s.cfg, s.store, s.embedder
 	s.mu.Unlock()
 
 	if cfg.Vault == "" {
-		return index.Stats{}, ErrNoVault
+		return nil, ErrNoVault
 	}
 	if cfg.EmbedModel == "" {
-		return index.Stats{}, ErrNoModel
+		return nil, ErrNoModel
 	}
 	// A model is configured but its store isn't open — typically because the
 	// dimension probe was cancelled when it ran on a short-lived request context
@@ -414,62 +370,138 @@ func (s *Service) Reindex(ctx context.Context, progress index.Progress, force bo
 	// self-heals the "picked a model, but reindex says none selected" case.
 	if st == nil || emb == nil {
 		if err := s.openStore(ctx); err != nil {
-			return index.Stats{}, fmt.Errorf("%w: %w", ErrStoreNotReady, err)
+			return nil, fmt.Errorf("%w: %w", ErrStoreNotReady, err)
 		}
 		s.mu.Lock()
 		st, emb = s.store, s.embedder
 		s.mu.Unlock()
 		if st == nil || emb == nil {
-			return index.Stats{}, ErrStoreNotReady
+			return nil, ErrStoreNotReady
 		}
 	}
 	ix := index.New(cfg.Vault, st, emb, s.logger)
 	ix.SetConcurrency(cfg.IndexConcurrency) // 0 → indexer default.
-	return ix.Sync(ctx, progress, force)
+	return ix, nil
 }
 
 // Vector relevance is judged relative to the best hit, not by a fixed cutoff:
 // embedding models compress all similarities into a narrow band (e.g. Qwen3
 // puts everything in ~0.57–0.71), so real matches sit just above the noise and
-// the band shifts per model. The store keeps vector hits within searchTopRatio
-// of the top hit (the query's own scale) and above searchFloor (a sanity guard
-// so an all-weak vector set contributes nothing rather than promoting its
-// least-bad member); keyword hits are unaffected. searchFloor is the default
-// minimum similarity when the caller passes 0 (the session panel overrides it).
+// the band shifts per model. Vector hits within SearchTopRatio of the top hit
+// (the query's own scale) and above SearchFloor (a sanity guard so an all-weak
+// vector set contributes nothing rather than promoting its least-bad member)
+// survive; keyword hits are unaffected. SearchFloor is the default minimum
+// similarity when the caller passes 0 (the session panel overrides it).
+//
+// They are exported because a cross-vault search over vaults sharing one model
+// applies the band itself, across their merged vector legs (see SearchLegsVec).
 const (
-	searchTopRatio = 0.88
-	searchFloor    = 0.50
+	SearchTopRatio = 0.88
+	SearchFloor    = 0.50
 )
 
 // Search embeds the query (with the model's query instruction) and runs the
 // store's hybrid vector + keyword search.
 func (s *Service) Search(ctx context.Context, query string, k int, minSim float64) ([]store.Hit, error) {
+	qvec, err := s.EmbedQuery(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return s.SearchVec(query, qvec, k, minSim)
+}
+
+// EmbedModelName is the embedding model this vault is configured for, or "" when
+// none is set. A cross-vault search groups vaults by it: one embedding of the
+// query serves every vault that shares a model, and a vault with no model has no
+// semantic leg to contribute.
+func (s *Service) EmbedModelName() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.EmbedModel
+}
+
+// EmbedQuery embeds a search query with this vault's model and query
+// instruction, for a caller that runs the store search itself (SearchVec). It
+// reports ErrNoModel when no model is set and ErrStoreNotReady while the index
+// is still opening — the same states Search surfaces.
+func (s *Service) EmbedQuery(ctx context.Context, query string) ([]float32, error) {
 	s.mu.Lock()
 	st, emb, model := s.store, s.embedder, s.cfg.EmbedModel
 	s.mu.Unlock()
-	if st == nil || emb == nil {
-		if model != "" {
-			// A model is configured but the store is still opening (the async
-			// startup probe of the embedding dimension); tell the caller to retry,
-			// like Graph does, rather than to go pick a model.
-			return nil, ErrStoreNotReady
-		}
-		return nil, ErrNoModel
+	if err := searchReady(st, emb, model); err != nil {
+		return nil, err
 	}
 	qvec, err := emb.EmbedQuery(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("embedding query: %w", err)
 	}
-	floor := minSim
-	if floor <= 0 {
-		floor = searchFloor
+	return qvec, nil
+}
+
+// SearchVec runs the hybrid search with a query vector the caller already has,
+// so a cross-vault search embeds once per model rather than once per vault. A
+// nil qvec runs the keyword leg alone — what a vault gets when its model group's
+// embedding failed.
+func (s *Service) SearchVec(query string, qvec []float32, k int, minSim float64) ([]store.Hit, error) {
+	st, err := s.searchStore()
+	if err != nil {
+		return nil, err
 	}
-	return st.Search(query, qvec, store.SearchOptions{K: k, MinSim: floor, TopRatio: searchTopRatio})
+	return st.Search(query, qvec, SearchOptions(k, minSim))
+}
+
+// SearchLegsVec runs the same search as SearchVec but returns the vector and
+// keyword legs unfused and unbanded, for a cross-vault search that fuses the
+// vaults sharing an embedding model as one corpus — one ranking over all of
+// them, rather than an interleave of theirs. It applies the same similarity
+// floor; the band is the caller's, over the merged legs (store.BandCutoff).
+func (s *Service) SearchLegsVec(
+	query string, qvec []float32, k int, minSim float64,
+) (vec, fts []store.Hit, err error) {
+	st, err := s.searchStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	return st.SearchLegs(query, qvec, SearchOptions(k, minSim))
+}
+
+// SearchOptions are the relevance knobs of a search for k results with the
+// given similarity floor (≤0 → SearchFloor) — the policy this package owns,
+// in the shape the store takes it.
+func SearchOptions(k int, minSim float64) store.SearchOptions {
+	if minSim <= 0 {
+		minSim = SearchFloor
+	}
+	return store.SearchOptions{K: k, MinSim: minSim, TopRatio: SearchTopRatio}
+}
+
+// searchStore returns the store to search, or why this vault can't answer yet.
+func (s *Service) searchStore() (*store.Store, error) {
+	s.mu.Lock()
+	st, emb, model := s.store, s.embedder, s.cfg.EmbedModel
+	s.mu.Unlock()
+	if err := searchReady(st, emb, model); err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
+// searchReady reports why a vault can't answer a search yet: no model picked, or
+// a model whose store is still opening (the async startup probe of the embedding
+// dimension) — the caller should retry, like Graph, rather than go pick a model.
+func searchReady(st *store.Store, emb *embed.Embedder, model string) error {
+	if st != nil && emb != nil {
+		return nil
+	}
+	if model != "" {
+		return ErrStoreNotReady
+	}
+	return ErrNoModel
 }
 
 // GraphDefaults are the neighbour count and similarity floor used when the
 // caller doesn't specify them. Tuned on real vaults: ~6 neighbours keeps the map
-// readable, and a 0.35 cosine floor drops links too weak to mean anything.
+// readable, and a 0.5 cosine floor drops links too weak to mean anything.
 const (
 	graphDefaultK      = 6
 	graphDefaultMinSim = 0.5
@@ -1004,14 +1036,16 @@ func (s *Service) DeleteFolder(ctx context.Context, rel string) error {
 	s.writeMu.Unlock()
 	if err := s.reindexVaultSync(ctx); err != nil {
 		s.logger.Warn().Err(err).Str("folder", rel).Msg("pruning deleted folder from index")
+		return fmt.Errorf("%w: pruning %q: %w", ErrIndexStale, rel, err)
 	}
 	return nil
 }
 
 // RenameFolder moves a folder to a new vault-relative path, then reindexes the
 // whole vault so every contained note's path is corrected (old paths pruned, new
-// ones indexed — the incremental sync skips unchanged notes by hash). It never
-// overwrites an existing folder (ErrNoteExists). Returns the slash path written.
+// ones indexed — the incremental sync skips unchanged notes by hash) and moves
+// the contained notes' saved run output to their new paths. It never overwrites
+// an existing folder (ErrNoteExists). Returns the slash path written.
 func (s *Service) RenameFolder(ctx context.Context, oldRel, newRel string) (string, error) {
 	oldClean, err := s.vaultPath(oldRel)
 	if err != nil {
@@ -1024,15 +1058,34 @@ func (s *Service) RenameFolder(ctx context.Context, oldRel, newRel string) (stri
 	if newClean == oldClean {
 		return filepath.ToSlash(newRel), nil
 	}
-	if _, err := os.Stat(newClean); err == nil {
-		return "", ctxerr.With(ErrNoteExists, map[string]any{"folder": newRel})
+	if err := s.renameFolderDir(oldRel, newRel, oldClean, newClean); err != nil {
+		return "", err
 	}
-	if err := os.Rename(oldClean, newClean); err != nil {
-		return "", ctxerr.With(fmt.Errorf("renaming folder: %w", err), map[string]any{"from": oldRel, "to": newRel})
-	}
-	s.invalidateResolveCache()
 	s.reindexVault()
 	return filepath.ToSlash(newRel), nil
+}
+
+// renameFolderDir is RenameFolder's serialized filesystem span: the existence
+// check, the move, and the run-result re-key happen under writeMu so a concurrent
+// note write can't recreate a note at the old path midway through.
+func (s *Service) renameFolderDir(oldRel, newRel, oldClean, newClean string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := os.Stat(newClean); err == nil {
+		return ctxerr.With(ErrNoteExists, map[string]any{"folder": newRel})
+	}
+	if err := os.Rename(oldClean, newClean); err != nil {
+		return ctxerr.With(fmt.Errorf("renaming folder: %w", err), map[string]any{"from": oldRel, "to": newRel})
+	}
+	s.invalidateResolveCache()
+	if s.runs != nil {
+		// Move every contained note's cached output with it; otherwise the results
+		// stay keyed to paths that no longer exist and the startup sweep drops them.
+		if err := s.runs.RenameFolder(filepath.ToSlash(oldRel), filepath.ToSlash(newRel)); err != nil {
+			s.logger.Warn().Err(err).Str("from", oldRel).Str("to", newRel).Msg("moving folder run results")
+		}
+	}
+	return nil
 }
 
 // DeleteNote removes a note from the vault and prunes it from the index. The
@@ -1057,6 +1110,7 @@ func (s *Service) DeleteNote(ctx context.Context, rel string) error {
 	s.writeMu.Unlock()
 	if err := s.reindexNoteSync(ctx, rel); err != nil {
 		s.logger.Warn().Err(err).Str("note", rel).Msg("pruning deleted note from index")
+		return fmt.Errorf("%w: pruning %q: %w", ErrIndexStale, rel, err)
 	}
 	return nil
 }
@@ -1137,7 +1191,7 @@ func trimMarkdownExt(name string) string {
 // is what matters; the index catches up.
 func (s *Service) reindexNote(rel string) {
 	s.backgroundReindex(reindexNoteTimeout, func(ctx context.Context, ix *index.Indexer) error {
-		return ix.SyncNote(ctx, rel)
+		return ix.SyncNote(ctx, rel, false)
 	})
 }
 
@@ -1151,7 +1205,7 @@ func (s *Service) reindexNoteSync(ctx context.Context, rel string) error {
 	if cfg.Vault == "" || st == nil || emb == nil {
 		return nil
 	}
-	return index.New(cfg.Vault, st, emb, s.logger).SyncNote(ctx, rel)
+	return index.New(cfg.Vault, st, emb, s.logger).SyncNote(ctx, rel, false)
 }
 
 // reindexVaultSync runs a full incremental vault sync inline, blocking until
@@ -1463,29 +1517,15 @@ func (s *Service) SetConvertPageTimeout(d time.Duration) error {
 	return appconfig.Save(s.configDir, cfg)
 }
 
-// ensureRenderer lazily creates the shared PDFium renderer on first use. Caller
-// must hold s.mu.
-func (s *Service) ensureRenderer() (*pdfconvert.Renderer, error) {
-	if s.renderer != nil {
-		return s.renderer, nil
-	}
-	r, err := pdfconvert.NewRenderer()
-	if err != nil {
-		return nil, ctxerr.With(fmt.Errorf("starting PDF renderer: %w", err), nil)
-	}
-	s.renderer = r
-	return r, nil
-}
-
 // ConvertPDF turns a PDF's bytes into Markdown via the gateway's vision model.
-// Conversions serialize (pdfMu) since each is a long, one-at-a-time gateway job.
-// Requires a convert model; returns ErrNoConvertModel otherwise.
+// Conversions serialize process-wide (Shared.pdfMu) since each is a long,
+// one-at-a-time gateway job. Requires a convert model; returns
+// ErrNoConvertModel otherwise.
 func (s *Service) ConvertPDF(ctx context.Context, name string, data []byte) (string, error) {
 	s.mu.Lock()
 	convertModel := s.cfg.ConvertModel
 	maxPixels := s.cfg.ConvertMaxPixels
 	pageTimeout := time.Duration(s.cfg.ConvertPageTimeoutSec) * time.Second
-	client := s.client
 	s.mu.Unlock()
 	if convertModel == "" {
 		return "", ErrNoConvertModel
@@ -1494,25 +1534,19 @@ func (s *Service) ConvertPDF(ctx context.Context, name string, data []byte) (str
 		maxPixels = pdfconvert.DefaultMaxPixels
 	}
 
-	s.pdfMu.Lock()
-	defer s.pdfMu.Unlock()
+	sh := s.shared
+	client := sh.client
+	sh.pdfMu.Lock()
+	defer sh.pdfMu.Unlock()
 
 	// Make the conversion cancelable directly (not only via the request's
 	// connection), so CancelImport can stop it promptly.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	s.pdfCancelMu.Lock()
-	s.pdfCancel = cancel
-	s.pdfCancelMu.Unlock()
-	defer func() {
-		s.pdfCancelMu.Lock()
-		s.pdfCancel = nil
-		s.pdfCancelMu.Unlock()
-	}()
+	sh.setPDFCancel(cancel)
+	defer sh.setPDFCancel(nil)
 
-	s.mu.Lock()
-	renderer, err := s.ensureRenderer()
-	s.mu.Unlock()
+	renderer, err := sh.ensureRenderer()
 	if err != nil {
 		return "", err
 	}
@@ -1555,14 +1589,7 @@ func (s *Service) ConvertPDF(ctx context.Context, name string, data []byte) (str
 // conversion's context, which both halts the page loop and tells the gateway to
 // cancel the running job — so a cancel takes effect without waiting for the
 // dropped request connection to be detected. A no-op when nothing is converting.
-func (s *Service) CancelImport() {
-	s.pdfCancelMu.Lock()
-	cancel := s.pdfCancel
-	s.pdfCancelMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-}
+func (s *Service) CancelImport() { s.shared.cancelPDF() }
 
 // ── search sessions ───────────────────────────────────────────────────
 
@@ -1577,145 +1604,78 @@ type (
 // KindSearch is re-exported so the web layer can branch on a turn's type.
 const KindSearch = session.KindSearch
 
+// The history is process-wide, so these all delegate to Shared: a session can
+// hold turns from several vaults, and the active one follows the window, not the
+// binding.
+
 // ListSessions returns the search sessions, most recently used first.
-func (s *Service) ListSessions() ([]Session, error) {
-	s.mu.Lock()
-	ss := s.sessions
-	s.mu.Unlock()
-	if ss == nil {
-		return nil, ErrNoSessions
-	}
-	return ss.List()
-}
+func (s *Service) ListSessions() ([]Session, error) { return s.shared.ListSessions() }
 
 // SetActiveSession selects which session subsequent turns are recorded into.
-func (s *Service) SetActiveSession(id int64) {
-	s.mu.Lock()
-	s.activeSession = id
-	s.mu.Unlock()
-}
+func (s *Service) SetActiveSession(id int64) { s.shared.SetActiveSession(id) }
 
 // ActiveSession returns the selected session id (0 if none).
-func (s *Service) ActiveSession() int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.activeSession
-}
+func (s *Service) ActiveSession() int64 { return s.shared.ActiveSession() }
 
 // SessionTurns returns a session's turns in order.
-func (s *Service) SessionTurns(id int64) ([]Turn, error) {
-	s.mu.Lock()
-	ss := s.sessions
-	s.mu.Unlock()
-	if ss == nil {
-		return nil, ErrNoSessions
-	}
-	return ss.Turns(id)
-}
+func (s *Service) SessionTurns(id int64) ([]Turn, error) { return s.shared.SessionTurns(id) }
 
 // RenameSession sets a session's title.
 func (s *Service) RenameSession(id int64, title string) error {
-	s.mu.Lock()
-	ss := s.sessions
-	s.mu.Unlock()
-	if ss == nil {
-		return ErrNoSessions
-	}
-	return ss.Rename(id, title)
+	return s.shared.RenameSession(id, title)
 }
 
 // DeleteSession removes a session and clears it as active if selected.
-func (s *Service) DeleteSession(id int64) error {
-	s.mu.Lock()
-	ss := s.sessions
-	if s.activeSession == id {
-		s.activeSession = 0
-	}
-	s.mu.Unlock()
-	if ss == nil {
-		return ErrNoSessions
-	}
-	return ss.Delete(id)
-}
+func (s *Service) DeleteSession(id int64) error { return s.shared.DeleteSession(id) }
 
 // DeleteTurn removes a single turn (a search request and its results) from a
 // session.
 func (s *Service) DeleteTurn(sessionID, turnID int64) error {
-	s.mu.Lock()
-	ss := s.sessions
-	s.mu.Unlock()
-	if ss == nil {
-		return ErrNoSessions
-	}
-	return ss.DeleteTurn(sessionID, turnID)
+	return s.shared.DeleteTurn(sessionID, turnID)
 }
 
-// RecordSearch saves a search turn (query + the ranked hits it surfaced, with
-// snippets) into the active session, so reopening it re-renders the result cards.
+// RecordSearch saves a search turn over this vault (query + the ranked hits it
+// surfaced, with snippets) into the active session, so reopening it re-renders
+// the result cards.
 func (s *Service) RecordSearch(query string, hits []store.Hit) {
-	s.recordTurn(session.Turn{
-		Kind:  session.KindSearch,
-		Query: query,
-		Hits:  toSessionHits(hits),
-	})
+	s.RecordSearchHits(query, toSessionHits(hits, s.Vault(), s.EmbedModelName()))
+}
+
+// RecordSearchHits saves a search turn whose hits already carry the vault each
+// came from — a cross-vault search, where the turn spans several. The history is
+// process-wide, so it holds them all.
+func (s *Service) RecordSearchHits(query string, hits []SessionHit) {
+	s.shared.recordTurn(session.Turn{Kind: session.KindSearch, Query: query, Hits: hits})
 }
 
 // toSessionHits projects store hits to the slimmer shape persisted with a search
-// turn (label + snippet, no distance).
-func toSessionHits(hits []store.Hit) []session.Hit {
+// turn (label + snippet, no distance), tagged with the vault they came from so a
+// session spanning several vaults still says where each hit lives, and with the
+// model that ranked them so a replayed turn groups as the live one did.
+func toSessionHits(hits []store.Hit, vault, model string) []session.Hit {
 	out := make([]session.Hit, len(hits))
 	for i, h := range hits {
-		out[i] = session.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text}
+		out[i] = session.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: vault, Model: model}
 	}
 	return out
-}
-
-// recordTurn appends a turn to the active session, creating one on first use
-// (the New-session button and the "+" open a blank scratch tab with no active
-// session; the first turn is what actually creates the session, named from the
-// query). Best-effort: a history failure is logged, never surfaced.
-func (s *Service) recordTurn(turn session.Turn) {
-	s.mu.Lock()
-	ss, active := s.sessions, s.activeSession
-	s.mu.Unlock()
-	if ss == nil {
-		return
-	}
-
-	now := time.Now()
-	if active == 0 {
-		// First turn of a scratch tab: create the session now, titled from the query.
-		id, err := ss.Create(sessionTitle(turn.Query), now)
-		if err != nil {
-			s.logger.Warn().Err(err).Msg("creating session for turn")
-			return
-		}
-		active = id
-		s.mu.Lock()
-		s.activeSession = id
-		s.mu.Unlock()
-	}
-
-	if _, err := ss.AddTurn(active, turn, now); err != nil {
-		s.logger.Warn().Err(err).Msg("recording turn")
-		return
-	}
 }
 
 // defaultSessionTitle names a session before its first turn (e.g. one created
 // with the New-session button).
 const defaultSessionTitle = "New session"
 
-// sessionTitle derives a short, length-capped session title from its first
-// search query. The user can rename later.
+// sessionTitle derives a short, rune-capped session title from its first search
+// query. The user can rename later.
 func sessionTitle(query string) string {
 	const max = 48
 	title := strings.TrimSpace(strings.Join(strings.Fields(query), " "))
 	if title == "" {
 		return defaultSessionTitle
 	}
-	if len(title) > max {
-		title = strings.TrimSpace(title[:max]) + "…"
+	// Cap by runes, not bytes: a byte slice cuts a multibyte query mid-character
+	// and stores invalid UTF-8.
+	if runes := []rune(title); len(runes) > max {
+		title = strings.TrimSpace(string(runes[:max])) + "…"
 	}
 	return title
 }
@@ -1747,7 +1707,7 @@ func (s *Service) openStore(ctx context.Context) error {
 		return ErrNoModel
 	}
 
-	emb := embed.New(s.client.Client, model).WithLimiter(s.embedGate).
+	emb := embed.New(s.shared.client.Client, model).WithLimiter(s.shared.embedGate).
 		WithPrefixes(queryPrefix, docPrefix)
 	dim, err := emb.Dimension(ctx) // gateway round-trip — lock-free.
 	if err != nil {
@@ -1814,10 +1774,17 @@ func removeIndexFiles(path string) error {
 	return nil
 }
 
-// storePath is the index file for a model: a stable per-model name under the
-// vault's cache dir (the index is a derived, purgeable cache), so different
-// embedding models keep separate indexes.
+// storePath is the index file for a model under this service's cache dir.
 func (s *Service) storePath(model string) string {
+	return IndexPath(s.cacheDir, model)
+}
+
+// IndexPath is the index file for an embedding model: a stable per-model name
+// under a vault's cache dir (the index is a derived, purgeable cache), so
+// different embedding models keep separate indexes. Exported so a caller that
+// only wants to look at a vault's index — the vault listing stats it for a
+// last-synced time — can find it without opening the vault.
+func IndexPath(cacheDir, model string) string {
 	sum := sha1.Sum([]byte(model))
-	return filepath.Join(s.cacheDir, "index-"+hex.EncodeToString(sum[:6])+".db")
+	return filepath.Join(cacheDir, "index-"+hex.EncodeToString(sum[:6])+".db")
 }

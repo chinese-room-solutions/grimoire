@@ -120,6 +120,46 @@ func TestConvertAlphaList(t *testing.T) {
 	require.Equal(t, "a. Alpha item\nb. Beta item\nc. Gamma item\n", res.Markdown)
 }
 
+// TestRenderListNumbering pins when an ordered list restarts: a marker switch
+// against a block at the same or a shallower level ends the list running there,
+// while a sub-list of the other kind leaves the enclosing numbering intact.
+func TestRenderListNumbering(t *testing.T) {
+	ol := func(lvl int, text string) block { return block{listLvl: lvl, ordered: true, text: text} }
+	ul := func(lvl int, text string) block { return block{listLvl: lvl, text: text} }
+
+	tests := []struct {
+		name   string
+		blocks []block
+		want   string
+	}{
+		{
+			name:   "a bullet between ordered lists restarts the numbering",
+			blocks: []block{ol(1, "one"), ol(1, "two"), ul(1, "break"), ol(1, "fresh")},
+			want:   "1. one\n2. two\n\n- break\n\n1. fresh\n",
+		},
+		{
+			name:   "re-entering a nested ordered list restarts it",
+			blocks: []block{ul(1, "parent"), ol(2, "a"), ol(2, "b"), ul(1, "parent two"), ol(2, "a again")},
+			want:   "- parent\n  1. a\n  2. b\n\n- parent two\n  1. a again\n",
+		},
+		{
+			name:   "a nested bullet sub-list keeps the parent numbering running",
+			blocks: []block{ol(1, "one"), ul(2, "note"), ol(1, "two")},
+			want:   "1. one\n  - note\n\n2. two\n",
+		},
+		{
+			name:   "a non-list block restarts the numbering",
+			blocks: []block{ol(1, "one"), {text: "para"}, ol(1, "one again")},
+			want:   "1. one\n\npara\n\n1. one again\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, render(tt.blocks))
+		})
+	}
+}
+
 func TestAlphaMarker(t *testing.T) {
 	require.Equal(t, "a", alphaMarker(1))
 	require.Equal(t, "b", alphaMarker(2))
@@ -155,6 +195,25 @@ func TestStripListMarker(t *testing.T) {
 			require.Equal(t, tt.ordered, ordered, tt.in)
 			require.Equal(t, tt.alpha, alpha, tt.in)
 		}
+	}
+}
+
+func TestStripMarkupListMarker(t *testing.T) {
+	tests := []struct {
+		in     string
+		rest   string
+		isItem bool
+	}{
+		{`\* foo`, "foo", true},       // an escaped "*" bullet.
+		{"• item", "item", true},      // an unescaped glyph still works.
+		{"1. step", "step", true},     // ordered markers aren't escaped.
+		{`\\* foo`, `\\* foo`, false}, // source text that really starts with a backslash.
+		{`\_foo\_`, `\_foo\_`, false},
+	}
+	for _, tt := range tests {
+		rest, _, _, isItem := stripMarkupListMarker(tt.in)
+		require.Equal(t, tt.isItem, isItem, tt.in)
+		require.Equal(t, tt.rest, rest, tt.in)
 	}
 }
 

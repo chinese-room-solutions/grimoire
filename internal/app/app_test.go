@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chinese-room-solutions/grimoire/internal/appconfig"
 	"github.com/chinese-room-solutions/grimoire/internal/frontmatter"
@@ -88,7 +90,7 @@ func TestWriteFrontmatter(t *testing.T) {
 
 func TestUIStateRoundTrip(t *testing.T) {
 	configDir := t.TempDir()
-	s := New(nil, configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), t.TempDir(), "", zerolog.Nop())
+	s := New(testShared(t), configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
 	t.Cleanup(func() { _ = s.Close() })
 
 	// Unset key reads empty.
@@ -126,7 +128,7 @@ func TestSetConvertMaxPixels_ClampsAndPersists(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			configDir := t.TempDir()
-			s := New(nil, configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), t.TempDir(), "", zerolog.Nop())
+			s := New(testShared(t), configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
 			t.Cleanup(func() { _ = s.Close() })
 			require.NoError(t, s.SetConvertMaxPixels(tt.px))
 			require.Equal(t, tt.want, appconfig.Load(configDir).ConvertMaxPixels)
@@ -149,12 +151,41 @@ func TestSetConvertPageTimeout_ClampsAndPersists(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			configDir := t.TempDir()
-			s := New(nil, configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), t.TempDir(), "", zerolog.Nop())
+			s := New(testShared(t), configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
 			t.Cleanup(func() { _ = s.Close() })
 			require.NoError(t, s.SetConvertPageTimeout(tt.d))
 			require.Equal(t, tt.want, appconfig.Load(configDir).ConvertPageTimeoutSec)
 		})
 	}
+}
+
+// The per-vault search primitives a cross-vault search drives report the same
+// two not-ready states Search does, so a coordinator can tell "go pick a model"
+// from "the index is still opening" and skip that vault rather than fail.
+func TestSearchPrimitives_ReportReadiness(t *testing.T) {
+	tests := []struct {
+		name    string
+		svc     *Service
+		wantErr error
+	}{
+		{"no model picked", &Service{}, ErrNoModel},
+		{"model set, store still opening", &Service{cfg: appconfig.Config{EmbedModel: "m"}}, ErrStoreNotReady},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.svc.EmbedQuery(context.Background(), "q")
+			require.ErrorIs(t, err, tt.wantErr)
+			_, err = tt.svc.SearchVec("q", nil, 5, 0)
+			require.ErrorIs(t, err, tt.wantErr)
+			_, err = tt.svc.Search(context.Background(), "q", 5, 0)
+			require.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestEmbedModelName(t *testing.T) {
+	require.Empty(t, (&Service{}).EmbedModelName())
+	require.Equal(t, "m", (&Service{cfg: appconfig.Config{EmbedModel: "m"}}).EmbedModelName())
 }
 
 func TestOpenFileGuards(t *testing.T) {
@@ -451,6 +482,26 @@ func TestRenameFolder(t *testing.T) {
 	})
 }
 
+func TestRenameFolderMovesRunResults(t *testing.T) {
+	vault := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(vault, "Old", "Sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(vault, "Old", "Sub", "n.md"), []byte("# n"), 0o644))
+	s := serviceWithRuns(t)
+	s.cfg = appconfig.Config{Vault: vault}
+	require.NoError(t, s.runs.Save("Old/Sub/n.md", "h1", sampleResult("out\n")))
+
+	_, err := s.RenameFolder(context.Background(), "Old", "New")
+	require.NoError(t, err)
+
+	_, ok, err := s.runs.Get("Old/Sub/n.md", "h1")
+	require.NoError(t, err)
+	require.False(t, ok, "the old path no longer holds the result")
+	got, ok, err := s.runs.Get("New/Sub/n.md", "h1")
+	require.NoError(t, err)
+	require.True(t, ok, "the saved output follows the folder")
+	require.Equal(t, "out\n", got.Items[0].Data)
+}
+
 func TestDeleteFolder(t *testing.T) {
 	vault := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(vault, "Code", "Sub"), 0o755))
@@ -463,6 +514,36 @@ func TestDeleteFolder(t *testing.T) {
 	require.NoDirExists(t, filepath.Join(vault, "Code"))
 
 	require.ErrorIs(t, s.DeleteFolder(context.Background(), "../escape"), ErrOutsideVault)
+}
+
+func TestSessionTitle(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{name: "blank falls back", query: "  \n ", want: defaultSessionTitle},
+		{name: "whitespace is collapsed", query: "  what\tis\n a vault ", want: "what is a vault"},
+		{name: "a short query is kept whole", query: "vector search", want: "vector search"},
+		{
+			name:  "a long ASCII query is capped",
+			query: strings.Repeat("a", 60),
+			want:  strings.Repeat("a", 48) + "…",
+		},
+		{
+			// 60 runes, 3 bytes each: a byte cap would slice mid-character.
+			name:  "a long multibyte query is capped by runes",
+			query: strings.Repeat("€", 60),
+			want:  strings.Repeat("€", 48) + "…",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sessionTitle(tc.query)
+			require.Equal(t, tc.want, got)
+			require.True(t, utf8.ValidString(got), "the title is valid UTF-8")
+		})
+	}
 }
 
 func TestReadNote(t *testing.T) {
@@ -562,7 +643,7 @@ func TestResolveNoteCacheInvalidation(t *testing.T) {
 
 		ext := filepath.Join(vault, "External.md")
 		require.NoError(t, os.WriteFile(ext, []byte("x"), 0o644))
-		s.onWatchEvent(nil, fsnotify.Event{Name: ext, Op: fsnotify.Create}, map[string]time.Time{})
+		s.onWatchEvent(nil, fsnotify.Event{Name: ext, Op: fsnotify.Create}, &watchPending{notes: map[string]time.Time{}})
 
 		got, ok := s.ResolveNote("External")
 		require.True(t, ok)
