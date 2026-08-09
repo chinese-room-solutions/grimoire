@@ -66,8 +66,8 @@ func (b *cliBackend) env(t *testing.T, jsonOut bool) (*cliEnv, *bytes.Buffer, *b
 		err:     &errBuf,
 		json:    jsonOut,
 		vault:   "/test/vault",
-		connect: func() (*apiclient.Client, error) { return client, nil },
-		respawn: func() (*apiclient.Client, error) { return client, nil },
+		connect: func(context.Context) (*apiclient.Client, error) { return client, nil },
+		respawn: func(context.Context) (*apiclient.Client, error) { return client, nil },
 	}
 	return e, &out, &errBuf
 }
@@ -401,8 +401,8 @@ func TestCLIStalePortRetry(t *testing.T) {
 		out:     &out,
 		err:     &bytes.Buffer{},
 		vault:   "/test/vault",
-		connect: func() (*apiclient.Client, error) { return dead, nil },
-		respawn: func() (*apiclient.Client, error) { respawned = true; return live, nil },
+		connect: func(context.Context) (*apiclient.Client, error) { return dead, nil },
+		respawn: func(context.Context) (*apiclient.Client, error) { respawned = true; return live, nil },
 	}
 	code := e.dispatch([]string{"note", "get", "a.md"})
 	require.Equal(t, exitOK, code)
@@ -424,8 +424,8 @@ func TestCLIAPIErrorNoRetry(t *testing.T) {
 		out:     &bytes.Buffer{},
 		err:     &bytes.Buffer{},
 		vault:   "/test/vault",
-		connect: func() (*apiclient.Client, error) { return live, nil },
-		respawn: func() (*apiclient.Client, error) { respawned = true; return live, nil },
+		connect: func(context.Context) (*apiclient.Client, error) { return live, nil },
+		respawn: func(context.Context) (*apiclient.Client, error) { respawned = true; return live, nil },
 	}
 	code := e.dispatch([]string{"note", "get", "x.md"})
 	require.Equal(t, exitNotFound, code)
@@ -671,11 +671,13 @@ func TestCLIRespawnRetriesOnlyReadOnlyVerbs(t *testing.T) {
 			respawned := false
 			var out, errBuf bytes.Buffer
 			e := &cliEnv{
-				out:     &out,
-				err:     &errBuf,
-				vault:   "/test/vault",
-				connect: func() (*apiclient.Client, error) { return apiclient.NewForTest("http://127.0.0.1:1"), nil },
-				respawn: func() (*apiclient.Client, error) {
+				out:   &out,
+				err:   &errBuf,
+				vault: "/test/vault",
+				connect: func(context.Context) (*apiclient.Client, error) {
+					return apiclient.NewForTest("http://127.0.0.1:1"), nil
+				},
+				respawn: func(context.Context) (*apiclient.Client, error) {
 					respawned = true
 					return apiclient.NewForTest(srv.URL), nil
 				},

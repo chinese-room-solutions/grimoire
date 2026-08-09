@@ -37,8 +37,8 @@ type cliEnv struct {
 	err     io.Writer
 	json    bool
 	vault   string
-	connect func() (*apiclient.Client, error) // reuse a running backend, launch on demand.
-	respawn func() (*apiclient.Client, error) // force a fresh backend (stale-port retry).
+	connect func(context.Context) (*apiclient.Client, error) // reuse a running backend, launch on demand.
+	respawn func(context.Context) (*apiclient.Client, error) // force a fresh backend (stale-port retry).
 }
 
 // runCLI is the entry point for the CLI subcommands, dispatched from main on the
@@ -80,8 +80,8 @@ func runCLIWith(args []string, out, errW io.Writer) int {
 		err:     errW,
 		json:    *jsonOut,
 		vault:   vault,
-		connect: func() (*apiclient.Client, error) { return connectVault(vault) },
-		respawn: func() (*apiclient.Client, error) { return respawnVault(vault) },
+		connect: func(ctx context.Context) (*apiclient.Client, error) { return connectVault(ctx, vault) },
+		respawn: func(ctx context.Context) (*apiclient.Client, error) { return respawnVault(ctx, vault) },
 	}
 	return env.dispatch(rest)
 }
@@ -194,7 +194,7 @@ func (e *cliEnv) doWrite(ctx context.Context, fn func(context.Context, *apiclien
 // do is the shared body of doRead/doWrite; retry says whether the request may be
 // repeated once against the respawned backend.
 func (e *cliEnv) do(ctx context.Context, fn func(context.Context, *apiclient.Client) error, retry bool) error {
-	c, err := e.connect()
+	c, err := e.connect(ctx)
 	if err != nil {
 		return err
 	}
@@ -202,7 +202,7 @@ func (e *cliEnv) do(ctx context.Context, fn func(context.Context, *apiclient.Cli
 	if err == nil || !isTransportError(err) || ctx.Err() != nil {
 		return err
 	}
-	c, rerr := e.respawn()
+	c, rerr := e.respawn(ctx)
 	if rerr != nil {
 		return rerr
 	}

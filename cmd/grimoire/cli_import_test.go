@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -55,8 +56,8 @@ func (s *importStub) env(t *testing.T, jsonOut bool) (*cliEnv, *bytes.Buffer, *b
 		err:     &errBuf,
 		json:    jsonOut,
 		vault:   "/test/vault",
-		connect: func() (*apiclient.Client, error) { return client, nil },
-		respawn: func() (*apiclient.Client, error) { return client, nil },
+		connect: func(context.Context) (*apiclient.Client, error) { return client, nil },
+		respawn: func(context.Context) (*apiclient.Client, error) { return client, nil },
 	}, &out, &errBuf
 }
 

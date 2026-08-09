@@ -53,29 +53,34 @@ func spawnDetached(args ...string) error {
 
 // launchHeadlessAndWait starts a detached headless backend for the vault and
 // waits for it to publish its port, returning it.
-func launchHeadlessAndWait(vault, portFile string) (int, error) {
+func launchHeadlessAndWait(ctx context.Context, vault, portFile string) (int, error) {
 	if err := launchVaultHeadless(vault); err != nil {
 		return 0, fmt.Errorf("launching headless backend for vault %q: %w", vault, err)
 	}
-	port, err := waitForPort(portFile, launchTimeout)
+	port, err := waitForPort(ctx, portFile, launchTimeout)
 	if err != nil {
 		return 0, fmt.Errorf("backend for vault %q: %w", vault, err)
 	}
 	return port, nil
 }
 
-// waitForPort polls portFile until it holds a non-zero port, returning it, or
-// fails after timeout so a startup that never completes doesn't hang the caller.
-func waitForPort(portFile string, timeout time.Duration) (int, error) {
-	deadline := time.Now().Add(timeout)
+// waitForPort polls portFile until it holds a non-zero port, returning it. It
+// gives up when ctx is cancelled, or after timeout so a startup that never
+// completes doesn't hang the caller.
+func waitForPort(ctx context.Context, portFile string, timeout time.Duration) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	tick := time.NewTicker(launchPoll)
+	defer tick.Stop()
 	for {
 		if port := readPort(portFile); port != 0 {
 			return port, nil
 		}
-		if time.Now().After(deadline) {
-			return 0, fmt.Errorf("port not published within %s", timeout)
+		select {
+		case <-ctx.Done():
+			return 0, fmt.Errorf("waiting up to %s for the backend's port: %w", timeout, ctx.Err())
+		case <-tick.C:
 		}
-		time.Sleep(launchPoll)
 	}
 }
 
@@ -92,7 +97,7 @@ const (
 // the advertised port from singleton.port, and — when absent (0) — spawns a
 // backend and waits for it to publish. The CLI uses it as the single entry point
 // to reach any vault, running or not.
-func connectVault(vault string) (*apiclient.Client, error) {
+func connectVault(ctx context.Context, vault string) (*apiclient.Client, error) {
 	dir, err := vaultdir.For(vault)
 	if err != nil {
 		return nil, fmt.Errorf("resolving data dir for %q: %w", vault, err)
@@ -100,7 +105,7 @@ func connectVault(vault string) (*apiclient.Client, error) {
 	portFile := filepath.Join(dir, portFileName)
 	port := readPort(portFile)
 	if port == 0 {
-		if port, err = launchHeadlessAndWait(vault, portFile); err != nil {
+		if port, err = launchHeadlessAndWait(ctx, vault, portFile); err != nil {
 			return nil, err
 		}
 	}
@@ -111,7 +116,7 @@ func connectVault(vault string) (*apiclient.Client, error) {
 // port advertisement, and returns a client for it. The CLI calls it after a
 // transport error against a port that turned out dead, so a request that hit a
 // crashed or retired backend retries once against a live one.
-func respawnVault(vault string) (*apiclient.Client, error) {
+func respawnVault(ctx context.Context, vault string) (*apiclient.Client, error) {
 	dir, err := vaultdir.For(vault)
 	if err != nil {
 		return nil, fmt.Errorf("resolving data dir for %q: %w", vault, err)
@@ -122,7 +127,7 @@ func respawnVault(vault string) (*apiclient.Client, error) {
 	// or already-gone file is left alone (removePortFile only clears our own; a
 	// dead backend's file is another pid's, so force it here).
 	_ = os.Remove(portFile)
-	port, err := launchHeadlessAndWait(vault, portFile)
+	port, err := launchHeadlessAndWait(ctx, vault, portFile)
 	if err != nil {
 		return nil, err
 	}
