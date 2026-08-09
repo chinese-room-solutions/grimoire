@@ -86,24 +86,32 @@ func runCLIWith(args []string, out, errW io.Writer) int {
 	return env.dispatch(rest)
 }
 
-// firstNonFlag returns the first argument that isn't a global flag (or its
-// value), which is the subcommand. main uses it to spot a CLI invocation behind
-// the leading --vault/--json flags without duplicating flag parsing: --vault
-// takes a value (so its next token is skipped unless it's --vault=X), --json is
-// a bool. It returns "" when no subcommand is present (a bare flag list → the
-// GUI); any non-empty token routes to runCLI, which prints usage and exits 2 on
-// an unknown verb.
-func firstNonFlag(args []string) string {
+// firstNonFlagIndex returns the index of the first argument that isn't a global
+// flag (or its value), which is the subcommand, or -1 when there is none. main
+// uses it to spot a CLI invocation behind the leading --vault/--json flags
+// without duplicating flag parsing: --vault takes a value (so its next token is
+// skipped unless it's --vault=X), --json is a bool.
+func firstNonFlagIndex(args []string) int {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if !strings.HasPrefix(a, "-") {
-			return a
+			return i
 		}
 		// --vault / -vault consumes the following token as its value, unless given
 		// as --vault=PATH. Any other flag (--json) is a standalone bool.
 		if name := strings.TrimLeft(a, "-"); (name == "vault") && !strings.Contains(a, "=") {
 			i++
 		}
+	}
+	return -1
+}
+
+// firstNonFlag is the subcommand in args, or "" when there is none (a bare flag
+// list → the GUI); any non-empty token routes to runCLI, which prints usage and
+// exits 2 on an unknown verb.
+func firstNonFlag(args []string) string {
+	if i := firstNonFlagIndex(args); i >= 0 {
+		return args[i]
 	}
 	return ""
 }

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/chinese-room-solutions/grimoire/internal/apiclient"
@@ -445,10 +446,37 @@ func TestFirstNonFlag(t *testing.T) {
 		{"combined flags then verb", []string{"--json", "--vault", "/v", "folder", "create", "f"}, "folder"},
 		{"only flags, no verb", []string{"--vault", "/v"}, ""},
 		{"empty", nil, ""},
+		{"vault flag then serve", []string{"--vault", "/v", "serve"}, "serve"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.want, firstNonFlag(tt.args))
+		})
+	}
+}
+
+// serve takes its flags on either side of the verb: its own after it, and the
+// global --vault (which the usage grammar puts before any command) ahead of it.
+func TestParseServeFlags(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantVault string
+		wantIdle  time.Duration
+	}{
+		{"bare serve", []string{"serve"}, "", 0},
+		{"own flags after the verb", []string{"serve", "--vault", "/v", "--idle-timeout", "2m"}, "/v", 2 * time.Minute},
+		{"global vault before the verb", []string{"--vault", "/v", "serve"}, "/v", 0},
+		{"json before the verb is ignored", []string{"--json", "--vault", "/v", "serve"}, "/v", 0},
+		{"flags on both sides", []string{"--vault", "/v", "serve", "--idle-timeout", "30s"}, "/v", 30 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			i := firstNonFlagIndex(tt.args)
+			require.Equal(t, "serve", tt.args[i])
+			vault, idle := parseServeFlags(tt.args, i)
+			require.Equal(t, tt.wantVault, vault)
+			require.Equal(t, tt.wantIdle, idle)
 		})
 	}
 }

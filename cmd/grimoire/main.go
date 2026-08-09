@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/KernelPryanic/golog"
@@ -41,28 +42,20 @@ func main() {
 	logger := golog.New(true, os.Stderr).With().Str("app", "grimoire").Logger()
 
 	// Subcommands run before the GUI's flag parsing, since they have their own
-	// flags. `serve` runs a vault's backend headless (no window). Any other
+	// flags. `serve` runs a vault's backend headless (no window); any other
 	// subcommand is a CLI verb — a one-shot request over the loopback API —
-	// dispatched to runCLI. With no subcommand the GUI opens.
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "serve":
-			fs := flag.NewFlagSet("serve", flag.ExitOnError)
-			vault := fs.String("vault", "", "absolute path to the vault to serve (defaults to the last-used vault)")
-			idle := fs.Duration("idle-timeout", 0, "shut down after this long with no requests (0 = never; used by the CLI for on-demand backends)")
-			_ = fs.Parse(os.Args[2:])
-			runServe(logger, *vault, *idle)
+	// dispatched to runCLI. The global flags (--vault, --json) may precede the
+	// verb, so route on the first non-flag token: `grimoire --vault P serve` and
+	// `grimoire serve --vault P` are the same call. With no verb at all (a bare
+	// flag list, or no arguments) the GUI opens.
+	args := os.Args[1:]
+	if i := firstNonFlagIndex(args); i >= 0 {
+		if args[i] == "serve" {
+			vault, idle := parseServeFlags(args, i)
+			runServe(logger, vault, idle)
 			return
-		default:
-			// A subcommand: dispatch to the scripting front door. The global flags
-			// (--vault, --json) may precede the verb, so route on the first non-flag
-			// token — `grimoire --vault P search q` is a CLI call, while a bare
-			// `grimoire --vault P` (no verb) still opens the GUI. Any non-flag token
-			// routes here; runCLI prints usage and exits 2 for an unknown verb.
-			if firstNonFlag(os.Args[1:]) != "" {
-				os.Exit(runCLI(os.Args[1:]))
-			}
 		}
+		os.Exit(runCLI(args))
 	}
 
 	vaultFlag := flag.String("vault", "", "absolute path to the vault to open (defaults to the last-used vault)")
@@ -88,6 +81,21 @@ func main() {
 	// An empty vault is fine: the GUI opens straight into the empty state, where
 	// the user picks a vault to bind — no separate first-run flow.
 	runGUI(logger, vault)
+}
+
+// parseServeFlags parses `serve`'s arguments, with verb at index verb in args.
+// The verb token is dropped so the flags around it parse in one pass, whichever
+// side they were written on: serve's own --vault/--idle-timeout after it, or the
+// global --vault before it. --json is accepted and ignored — the grammar lets it
+// lead any command, and serve has no output of its own to format.
+func parseServeFlags(args []string, verb int) (vault string, idle time.Duration) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	v := fs.String("vault", "", "absolute path to the vault to serve (defaults to the last-used vault)")
+	d := fs.Duration("idle-timeout", 0,
+		"shut down after this long with no requests (0 = never; used by the CLI for on-demand backends)")
+	fs.Bool("json", false, "no effect on serve (accepted so the global flag may precede any command)")
+	_ = fs.Parse(slices.Concat(args[:verb], args[verb+1:]))
+	return *v, *d
 }
 
 // resolveVault decides which vault to open: the --vault flag if given, else the
