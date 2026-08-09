@@ -582,7 +582,7 @@ func TestResolveNoteCacheInvalidation(t *testing.T) {
 
 		ext := filepath.Join(vault, "External.md")
 		require.NoError(t, os.WriteFile(ext, []byte("x"), 0o644))
-		s.onWatchEvent(nil, fsnotify.Event{Name: ext, Op: fsnotify.Create}, map[string]time.Time{})
+		s.onWatchEvent(nil, fsnotify.Event{Name: ext, Op: fsnotify.Create}, &watchPending{notes: map[string]time.Time{}})
 
 		got, ok := s.ResolveNote("External")
 		require.True(t, ok)
