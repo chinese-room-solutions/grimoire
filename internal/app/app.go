@@ -1039,8 +1039,9 @@ func (s *Service) DeleteFolder(ctx context.Context, rel string) error {
 
 // RenameFolder moves a folder to a new vault-relative path, then reindexes the
 // whole vault so every contained note's path is corrected (old paths pruned, new
-// ones indexed — the incremental sync skips unchanged notes by hash). It never
-// overwrites an existing folder (ErrNoteExists). Returns the slash path written.
+// ones indexed — the incremental sync skips unchanged notes by hash) and moves
+// the contained notes' saved run output to their new paths. It never overwrites
+// an existing folder (ErrNoteExists). Returns the slash path written.
 func (s *Service) RenameFolder(ctx context.Context, oldRel, newRel string) (string, error) {
 	oldClean, err := s.vaultPath(oldRel)
 	if err != nil {
@@ -1053,15 +1054,34 @@ func (s *Service) RenameFolder(ctx context.Context, oldRel, newRel string) (stri
 	if newClean == oldClean {
 		return filepath.ToSlash(newRel), nil
 	}
-	if _, err := os.Stat(newClean); err == nil {
-		return "", ctxerr.With(ErrNoteExists, map[string]any{"folder": newRel})
+	if err := s.renameFolderDir(oldRel, newRel, oldClean, newClean); err != nil {
+		return "", err
 	}
-	if err := os.Rename(oldClean, newClean); err != nil {
-		return "", ctxerr.With(fmt.Errorf("renaming folder: %w", err), map[string]any{"from": oldRel, "to": newRel})
-	}
-	s.invalidateResolveCache()
 	s.reindexVault()
 	return filepath.ToSlash(newRel), nil
+}
+
+// renameFolderDir is RenameFolder's serialized filesystem span: the existence
+// check, the move, and the run-result re-key happen under writeMu so a concurrent
+// note write can't recreate a note at the old path midway through.
+func (s *Service) renameFolderDir(oldRel, newRel, oldClean, newClean string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := os.Stat(newClean); err == nil {
+		return ctxerr.With(ErrNoteExists, map[string]any{"folder": newRel})
+	}
+	if err := os.Rename(oldClean, newClean); err != nil {
+		return ctxerr.With(fmt.Errorf("renaming folder: %w", err), map[string]any{"from": oldRel, "to": newRel})
+	}
+	s.invalidateResolveCache()
+	if s.runs != nil {
+		// Move every contained note's cached output with it; otherwise the results
+		// stay keyed to paths that no longer exist and the startup sweep drops them.
+		if err := s.runs.RenameFolder(filepath.ToSlash(oldRel), filepath.ToSlash(newRel)); err != nil {
+			s.logger.Warn().Err(err).Str("from", oldRel).Str("to", newRel).Msg("moving folder run results")
+		}
+	}
+	return nil
 }
 
 // DeleteNote removes a note from the vault and prunes it from the index. The

@@ -451,6 +451,26 @@ func TestRenameFolder(t *testing.T) {
 	})
 }
 
+func TestRenameFolderMovesRunResults(t *testing.T) {
+	vault := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(vault, "Old", "Sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(vault, "Old", "Sub", "n.md"), []byte("# n"), 0o644))
+	s := serviceWithRuns(t)
+	s.cfg = appconfig.Config{Vault: vault}
+	require.NoError(t, s.runs.Save("Old/Sub/n.md", "h1", sampleResult("out\n")))
+
+	_, err := s.RenameFolder(context.Background(), "Old", "New")
+	require.NoError(t, err)
+
+	_, ok, err := s.runs.Get("Old/Sub/n.md", "h1")
+	require.NoError(t, err)
+	require.False(t, ok, "the old path no longer holds the result")
+	got, ok, err := s.runs.Get("New/Sub/n.md", "h1")
+	require.NoError(t, err)
+	require.True(t, ok, "the saved output follows the folder")
+	require.Equal(t, "out\n", got.Items[0].Data)
+}
+
 func TestDeleteFolder(t *testing.T) {
 	vault := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(vault, "Code", "Sub"), 0o755))
