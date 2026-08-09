@@ -174,8 +174,7 @@ func extractFile(f *zip.File, dst string) error {
 	if err != nil {
 		return fmt.Errorf("writing kernel file: %w", err)
 	}
-	// LimitReader guards an archive whose entry lies about its size.
-	if _, err := io.Copy(out, io.LimitReader(src, maxPackageBytes+1)); err != nil {
+	if _, err := io.Copy(out, src); err != nil {
 		_ = out.Close()
 		return ctxerr.With(fmt.Errorf("%w: extracting entry %q: %v", ErrBadPackage, f.Name, err), map[string]any{"entry": f.Name})
 	}
