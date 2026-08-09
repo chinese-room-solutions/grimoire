@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/chinese-room-solutions/grimoire/internal/sqlmigrate"
 	"github.com/ncruces/go-sqlite3/driver"
 	"github.com/stretchr/testify/require"
 )
@@ -126,7 +127,7 @@ func TestReopen_IncompatibleFingerprint(t *testing.T) {
 // incompatible, not silently adopted.
 func TestOpen_PreFingerprintDatabaseIsIncompatible(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.db")
-	db, err := driver.Open(fileDSN(path))
+	db, err := driver.Open(sqlmigrate.FileDSN(path))
 	require.NoError(t, err)
 	_, err = db.Exec(`
 CREATE TABLE _migrations (version INTEGER PRIMARY KEY);

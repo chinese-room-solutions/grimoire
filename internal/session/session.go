@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/chinese-room-solutions/grimoire/internal/sqlmigrate"
@@ -65,7 +64,7 @@ type Store struct {
 
 // Open opens (creating if needed) the session history at path.
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite3", fileDSN(path))
+	db, err := sql.Open("sqlite3", sqlmigrate.FileDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("opening sessions: %w", err)
 	}
@@ -80,13 +79,6 @@ func Open(path string) (*Store, error) {
 // Close releases the database.
 func (s *Store) Close() error {
 	return s.db.Close()
-}
-
-// fileDSN builds the ncruces "file:" DSN for a local database path. On Windows
-// the drive-letter path is used as-is after "file:" (file:C:/dir/x.db); a
-// file:// authority form is rejected by its VFS.
-func fileDSN(path string) string {
-	return "file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 }
 
 func (s *Store) init() error {

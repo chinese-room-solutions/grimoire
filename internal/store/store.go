@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -107,7 +106,7 @@ func Open(path string, dim int, docPrefix string) (*Store, error) {
 	if dim <= 0 {
 		return nil, fmt.Errorf("embedding dimension must be positive, got %d", dim)
 	}
-	db, err := driver.Open(fileDSN(path), fts5.Register)
+	db, err := driver.Open(sqlmigrate.FileDSN(path), fts5.Register)
 	if err != nil {
 		return nil, fmt.Errorf("opening index: %w", err)
 	}
@@ -126,15 +125,6 @@ func Open(path string, dim int, docPrefix string) (*Store, error) {
 // Close releases the database.
 func (s *Store) Close() error {
 	return s.db.Close()
-}
-
-// fileDSN builds the ncruces "file:" DSN for a local database path. ncruces
-// requires the file: scheme for on-disk databases and, on Windows, wants the
-// drive-letter path as-is after "file:" (file:C:/dir/index.db) — a file://
-// authority form is rejected by its VFS. Pragmas are appended as query
-// parameters.
-func fileDSN(path string) string {
-	return "file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 }
 
 func (s *Store) init(dim int, docPrefix string) error {

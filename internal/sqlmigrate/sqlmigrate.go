@@ -1,15 +1,27 @@
 // Package sqlmigrate applies numbered .up.sql migrations from an embedded
 // filesystem to a SQLite database, tracking applied versions in a _migrations
 // table. It mirrors MASS's migration scheme (000001_name.up.sql), kept minimal:
-// forward-only, one statement-batch per file.
+// forward-only, one statement-batch per file. It also owns FileDSN, the DSN
+// every one of Grimoire's SQLite stores opens with.
 package sqlmigrate
 
 import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"path/filepath"
 	"sort"
 )
+
+// FileDSN builds the ncruces "file:" DSN for a local database path. ncruces
+// requires the file: scheme for on-disk databases and, on Windows, wants the
+// drive-letter path as-is after "file:" (file:C:/dir/index.db) — a file://
+// authority form is rejected by its VFS. Pragmas are appended as query
+// parameters: a busy timeout so a concurrent writer waits instead of failing,
+// and foreign_keys, which SQLite leaves off per connection unless asked.
+func FileDSN(path string) string {
+	return "file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+}
 
 // Run applies every migration in fsys (matching dir/*.up.sql) not yet recorded
 // in _migrations, in ascending version order. It is idempotent: already-applied
