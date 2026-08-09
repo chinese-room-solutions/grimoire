@@ -261,7 +261,7 @@ func modelHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 		var body struct {
 			Model string `json:"gModel"`
 		}
-		if err := readSignals(r, &body); err != nil {
+		if err := datastar.ReadSignals(r, &body); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -288,7 +288,7 @@ func concurrencyHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFun
 		var body struct {
 			Concurrency string `json:"gConcurrency"`
 		}
-		if err := readSignals(r, &body); err != nil {
+		if err := datastar.ReadSignals(r, &body); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -313,7 +313,7 @@ func trashHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 		var body struct {
 			Enabled bool `json:"gTrashEnabled"`
 		}
-		if err := readSignals(r, &body); err != nil {
+		if err := datastar.ReadSignals(r, &body); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -401,7 +401,7 @@ func convertModelHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFu
 		var body struct {
 			Model string `json:"gConvertModel"`
 		}
-		if err := readSignals(r, &body); err != nil {
+		if err := datastar.ReadSignals(r, &body); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -421,7 +421,7 @@ func convertResolutionHandler(svc *app.Service, logger zerolog.Logger) http.Hand
 		var body struct {
 			Resolution string `json:"gConvertRes"`
 		}
-		if err := readSignals(r, &body); err != nil {
+		if err := datastar.ReadSignals(r, &body); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -446,7 +446,7 @@ func convertTimeoutHandler(svc *app.Service, logger zerolog.Logger) http.Handler
 		var body struct {
 			Timeout string `json:"gConvertTimeout"`
 		}
-		if err := readSignals(r, &body); err != nil {
+		if err := datastar.ReadSignals(r, &body); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -1858,14 +1858,6 @@ func parseJSONList(raw string, logger zerolog.Logger) []string {
 		return nil
 	}
 	return out
-}
-
-func readSignals(r *http.Request, v any) error {
-	data, err := io.ReadAll(r.Body)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, v)
 }
 
 func writeOK(w http.ResponseWriter) {
