@@ -159,6 +159,35 @@ func TestSetConvertPageTimeout_ClampsAndPersists(t *testing.T) {
 	}
 }
 
+// The per-vault search primitives a cross-vault search drives report the same
+// two not-ready states Search does, so a coordinator can tell "go pick a model"
+// from "the index is still opening" and skip that vault rather than fail.
+func TestSearchPrimitives_ReportReadiness(t *testing.T) {
+	tests := []struct {
+		name    string
+		svc     *Service
+		wantErr error
+	}{
+		{"no model picked", &Service{}, ErrNoModel},
+		{"model set, store still opening", &Service{cfg: appconfig.Config{EmbedModel: "m"}}, ErrStoreNotReady},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.svc.EmbedQuery(context.Background(), "q")
+			require.ErrorIs(t, err, tt.wantErr)
+			_, err = tt.svc.SearchVec("q", nil, 5, 0)
+			require.ErrorIs(t, err, tt.wantErr)
+			_, err = tt.svc.Search(context.Background(), "q", 5, 0)
+			require.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestEmbedModelName(t *testing.T) {
+	require.Empty(t, (&Service{}).EmbedModelName())
+	require.Equal(t, "m", (&Service{cfg: appconfig.Config{EmbedModel: "m"}}).EmbedModelName())
+}
+
 func TestOpenFileGuards(t *testing.T) {
 	vault := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(vault, "sub"), 0o755))

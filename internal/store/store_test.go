@@ -150,6 +150,30 @@ func TestSearch_QueryDimensionValidated(t *testing.T) {
 	require.Error(t, err)
 }
 
+// With no query embedding at all (the model is unreachable) the search still
+// runs the keyword leg rather than refusing — a degraded search, not a broken
+// one. The vector leg contributes nothing, so hits carry no rank and no
+// similarity from it.
+func TestSearch_NoQueryVectorIsKeywordOnly(t *testing.T) {
+	s := openTemp(t, 2)
+	require.NoError(t, s.ReplaceNote("hit.md", []Chunk{
+		{Path: "hit.md", Index: 0, Text: "the ULID spec", DocHash: "h", Vector: vec(1, 0)},
+	}))
+	require.NoError(t, s.ReplaceNote("miss.md", []Chunk{
+		{Path: "miss.md", Index: 0, Text: "unrelated text", DocHash: "h", Vector: vec(0, 1)},
+	}))
+
+	for _, qvec := range [][]float32{nil, {}} {
+		hits, err := s.Search("ULID", qvec, SearchOptions{K: 5, MinSim: 0.5, TopRatio: 0.88})
+		require.NoError(t, err)
+		require.Len(t, hits, 1)
+		require.Equal(t, "hit.md", hits[0].Path)
+		require.Equal(t, 1, hits[0].FTSRank)
+		require.Zero(t, hits[0].VecRank)
+		require.Zero(t, hits[0].Similarity)
+	}
+}
+
 func TestSanitizeFTSQuery(t *testing.T) {
 	tests := []struct {
 		name  string

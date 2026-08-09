@@ -343,8 +343,11 @@ func (s *Store) Paths() ([]string, error) {
 // sanitized query against FTS5, ranked by BM25. The legs are fused with
 // Reciprocal Rank Fusion, adjacent-window duplicates from the same note are
 // dropped, and the top K hits are returned in fused order.
+//
+// An empty qvec runs the keyword leg alone — the caller has no query embedding
+// (the model is unreachable), which is a degraded search, not a broken one.
 func (s *Store) Search(query string, qvec []float32, opts SearchOptions) ([]Hit, error) {
-	if len(qvec) != s.dim {
+	if len(qvec) != 0 && len(qvec) != s.dim {
 		return nil, fmt.Errorf("query dimension %d, want %d", len(qvec), s.dim)
 	}
 	k := opts.K
@@ -355,7 +358,10 @@ func (s *Store) Search(query string, qvec []float32, opts SearchOptions) ([]Hit,
 	// floor keeps small-K searches from starving it. Untuned default.
 	pool := max(4*k, 40)
 
-	vecHits := s.vectorLeg(qvec, pool, opts)
+	var vecHits []scored
+	if len(qvec) > 0 {
+		vecHits = s.vectorLeg(qvec, pool, opts)
+	}
 	ftsHits, err := s.keywordLeg(query, pool)
 	if err != nil {
 		return nil, err

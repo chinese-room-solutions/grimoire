@@ -400,27 +400,70 @@ const (
 // Search embeds the query (with the model's query instruction) and runs the
 // store's hybrid vector + keyword search.
 func (s *Service) Search(ctx context.Context, query string, k int, minSim float64) ([]store.Hit, error) {
+	qvec, err := s.EmbedQuery(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return s.SearchVec(query, qvec, k, minSim)
+}
+
+// EmbedModelName is the embedding model this vault is configured for, or "" when
+// none is set. A cross-vault search groups vaults by it: one embedding of the
+// query serves every vault that shares a model, and a vault with no model has no
+// semantic leg to contribute.
+func (s *Service) EmbedModelName() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.EmbedModel
+}
+
+// EmbedQuery embeds a search query with this vault's model and query
+// instruction, for a caller that runs the store search itself (SearchVec). It
+// reports ErrNoModel when no model is set and ErrStoreNotReady while the index
+// is still opening — the same states Search surfaces.
+func (s *Service) EmbedQuery(ctx context.Context, query string) ([]float32, error) {
 	s.mu.Lock()
 	st, emb, model := s.store, s.embedder, s.cfg.EmbedModel
 	s.mu.Unlock()
-	if st == nil || emb == nil {
-		if model != "" {
-			// A model is configured but the store is still opening (the async
-			// startup probe of the embedding dimension); tell the caller to retry,
-			// like Graph does, rather than to go pick a model.
-			return nil, ErrStoreNotReady
-		}
-		return nil, ErrNoModel
+	if err := searchReady(st, emb, model); err != nil {
+		return nil, err
 	}
 	qvec, err := emb.EmbedQuery(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("embedding query: %w", err)
+	}
+	return qvec, nil
+}
+
+// SearchVec runs the hybrid search with a query vector the caller already has,
+// so a cross-vault search embeds once per model rather than once per vault. A
+// nil qvec runs the keyword leg alone — what a vault gets when its model group's
+// embedding failed.
+func (s *Service) SearchVec(query string, qvec []float32, k int, minSim float64) ([]store.Hit, error) {
+	s.mu.Lock()
+	st, emb, model := s.store, s.embedder, s.cfg.EmbedModel
+	s.mu.Unlock()
+	if err := searchReady(st, emb, model); err != nil {
+		return nil, err
 	}
 	floor := minSim
 	if floor <= 0 {
 		floor = searchFloor
 	}
 	return st.Search(query, qvec, store.SearchOptions{K: k, MinSim: floor, TopRatio: searchTopRatio})
+}
+
+// searchReady reports why a vault can't answer a search yet: no model picked, or
+// a model whose store is still opening (the async startup probe of the embedding
+// dimension) — the caller should retry, like Graph, rather than go pick a model.
+func searchReady(st *store.Store, emb *embed.Embedder, model string) error {
+	if st != nil && emb != nil {
+		return nil
+	}
+	if model != "" {
+		return ErrStoreNotReady
+	}
+	return ErrNoModel
 }
 
 // GraphDefaults are the neighbour count and similarity floor used when the
