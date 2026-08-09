@@ -117,6 +117,51 @@ func TestRenderMarkdown(t *testing.T) {
 	}
 }
 
+func TestRenderCalloutsNestedQuotes(t *testing.T) {
+	tests := []struct {
+		name, in string
+		contains []string
+		absent   []string
+	}{
+		{
+			// The inner </blockquote> used to end the callout, leaving the outer quote
+			// unclosed and a stray close tag after the box.
+			name: "a callout keeps a nested quote and everything after it",
+			in:   "> [!note] Title\n> body\n>\n> > nested quote\n>\n> tail\n",
+			contains: []string{
+				`class="g-callout g-callout-note"`,
+				"<blockquote>\n<p>nested quote</p>\n</blockquote>",
+				"<p>tail</p>",
+			},
+		},
+		{
+			name:     "a callout nested in a callout is a callout too",
+			in:       "> [!warning] Outer\n> body\n>\n> > [!tip] Inner\n> > hint\n",
+			contains: []string{"g-callout-warning", "g-callout-tip", ">Inner</span>"},
+			absent:   []string{"<blockquote>"},
+		},
+		{
+			name:     "a plain quote holding a nested quote is left alone",
+			in:       "> plain\n>\n> > nested\n",
+			contains: []string{"<blockquote>\n<p>plain</p>\n<blockquote>\n<p>nested</p>\n</blockquote>\n</blockquote>"},
+			absent:   []string{"g-callout"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out := RenderMarkdown(tc.in)
+			for _, want := range tc.contains {
+				require.Contains(t, out, want)
+			}
+			for _, no := range tc.absent {
+				require.NotContains(t, out, no)
+			}
+			require.Equal(t, strings.Count(out, "<blockquote>"), strings.Count(out, "</blockquote>"),
+				"every quote tag is balanced")
+		})
+	}
+}
+
 func TestWikilinksSkipCode(t *testing.T) {
 	// [[…]] is a link in prose and code in code: a bash test, a C++ attribute. The
 	// rewrite happens before parsing, so it must skip every code range or the block

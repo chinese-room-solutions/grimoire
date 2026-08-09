@@ -491,12 +491,18 @@ func isAbsoluteURL(src string) bool {
 		strings.HasPrefix(src, VaultFileRoute)
 }
 
-// calloutBlockquote matches a blockquote whose first paragraph opens with an
+// calloutHead matches a blockquote's opening paragraph when it carries an
 // Obsidian callout marker "[!type]" (optionally followed by a title on the same
-// line), capturing the type, the title, and the remaining body of that paragraph.
-// goldmark renders a callout as a plain <blockquote><p>[!type] Title\nbody…</p>;
-// we rewrite it into a styled callout box.
-var calloutBlockquote = regexp.MustCompile(`(?is)<blockquote>\s*<p>\s*\[!([a-z]+)\]([^\n<]*)\n?(.*?)</p>(.*?)</blockquote>`)
+// line), capturing the type, the title, and the rest of that paragraph. goldmark
+// renders a callout as a plain <blockquote><p>[!type] Title\nbody…</p>; we
+// rewrite it into a styled callout box.
+var calloutHead = regexp.MustCompile(`(?is)^\s*<p>\s*\[!([a-z]+)\]([^\n<]*)\n?(.*?)</p>`)
+
+// The blockquote tags goldmark emits, matched literally while scanning.
+const (
+	blockquoteOpen  = "<blockquote>"
+	blockquoteClose = "</blockquote>"
+)
 
 // calloutIcons maps a callout type to a Shoelace icon, with a default for
 // unrecognized types. Aliases mirror Obsidian's common set.
@@ -512,32 +518,83 @@ var calloutIcons = map[string]string{
 // renderCallouts rewrites goldmark's blockquote rendering of Obsidian callouts
 // ("> [!note] Title") into styled callout boxes: a header with an icon and title,
 // then the body. The title defaults to the capitalized type when omitted. A
-// blockquote that isn't a callout is left untouched.
+// blockquote that isn't a callout is left untouched. Quotes are matched by
+// scanning rather than by regexp, so a callout holding a nested quote isn't cut
+// short at the inner </blockquote>; nested quotes are rewritten in turn.
 func renderCallouts(html string) string {
-	return calloutBlockquote.ReplaceAllStringFunc(html, func(m string) string {
-		g := calloutBlockquote.FindStringSubmatch(m)
-		typ := strings.ToLower(g[1])
-		title := strings.TrimSpace(g[2])
-		if title == "" {
-			title = strings.ToUpper(typ[:1]) + typ[1:]
+	var b strings.Builder
+	rest := html
+	for {
+		i := strings.Index(rest, blockquoteOpen)
+		if i < 0 {
+			break
 		}
-		icon := calloutIcons[typ]
-		if icon == "" {
-			icon = "info-circle"
+		inner, end, ok := blockquoteAt(rest, i)
+		if !ok {
+			break // Unbalanced markup: leave the remainder as it came.
 		}
-		// The first paragraph's remaining text (g[3]) plus any following blocks
-		// (g[4]) form the body. Wrap the first-paragraph remainder back in a <p> so
-		// it keeps paragraph spacing alongside the rest.
-		body := strings.TrimSpace(g[3])
-		if body != "" {
-			body = "<p>" + body + "</p>"
+		b.WriteString(rest[:i])
+		b.WriteString(callout(renderCallouts(inner)))
+		rest = rest[end:]
+	}
+	b.WriteString(rest)
+	return b.String()
+}
+
+// blockquoteAt returns the content of the blockquote opening at html[i:] and the
+// offset just past its closing tag. Nested quotes are counted, so an outer quote
+// ends at its own close.
+func blockquoteAt(html string, i int) (inner string, end int, ok bool) {
+	start := i + len(blockquoteOpen)
+	depth := 0
+	for p := i; p < len(html); {
+		openAt := strings.Index(html[p:], blockquoteOpen)
+		closeAt := strings.Index(html[p:], blockquoteClose)
+		if closeAt < 0 {
+			return "", 0, false
 		}
-		body += g[4]
-		return `<div class="g-callout g-callout-` + typ + `">` +
-			`<div class="g-callout-head"><sl-icon name="` + icon + `"></sl-icon>` +
-			`<span class="g-callout-title">` + title + `</span></div>` +
-			`<div class="g-callout-body">` + body + `</div></div>`
-	})
+		if openAt >= 0 && openAt < closeAt {
+			depth++
+			p += openAt + len(blockquoteOpen)
+			continue
+		}
+		depth--
+		p += closeAt + len(blockquoteClose)
+		if depth == 0 {
+			return html[start : p-len(blockquoteClose)], p, true
+		}
+	}
+	return "", 0, false
+}
+
+// callout turns a blockquote's content into a styled callout box when it opens
+// with a callout marker, and hands back the plain blockquote when it doesn't.
+func callout(inner string) string {
+	g := calloutHead.FindStringSubmatch(inner)
+	if g == nil {
+		return blockquoteOpen + inner + blockquoteClose
+	}
+	typ := strings.ToLower(g[1])
+	title := strings.TrimSpace(g[2])
+	if title == "" {
+		title = strings.ToUpper(typ[:1]) + typ[1:]
+	}
+	icon := calloutIcons[typ]
+	if icon == "" {
+		icon = "info-circle"
+	}
+	// The marker paragraph's remaining text (g[3]) plus everything after that
+	// paragraph form the body. Wrap the remainder back in a <p> so it keeps
+	// paragraph spacing alongside the rest.
+	body := strings.TrimSpace(g[3])
+	if body != "" {
+		body = "<p>" + body + "</p>"
+	}
+	body += inner[len(g[0]):]
+	return `<div class="g-callout g-callout-` + typ + `">` +
+		`<div class="g-callout-head"><sl-icon name="` + icon + `"></sl-icon>` +
+		`<span class="g-callout-title">` + title + `</span></div>` +
+		`<div class="g-callout-body">` + body + `</div></div>`
 }
 
 //go:embed grimoire.js
