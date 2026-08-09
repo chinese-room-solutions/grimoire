@@ -7,5 +7,10 @@ import "os/exec"
 // path with spaces or special characters is passed as a single argument (unlike
 // `cmd /c start`, which parses its first quoted token as a window title).
 func osOpen(path string) error {
-	return exec.Command("rundll32", "url.dll,FileProtocolHandler", path).Start()
+	cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	reap(cmd)
+	return nil
 }
