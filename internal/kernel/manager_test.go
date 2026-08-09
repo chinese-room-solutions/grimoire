@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
@@ -97,6 +98,111 @@ func TestSessionCloseIsIdempotent(t *testing.T) {
 	require.NoError(t, sess.Close())
 	require.NoError(t, sess.Close())
 	require.Equal(t, int32(1), in.closes.Load())
+}
+
+// stubSpawn replaces the kernel process spawn for the duration of a test.
+func stubSpawn(t *testing.T, fn func(*Manifest) (*Session, error)) {
+	t.Helper()
+	orig := spawnSession
+	spawnSession = fn
+	t.Cleanup(func() { spawnSession = orig })
+}
+
+// blockingSpawn returns a spawn that hangs until release is closed, counting
+// calls — the slow start a lock must not be held across.
+func blockingSpawn(release <-chan struct{}, calls *atomic.Int32, made func() *Session) func(*Manifest) (*Session, error) {
+	return func(*Manifest) (*Session, error) {
+		calls.Add(1)
+		<-release
+		return made(), nil
+	}
+}
+
+// TestManagerSessionSpawnsOncePerKey: several blocks of one note running at once
+// share a single kernel, and the slow spawn doesn't block the Manager — another
+// note's CloseNote must complete while it's still starting.
+func TestManagerSessionSpawnsOncePerKey(t *testing.T) {
+	m := NewManager(regOf(), zerolog.Nop())
+	man := &Manifest{Family: "bash", Version: "5", Match: []string{"bash"}}
+	key := sessionKey("a.md", man.Name())
+
+	var spawns atomic.Int32
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	stubSpawn(t, func(mf *Manifest) (*Session, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		return blockingSpawn(release, &spawns, fakeSession)(mf)
+	})
+
+	const callers = 8
+	type result struct {
+		sess *Session
+		err  error
+	}
+	got := make(chan result, callers)
+	for range callers {
+		go func() {
+			s, err := m.session(key, man)
+			got <- result{s, err}
+		}()
+	}
+	<-started
+
+	// The spawn is in flight: unrelated Manager work must not be blocked by it.
+	free := make(chan struct{})
+	go func() { m.CloseNote("b.md"); close(free) }()
+	select {
+	case <-free:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the Manager lock was held across the spawn")
+	}
+
+	close(release)
+	first := <-got
+	require.NoError(t, first.err)
+	for range callers - 1 {
+		r := <-got
+		require.NoError(t, r.err)
+		require.Same(t, first.sess, r.sess, "every caller got the one session")
+	}
+	require.Equal(t, int32(1), spawns.Load())
+	require.Same(t, first.sess, m.sessions[key])
+}
+
+// TestManagerCloseAllDuringSpawn: a kernel that finishes starting after shutdown
+// has no owner, so it is closed rather than published or leaked.
+func TestManagerCloseAllDuringSpawn(t *testing.T) {
+	m := NewManager(regOf(), zerolog.Nop())
+	man := &Manifest{Family: "bash", Version: "5", Match: []string{"bash"}}
+	key := sessionKey("a.md", man.Name())
+
+	in := &countingStdin{}
+	var spawns atomic.Int32
+	release := make(chan struct{})
+	started := make(chan struct{})
+	stubSpawn(t, func(mf *Manifest) (*Session, error) {
+		close(started)
+		return blockingSpawn(release, &spawns, func() *Session {
+			return newSession(nil, in, io.NopCloser(strings.NewReader("")))
+		})(mf)
+	})
+
+	errc := make(chan error, 1)
+	go func() {
+		_, err := m.session(key, man)
+		errc <- err
+	}()
+	<-started
+
+	require.NoError(t, m.CloseAll())
+	close(release)
+
+	require.ErrorIs(t, <-errc, ErrSessionClosed)
+	require.Equal(t, int32(1), in.closes.Load(), "the orphaned kernel was closed")
+	require.NotContains(t, m.sessions, key)
 }
 
 func TestSessionKeyDistinguishesKernels(t *testing.T) {

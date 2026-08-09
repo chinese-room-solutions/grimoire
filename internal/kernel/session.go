@@ -25,6 +25,11 @@ var ErrNoKernel = errors.New("no kernel for language")
 // Manager drops the dead session so the next run spawns a fresh one.
 var ErrKernelDied = errors.New("kernel exited")
 
+// ErrSessionClosed is returned when a run's session was closed while its kernel
+// was still starting — the note's tab closed, or the app shut down. The kernel is
+// ended rather than published; running the block again spawns a fresh one.
+var ErrSessionClosed = errors.New("kernel session closed while starting")
+
 // Session is one running kernel process. A session is reused across the blocks of
 // a single note so they share shell state; runMu serializes those runs (a shell
 // runs one block at a time). A dedicated reader goroutine owns the kernel's
@@ -50,6 +55,10 @@ type readResult struct {
 	ev  Event
 	err error
 }
+
+// spawnSession starts a kernel process; a var so tests can drive the Manager's
+// bookkeeping without real processes.
+var spawnSession = spawn
 
 // spawn starts the kernel process for a manifest and wires up its stdio.
 func spawn(m *Manifest) (*Session, error) {
@@ -227,6 +236,17 @@ type Manager struct {
 
 	mu       sync.Mutex
 	sessions map[string]*Session // keyed by sessionKey(notePath, kernelName).
+	spawning map[string]*pending // in-flight spawns, same keys; see session.
+}
+
+// pending is one in-flight spawn: it holds the lock's place for a key while the
+// process starts outside the lock, so concurrent runs on the same note wait
+// instead of spawning a second kernel. cancelled is set by CloseNote/CloseAll —
+// the spawner then closes the session it produced rather than publishing it,
+// since its owner is already gone.
+type pending struct {
+	done      chan struct{} // closed when the spawn finishes.
+	cancelled bool          // guarded by Manager.mu.
 }
 
 // NewManager builds a Manager over a registry.
@@ -234,6 +254,7 @@ func NewManager(reg *Registry, logger zerolog.Logger) *Manager {
 	m := &Manager{
 		logger:   logger.With().Str("component", "kernel").Logger(),
 		sessions: map[string]*Session{},
+		spawning: map[string]*pending{},
 	}
 	m.reg.Store(reg)
 	return m
@@ -315,19 +336,50 @@ func sessionKey(notePath, kernelName string) string {
 	return notePath + "\x00" + kernelName
 }
 
-// session returns noteKey's live session, spawning one if absent.
+// session returns noteKey's live session, spawning one if absent. Spawning (PATH
+// probes, pipes, cmd.Start) happens outside m.mu so a slow start doesn't block
+// other notes or a close; a pending entry marks the key meanwhile, so a
+// concurrent caller waits for that spawn instead of starting a second kernel.
 func (m *Manager) session(noteKey string, man *Manifest) (*Session, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if s, ok := m.sessions[noteKey]; ok {
+	for {
+		m.mu.Lock()
+		if s, ok := m.sessions[noteKey]; ok {
+			m.mu.Unlock()
+			return s, nil
+		}
+		if p, ok := m.spawning[noteKey]; ok {
+			m.mu.Unlock()
+			<-p.done
+			continue // the winner published a session, or failed and left the key free.
+		}
+		p := &pending{done: make(chan struct{})}
+		m.spawning[noteKey] = p
+		m.mu.Unlock()
+
+		s, err := spawnSession(man)
+
+		m.mu.Lock()
+		delete(m.spawning, noteKey)
+		cancelled := p.cancelled
+		if err == nil && !cancelled {
+			m.sessions[noteKey] = s
+		}
+		m.mu.Unlock()
+		close(p.done)
+
+		switch {
+		case err != nil:
+			return nil, err
+		case cancelled:
+			// The note (or the app) closed while this kernel was starting: nobody owns
+			// the process, so end it here rather than leak it.
+			if cerr := s.Close(); cerr != nil {
+				m.logger.Warn().Err(cerr).Str("session", noteKey).Msg("closing an orphaned kernel")
+			}
+			return nil, ctxerr.With(fmt.Errorf("%w: %s", ErrSessionClosed, man.Name()), map[string]any{"session": noteKey})
+		}
 		return s, nil
 	}
-	s, err := spawn(man)
-	if err != nil {
-		return nil, err
-	}
-	m.sessions[noteKey] = s
-	return s, nil
 }
 
 // drop removes and closes a note's session if it's still the one recorded. When
@@ -351,7 +403,9 @@ func (m *Manager) drop(noteKey string, sess *Session) {
 
 // CloseNote ends and forgets every kernel session for a note (called when its
 // tab closes). A note may hold more than one session — one per kernel it used —
-// so this closes all sessions whose key carries the note's prefix.
+// so this closes all sessions whose key carries the note's prefix. A kernel still
+// starting for the note is cancelled: its spawner closes it instead of
+// publishing it.
 func (m *Manager) CloseNote(notePath string) {
 	prefix := notePath + "\x00"
 	m.mu.Lock()
@@ -362,6 +416,11 @@ func (m *Manager) CloseNote(notePath string) {
 			delete(m.sessions, key)
 		}
 	}
+	for key, p := range m.spawning {
+		if strings.HasPrefix(key, prefix) {
+			p.cancelled = true
+		}
+	}
 	m.mu.Unlock()
 	for _, sess := range closing {
 		if err := sess.Close(); err != nil {
@@ -370,11 +429,16 @@ func (m *Manager) CloseNote(notePath string) {
 	}
 }
 
-// CloseAll ends every kernel (called on app shutdown).
+// CloseAll ends every kernel (called on app shutdown). Kernels still starting
+// are cancelled: each spawner closes its own process instead of publishing it,
+// rather than CloseAll waiting for a start it can't hurry.
 func (m *Manager) CloseAll() error {
 	m.mu.Lock()
 	sessions := m.sessions
 	m.sessions = map[string]*Session{}
+	for _, p := range m.spawning {
+		p.cancelled = true
+	}
 	m.mu.Unlock()
 	var firstErr error
 	for key, sess := range sessions {
