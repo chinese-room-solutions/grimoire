@@ -233,6 +233,7 @@ func ignoreExit(err error) error {
 type Manager struct {
 	reg    atomic.Pointer[Registry] // swapped by SetRegistry after an install/remove.
 	logger zerolog.Logger
+	active atomic.Int64 // block executions in flight; see ActiveRuns.
 
 	mu       sync.Mutex
 	sessions map[string]*Session // keyed by sessionKey(notePath, kernelName).
@@ -278,6 +279,13 @@ func (m *Manager) Has(lang string) bool {
 	return ok
 }
 
+// ActiveRuns reports how many block executions are in flight right now, counted
+// for the whole of Run — including the wait for a kernel to spawn — so a caller
+// can tell whether the Manager is idle (0) before tearing it down.
+func (m *Manager) ActiveRuns() int {
+	return int(m.active.Load())
+}
+
 // ResolveInfo returns the friendly label and version of the kernel that would run
 // a block for (lang, family, version) — the same resolution Run uses — so the UI
 // can show which kernel a block will use, and its version, before it's run. ok is
@@ -298,6 +306,9 @@ func (m *Manager) ResolveInfo(lang, family, version string) (label, resolvedVers
 // ErrNoKernel if nothing resolves; ErrKernelUnavailable if the resolved command
 // isn't installed. A failed run drops its session, so a later run respawns.
 func (m *Manager) Run(ctx context.Context, notePath, lang, family, version, code string, emit func(Event)) error {
+	m.active.Add(1)
+	defer m.active.Add(-1)
+
 	man, ok := m.Registry().Resolve(lang, family, version)
 	if !ok {
 		if family != "" {

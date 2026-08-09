@@ -221,6 +221,86 @@ func TestManagerCloseAllReportsEveryFailure(t *testing.T) {
 	require.Empty(t, m.sessions)
 }
 
+// pipedSession returns a Session whose kernel stdout is a pipe, so a test can
+// hold a run open and end it by writing the run's terminal event.
+func pipedSession(t *testing.T) (*Session, *io.PipeWriter) {
+	t.Helper()
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	return newSession(nil, &fakeStdin{}, pr), pw
+}
+
+// eventuallyActive waits for the Manager's in-flight count to reach want.
+func eventuallyActive(t *testing.T, m *Manager, want int) {
+	t.Helper()
+	require.Eventually(t, func() bool { return m.ActiveRuns() == want },
+		5*time.Second, time.Millisecond, "ActiveRuns never reached %d (last %d)", want, m.ActiveRuns())
+}
+
+// TestManagerActiveRunsCoversWholeRun: the count rises before the kernel is even
+// spawned — a run waiting on a slow start is in flight too — and drops only once
+// Run returns.
+func TestManagerActiveRunsCoversWholeRun(t *testing.T) {
+	man := &Manifest{Family: "bash", Version: "5", Match: []string{"bash"}}
+	m := NewManager(regOf(man), zerolog.Nop())
+	require.Equal(t, 0, m.ActiveRuns(), "an idle Manager has no runs")
+
+	sess, pw := pipedSession(t)
+	release := make(chan struct{})
+	spawned := make(chan struct{})
+	stubSpawn(t, func(*Manifest) (*Session, error) {
+		close(spawned)
+		<-release
+		return sess, nil
+	})
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- m.Run(context.Background(), "a.md", "bash", "", "", "echo hi", func(Event) {})
+	}()
+
+	<-spawned
+	eventuallyActive(t, m, 1) // still starting the kernel, already counted.
+	close(release)
+
+	_, err := pw.Write([]byte(`{"id":"r1","type":"exit","code":0}` + "\n"))
+	require.NoError(t, err)
+	require.NoError(t, <-errc)
+	require.Equal(t, 0, m.ActiveRuns(), "the finished run is no longer counted")
+}
+
+// TestManagerActiveRunsCountsConcurrentRuns: two notes running at once are two
+// in-flight runs, and each finishing drops the count by one.
+func TestManagerActiveRunsCountsConcurrentRuns(t *testing.T) {
+	man := &Manifest{Family: "bash", Version: "5", Match: []string{"bash"}}
+	m := NewManager(regOf(man), zerolog.Nop())
+
+	// One session per note, handed out in spawn order.
+	sessions := make(chan *Session, 2)
+	writers := make([]*io.PipeWriter, 0, 2)
+	for range 2 {
+		sess, pw := pipedSession(t)
+		sessions <- sess
+		writers = append(writers, pw)
+	}
+	stubSpawn(t, func(*Manifest) (*Session, error) { return <-sessions, nil })
+
+	errc := make(chan error, 2)
+	for _, note := range []string{"a.md", "b.md"} {
+		go func() {
+			errc <- m.Run(context.Background(), note, "bash", "", "", "echo hi", func(Event) {})
+		}()
+	}
+	eventuallyActive(t, m, 2)
+
+	for i, pw := range writers {
+		_, err := pw.Write([]byte(`{"id":"r1","type":"exit","code":0}` + "\n"))
+		require.NoError(t, err)
+		require.NoError(t, <-errc)
+		eventuallyActive(t, m, 1-i)
+	}
+}
+
 func TestSessionKeyDistinguishesKernels(t *testing.T) {
 	// A note with two kernels yields two distinct keys; the NUL separator keeps a
 	// note prefix unambiguous for CloseNote.
