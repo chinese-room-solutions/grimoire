@@ -108,11 +108,18 @@ type vaultsResponse struct {
 	Vaults []grimoireapi.Vault `json:"vaults"`
 }
 
-// Vaults returns the vaults Grimoire knows about, flagging the current one.
+// Vaults returns every vault Grimoire knows about with its status, flagging the
+// current one.
 func (c *Client) Vaults(ctx context.Context) ([]grimoireapi.Vault, error) {
 	var out vaultsResponse
 	err := c.getJSON(ctx, "/vaults", nil, &out)
 	return out.Vaults, err
+}
+
+// ForgetVault drops a vault from the list Grimoire keeps. Nothing on disk is
+// removed; a path Grimoire doesn't know is a no-op.
+func (c *Client) ForgetVault(ctx context.Context, path string) error {
+	return c.sendJSON(ctx, http.MethodPost, "/vault/forget", map[string]string{"path": path}, nil)
 }
 
 // Resolve maps a wikilink/name to a note path. A non-match is a normal answer

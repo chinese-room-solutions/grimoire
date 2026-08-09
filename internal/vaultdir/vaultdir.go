@@ -207,19 +207,41 @@ func For(vault string) (string, error) {
 // per-model vector index files, the only state the OS may purge without losing
 // user data — creating it if needed.
 func CacheFor(vault string) (string, error) {
-	hash, err := vaultHash(vault)
+	dir, err := CachePath(vault)
 	if err != nil {
 		return "", err
 	}
-	root, err := CacheRoot()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(root, vaultsSubdir, hash)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("creating vault cache dir: %w", err)
 	}
 	return dir, nil
+}
+
+// DataPath is where For keeps a vault's durable data, resolved without creating
+// anything or running the legacy migration. It's for read-only inspection of a
+// vault the daemon isn't serving — the vault listing reads each one's config
+// that way — so listing vaults leaves no directories behind.
+func DataPath(vault string) (string, error) {
+	return vaultSubdir(vault, Root)
+}
+
+// CachePath is CacheFor without creating the directory: the read-only twin, used
+// to stat a vault's index file.
+func CachePath(vault string) (string, error) {
+	return vaultSubdir(vault, CacheRoot)
+}
+
+// vaultSubdir resolves <root>/vaults/<hash> for a vault under the given root.
+func vaultSubdir(vault string, root func() (string, error)) (string, error) {
+	hash, err := vaultHash(vault)
+	if err != nil {
+		return "", err
+	}
+	base, err := root()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, vaultsSubdir, hash), nil
 }
 
 // vaultHash derives the stable directory name for a vault from its canonical
@@ -390,15 +412,23 @@ func writeLastVault(root, vault string) error {
 	return fsutil.WriteFileAtomic(path, []byte(vault), 0o600)
 }
 
-// KnownVaults returns the vaults Grimoire has opened, in recorded order, keeping
-// only those whose folder still exists on disk (a deleted or moved vault drops
-// out, so the list stays navigable). Returns an empty slice when none are known.
-func KnownVaults() ([]string, error) {
+// RecordedVaults returns every vault in the registry, in recorded order,
+// including ones whose folder is gone from disk. It backs the vault-management
+// surface, where an unreachable vault must still be listed — otherwise it could
+// never be forgotten. Callers that navigate to a vault want KnownVaults instead.
+func RecordedVaults() ([]string, error) {
 	root, err := Root()
 	if err != nil {
 		return nil, err
 	}
-	recorded, err := readLines(filepath.Join(root, knownVaultsFile))
+	return readLines(filepath.Join(root, knownVaultsFile))
+}
+
+// KnownVaults returns the vaults Grimoire has opened, in recorded order, keeping
+// only those whose folder still exists on disk (a deleted or moved vault drops
+// out, so the list stays navigable). Returns an empty slice when none are known.
+func KnownVaults() ([]string, error) {
+	recorded, err := RecordedVaults()
 	if err != nil {
 		return nil, err
 	}

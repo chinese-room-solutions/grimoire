@@ -1740,10 +1740,17 @@ func removeIndexFiles(path string) error {
 	return nil
 }
 
-// storePath is the index file for a model: a stable per-model name under the
-// vault's cache dir (the index is a derived, purgeable cache), so different
-// embedding models keep separate indexes.
+// storePath is the index file for a model under this service's cache dir.
 func (s *Service) storePath(model string) string {
+	return IndexPath(s.cacheDir, model)
+}
+
+// IndexPath is the index file for an embedding model: a stable per-model name
+// under a vault's cache dir (the index is a derived, purgeable cache), so
+// different embedding models keep separate indexes. Exported so a caller that
+// only wants to look at a vault's index — the vault listing stats it for a
+// last-synced time — can find it without opening the vault.
+func IndexPath(cacheDir, model string) string {
 	sum := sha1.Sum([]byte(model))
-	return filepath.Join(s.cacheDir, "index-"+hex.EncodeToString(sum[:6])+".db")
+	return filepath.Join(cacheDir, "index-"+hex.EncodeToString(sum[:6])+".db")
 }

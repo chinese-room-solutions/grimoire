@@ -50,10 +50,20 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
 - `resolve TARGET` — a wikilink or bare name (`"My Note"`, `"My Note|alias"`,
   with or without `.md`) to a real path. Use it before assuming a path; exit 3
   if nothing matches.
-- `vault tree` — the folder/note tree. `vault list` / `vault current` — which
-  vaults exist and which one a command without `--vault` acts on. `--vault`
-  targets another vault for that one command and leaves that default alone, so
-  reading around other vaults never moves what the app reopens.
+- `vault tree` — the folder/note tree. `vault current` — which vault a command
+  without `--vault` acts on. `--vault` targets another vault for that one
+  command and leaves that default alone, so reading around other vaults never
+  moves what the app reopens.
+- `vault list` — every known vault as a row: `NAME PATH AVAILABLE CHUNKS
+  LAST-SYNC MODEL`, with `*` on the current one. `AVAILABLE no` means the folder
+  is gone from disk (moved, deleted, unmounted) — it stays listed so it can be
+  forgotten, but nothing can be read from it. `CHUNKS -` means the daemon hasn't
+  opened that vault, not that its index is empty. `--json` returns the same rows
+  under a `vaults` key.
+- `vault forget PATH` — drops a vault from that list and stops serving it.
+  **Not a delete**: the folder, its notes, and its index all stay on disk, and
+  opening the path again restores everything. Use it to tidy the list, never to
+  remove notes.
 
 ## Editing
 
@@ -120,6 +130,7 @@ grimoire note get projects/ideas.md
 grimoire note edit projects/ideas.md --old "TODO: bench" --new "Benchmarked: 45ms"
 grimoire note create archive/2026/log.md --content "# Log"
 grimoire --json vault tree
+grimoire vault list                           # which vaults exist, and their state
 grimoire import notes.docx paper.pdf          # pdf needs the convert model
 grimoire reindex --force                      # only after a model change
 grimoire kernel install grimoire-kernel-go    # make ```go blocks runnable

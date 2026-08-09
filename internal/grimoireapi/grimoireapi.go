@@ -12,7 +12,6 @@ package grimoireapi
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 
 	"github.com/chinese-room-solutions/grimoire/internal/app"
@@ -40,6 +39,13 @@ type API struct {
 	// one to search, in which case a search that names no vault falls back to
 	// resolve like every other operation.
 	fanout SearchFanout
+	// live snapshots the resident runtimes by canonical vault path, so the vault
+	// listing can report an open vault's index without forcing shut ones open;
+	// nil where the daemon keeps no registry.
+	live func() map[string]*app.Service
+	// closeVault stops a vault's resident runtime; nil where there is none to
+	// stop. ForgetVault calls it before dropping the vault from the registry.
+	closeVault func(vault string)
 }
 
 // SearchFanout runs one query across every vault the daemon serves and returns
@@ -62,6 +68,15 @@ func New(
 // a daemon that serves many vaults searches them all when a caller names none.
 func (a *API) WithSearchFanout(fn SearchFanout) *API {
 	a.fanout = fn
+	return a
+}
+
+// WithVaultRegistry installs the seams onto the daemon's resident runtimes and
+// returns the API: live reads their state for the vault listing, closeVault
+// retires one when it is forgotten. Both are optional — without them the listing
+// reports only what's on disk and forgetting leaves nothing to stop.
+func (a *API) WithVaultRegistry(live func() map[string]*app.Service, closeVault func(vault string)) *API {
+	a.live, a.closeVault = live, closeVault
 	return a
 }
 
@@ -260,31 +275,4 @@ func (a *API) Screenshot(ctx context.Context, vault string) ([]byte, error) {
 		return nil, err
 	}
 	return svc.Screenshot()
-}
-
-// Vault identifies a vault an agent can navigate to: its display name (the
-// folder's base name), its absolute path (what to pass as --vault when bridging
-// to it), and whether it's the one this instance is serving.
-type Vault struct {
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	Current bool   `json:"current"`
-}
-
-// ListVaults returns the vaults Grimoire knows about (every one it has opened
-// whose folder still exists), flagging the one a caller that names no vault acts
-// on. An agent uses this to discover which vaults exist, then names one on each
-// call (or makes it the default with OpenVault). It works before any vault has
-// been opened, so it's the entry point from a fresh install.
-func (a *API) ListVaults(ctx context.Context) ([]Vault, error) {
-	paths, err := vaultdir.KnownVaults()
-	if err != nil {
-		return nil, err
-	}
-	current := a.currentVault()
-	out := make([]Vault, len(paths))
-	for i, p := range paths {
-		out[i] = Vault{Name: filepath.Base(p), Path: p, Current: p == current}
-	}
-	return out, nil
 }

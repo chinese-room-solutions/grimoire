@@ -15,6 +15,32 @@ func mountAPIVault(mux *http.ServeMux, api *grimoireapi.API, logger zerolog.Logg
 	mux.HandleFunc("GET /api/v1/vault/current", apiCurrentVaultHandler(api, logger))
 	mux.HandleFunc("POST /api/v1/vault/open", apiOpenVaultHandler(api, logger))
 	mux.HandleFunc("POST /api/v1/vault/switch", apiOpenVaultHandler(api, logger))
+	mux.HandleFunc("POST /api/v1/vault/forget", apiForgetVaultHandler(api, logger))
+}
+
+// apiForgetVaultHandler drops the vault at the posted {"path"} from the list
+// Grimoire keeps and retires its runtime. Nothing on disk is touched — the
+// folder and its notes stay — so a path that isn't known is a 200 no-op rather
+// than an error.
+func apiForgetVaultHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Path string `json:"path"`
+		}
+		if !decodeBody(w, r, &body, logger) {
+			return
+		}
+		if !requireField(w, body.Path, "path", logger) {
+			return
+		}
+		if err := api.ForgetVault(r.Context(), body.Path); err != nil {
+			writeServiceError(w, err, logger, "forget vault")
+			return
+		}
+		writeJSON(w, struct {
+			Forgotten string `json:"forgotten"`
+		}{Forgotten: body.Path}, logger)
+	}
 }
 
 // apiOpenVaultHandler opens the vault at the posted {"path"} and makes it the one

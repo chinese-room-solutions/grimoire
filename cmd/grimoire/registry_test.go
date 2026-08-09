@@ -153,6 +153,48 @@ func TestVaultRegistryRuntime(t *testing.T) {
 	})
 }
 
+// TestVaultRegistryClose covers retiring one vault (what forgetting it does):
+// its runtime leaves the registry — taking its watcher and stores with it, the
+// same stopWatch/Close pair closeAll uses — while the others keep serving, and a
+// later request for it builds a fresh runtime rather than handing back the dead
+// one.
+func TestVaultRegistryClose(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+	target := tempVault(t)
+	other := tempVault(t)
+	first, err := reg.runtime(ctx, target)
+	require.NoError(t, err)
+	keep, err := reg.runtime(ctx, other)
+	require.NoError(t, err)
+
+	reg.close(target)
+	live := reg.live()
+	require.Len(t, live, 1, "only the named vault is retired")
+	require.Contains(t, live, mustCanonical(t, other))
+
+	again, err := reg.runtime(ctx, target)
+	require.NoError(t, err)
+	require.NotSame(t, first, again, "the vault comes back as a fresh runtime")
+
+	still, err := reg.runtime(ctx, other)
+	require.NoError(t, err)
+	require.Same(t, keep, still, "the other vault was never touched")
+
+	// Nothing to retire is not an error, whatever the caller passes.
+	reg.close(target)
+	reg.close(filepath.Join(t.TempDir(), "never-open"))
+	reg.close("")
+}
+
+// mustCanonical is the registry's own key for a vault path.
+func mustCanonical(t *testing.T, vault string) string {
+	t.Helper()
+	key, err := vaultdir.Canonical(vault)
+	require.NoError(t, err)
+	return key
+}
+
 func TestVaultRegistryCloseAll(t *testing.T) {
 	reg := newVaultRegistry(testShared(t), zerolog.Nop())
 	isolateVaultDirs(t)
@@ -246,7 +288,7 @@ func TestRequestVault(t *testing.T) {
 		{
 			name: "a form POST without a vault falls back to the last-used one",
 			req: func() *http.Request {
-				r := httptest.NewRequest(http.MethodPost, "/api/open-vault", strings.NewReader("path=/x"))
+				r := httptest.NewRequest(http.MethodPost, "/api/vaults/add", strings.NewReader("path=/x"))
 				r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 				return r
 			},

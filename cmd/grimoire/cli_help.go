@@ -65,11 +65,22 @@ frontmatter wholesale — include the keys you want to keep.`},
 	{"vault tree", "vault tree", "print the vault's note tree", `
 Print the vault's folders and notes as a tree. Non-note files are omitted.`},
 
-	{"vault list", "vault list", "list known vaults (* marks current)", `
-List the vaults Grimoire knows about; * marks the current one.`},
+	{"vault list", "vault list", "list known vaults and their status", `
+List every vault Grimoire knows about, one row each: NAME, PATH, AVAILABLE
+(is the folder still on disk), CHUNKS (indexed chunks, "-" when the daemon
+hasn't opened that vault), LAST-SYNC (when its index was last written) and
+MODEL (its embedding model). * marks the vault a command without --vault acts
+on. --json returns the same rows under a "vaults" key.`},
 
 	{"vault current", "vault current", "print the current vault's path", `
 Print the current vault's absolute path.`},
+
+	{"vault forget", "vault forget PATH", "drop a vault from the list", `
+Drop a vault from the list Grimoire keeps and stop serving it. Nothing is
+deleted: the folder, its notes, and its saved index all stay on disk, and
+opening the path again brings the vault back exactly as it was. Forgetting the
+current vault repoints the default at another known one. A path Grimoire
+doesn't know is a no-op.`},
 
 	{"resolve", "resolve TARGET", "resolve a wikilink/name to a note path", `
 Resolve a wikilink or bare note name ("My Note", "My Note|alias", a relative

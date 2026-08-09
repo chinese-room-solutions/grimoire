@@ -79,7 +79,7 @@ func TestCLIHelpAfterTerminator(t *testing.T) {
 func TestCommandListCoversEveryVerb(t *testing.T) {
 	verbs := []string{
 		"search", "note get", "note create", "note update", "note edit", "note delete",
-		"note rename", "note props", "vault tree", "vault list", "vault current",
+		"note rename", "note props", "vault tree", "vault list", "vault current", "vault forget",
 		"resolve", "folder create", "folder delete", "folder rename", "import",
 		"reindex", "kernel list", "kernel install", "kernel remove",
 		"theme list", "theme install", "theme remove",

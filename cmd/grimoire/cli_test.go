@@ -367,19 +367,67 @@ func TestCLIVaultTreeIndents(t *testing.T) {
 	require.Equal(t, "folder/\n  child\ntop\n", out.String())
 }
 
-func TestCLIVaultListMarksCurrent(t *testing.T) {
-	b := newCLIBackend(t, map[string]http.HandlerFunc{
+// TestCLIVaultList covers the status table: aligned columns, "*" on the current
+// vault, "-" for anything the daemon couldn't fill, and the same rows under a
+// "vaults" key in --json (the shape the endpoint itself returns).
+func TestCLIVaultList(t *testing.T) {
+	vaults := map[string]http.HandlerFunc{
 		"GET /api/v1/vaults": func(w http.ResponseWriter, _ *http.Request) {
 			stubJSON(t, w, map[string]any{"vaults": []map[string]any{
-				{"name": "v1", "path": "/v1", "current": false},
-				{"name": "v2", "path": "/v2", "current": true},
+				{"name": "v1", "path": "/v1", "current": false, "available": true,
+					"chunks": 12, "embedModel": "embed-a", "lastSync": "2026-08-09T10:00:00Z"},
+				{"name": "v2", "path": "/v2", "current": true, "available": true},
+				{"name": "gone", "path": "/gone", "current": false, "available": false},
 			}})
 		},
+	}
+
+	t.Run("table", func(t *testing.T) {
+		b := newCLIBackend(t, vaults)
+		e, out, _ := b.env(t, false)
+		require.Equal(t, exitOK, e.dispatch([]string{"vault", "list"}))
+		require.Equal(t, strings.Join([]string{
+			"  NAME  PATH   AVAILABLE  CHUNKS  LAST-SYNC             MODEL",
+			"  v1    /v1    yes        12      2026-08-09T10:00:00Z  embed-a",
+			"* v2    /v2    yes        -       -                     -",
+			"  gone  /gone  no         -       -                     -",
+			"",
+		}, "\n"), out.String())
 	})
+
+	t.Run("json wraps the rows", func(t *testing.T) {
+		b := newCLIBackend(t, vaults)
+		e, out, _ := b.env(t, true)
+		require.Equal(t, exitOK, e.dispatch([]string{"vault", "list"}))
+		var got struct {
+			Vaults []grimoireapi.Vault `json:"vaults"`
+		}
+		require.NoError(t, json.Unmarshal(out.Bytes(), &got))
+		require.Len(t, got.Vaults, 3)
+		require.Equal(t, 12, got.Vaults[0].Chunks)
+		require.True(t, got.Vaults[1].Current)
+		require.False(t, got.Vaults[2].Available)
+	})
+}
+
+// TestCLIVaultForget checks the verb reaches the forget endpoint with the path
+// and needs exactly one argument — there is no flag to confirm, because nothing
+// is deleted.
+func TestCLIVaultForget(t *testing.T) {
+	b := newCLIBackend(t, map[string]http.HandlerFunc{
+		"POST /api/v1/vault/forget": func(w http.ResponseWriter, _ *http.Request) {
+			stubJSON(t, w, map[string]any{"forgotten": "/v1"})
+		},
+	})
+
 	e, out, _ := b.env(t, false)
-	code := e.dispatch([]string{"vault", "list"})
-	require.Equal(t, exitOK, code)
-	require.Equal(t, "  v1\t/v1\n* v2\t/v2\n", out.String())
+	require.Equal(t, exitOK, e.dispatch([]string{"vault", "forget", "/v1"}))
+	require.JSONEq(t, `{"path":"/v1"}`, b.lastBody)
+	require.Equal(t, "forgot /v1\n", out.String())
+
+	e, _, errBuf := b.env(t, false)
+	require.Equal(t, exitUsage, e.dispatch([]string{"vault", "forget"}))
+	require.Contains(t, errBuf.String(), "exactly one PATH")
 }
 
 func TestCLITrashList(t *testing.T) {

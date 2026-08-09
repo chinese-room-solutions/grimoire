@@ -145,6 +145,31 @@ func (reg *vaultRegistry) live() map[string]*grimoireapp.Service {
 	return out
 }
 
+// close retires one vault's runtime: its watcher stops, its stores close, and it
+// leaves the registry. Unlike closeAll this doesn't shut the daemon down — a
+// later request for the same vault simply builds a fresh runtime. It's what
+// forgetting a vault calls, so the daemon stops watching a folder the user no
+// longer lists. An unknown or already-retired vault is a no-op.
+func (reg *vaultRegistry) close(vault string) {
+	key, err := vaultdir.Canonical(vault)
+	if err != nil {
+		reg.logger.Warn().Err(err).Str("vault", vault).Msg("closing vault runtime")
+		return
+	}
+	reg.mu.Lock()
+	rt, ok := reg.runtimes[key]
+	delete(reg.runtimes, key)
+	reg.mu.Unlock()
+	if !ok {
+		return
+	}
+	rt.stopWatch()
+	if err := rt.svc.Close(); err != nil {
+		reg.logger.Warn().Err(err).Str("vault", vault).Msg("closing vault runtime")
+	}
+	reg.logger.Info().Str("vault", vault).Msg("vault runtime retired")
+}
+
 // closeAll stops every runtime's watcher and closes its stores, on daemon
 // shutdown. Further runtime() calls report errVaultUnavailable rather than
 // starting something nothing will close.

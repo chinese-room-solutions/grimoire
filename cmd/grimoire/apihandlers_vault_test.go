@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -14,10 +15,66 @@ import (
 // endpoints run against the daemon's own resolution.
 func newVaultMux(t *testing.T) *http.ServeMux {
 	t.Helper()
-	reg := newTestRegistry(t)
-	mux := http.NewServeMux()
-	mountAPI(mux, grimoireapi.New(reg.runtimeOrLast, reg.open), testControl(), zerolog.Nop())
+	mux, _ := newVaultMuxReg(t)
 	return mux
+}
+
+// newVaultMuxReg is newVaultMux plus the registry behind it, for the endpoints
+// whose effect shows up in the resident runtimes.
+func newVaultMuxReg(t *testing.T) (*http.ServeMux, *vaultRegistry) {
+	t.Helper()
+	reg := newTestRegistry(t)
+	api := grimoireapi.New(reg.runtimeOrLast, reg.open).WithVaultRegistry(reg.live, reg.close)
+	mux := http.NewServeMux()
+	mountAPI(mux, api, testControl(), zerolog.Nop())
+	return mux, reg
+}
+
+// TestAPIVaultsListsStatus checks the wrapped listing an agent reads: one entry
+// per known vault, with the status fields the management surfaces render.
+func TestAPIVaultsListsStatus(t *testing.T) {
+	mux, _ := newVaultMuxReg(t)
+	vault := tempVault(t)
+	require.Equal(t, http.StatusOK,
+		doJSON(t, mux, http.MethodPost, "/api/v1/vault/open", map[string]string{"path": vault}).Code)
+
+	rec := doGET(t, mux, "/api/v1/vaults")
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got struct {
+		Vaults []grimoireapi.Vault `json:"vaults"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Len(t, got.Vaults, 1)
+	require.Equal(t, vault, got.Vaults[0].Path)
+	require.True(t, got.Vaults[0].Current)
+	require.True(t, got.Vaults[0].Available)
+}
+
+// TestAPIForgetVault covers the JSON forget: the vault leaves the list and its
+// runtime is retired, the folder stays, and a path nobody knows is a 200 no-op
+// (the end state is what the caller asked for).
+func TestAPIForgetVault(t *testing.T) {
+	mux, reg := newVaultMuxReg(t)
+	vault := tempVault(t)
+	require.Equal(t, http.StatusOK,
+		doJSON(t, mux, http.MethodPost, "/api/v1/vault/open", map[string]string{"path": vault}).Code)
+	require.Len(t, reg.live(), 1)
+
+	rec := doJSON(t, mux, http.MethodPost, "/api/v1/vault/forget", map[string]string{"path": vault})
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), vault)
+	require.Empty(t, reg.live(), "the forgotten vault stops being served")
+	require.DirExists(t, vault, "forgetting deletes nothing")
+
+	rec = doGET(t, mux, "/api/v1/vaults")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotContains(t, rec.Body.String(), vault)
+
+	require.Equal(t, http.StatusOK,
+		doJSON(t, mux, http.MethodPost, "/api/v1/vault/forget", map[string]string{"path": vault}).Code,
+		"forgetting again is a no-op, not an error")
+	require.Equal(t, http.StatusBadRequest,
+		doJSON(t, mux, http.MethodPost, "/api/v1/vault/forget", map[string]string{}).Code)
 }
 
 func TestAPIOpenAndSwitchVault(t *testing.T) {
