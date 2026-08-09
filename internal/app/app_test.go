@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chinese-room-solutions/grimoire/internal/appconfig"
 	"github.com/chinese-room-solutions/grimoire/internal/frontmatter"
@@ -483,6 +485,36 @@ func TestDeleteFolder(t *testing.T) {
 	require.NoDirExists(t, filepath.Join(vault, "Code"))
 
 	require.ErrorIs(t, s.DeleteFolder(context.Background(), "../escape"), ErrOutsideVault)
+}
+
+func TestSessionTitle(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{name: "blank falls back", query: "  \n ", want: defaultSessionTitle},
+		{name: "whitespace is collapsed", query: "  what\tis\n a vault ", want: "what is a vault"},
+		{name: "a short query is kept whole", query: "vector search", want: "vector search"},
+		{
+			name:  "a long ASCII query is capped",
+			query: strings.Repeat("a", 60),
+			want:  strings.Repeat("a", 48) + "…",
+		},
+		{
+			// 60 runes, 3 bytes each: a byte cap would slice mid-character.
+			name:  "a long multibyte query is capped by runes",
+			query: strings.Repeat("私", 60),
+			want:  strings.Repeat("私", 48) + "…",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sessionTitle(tc.query)
+			require.Equal(t, tc.want, got)
+			require.True(t, utf8.ValidString(got), "the title is valid UTF-8")
+		})
+	}
 }
 
 func TestReadNote(t *testing.T) {

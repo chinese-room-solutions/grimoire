@@ -1756,16 +1756,18 @@ func (s *Service) recordTurn(turn session.Turn) {
 // with the New-session button).
 const defaultSessionTitle = "New session"
 
-// sessionTitle derives a short, length-capped session title from its first
-// search query. The user can rename later.
+// sessionTitle derives a short, rune-capped session title from its first search
+// query. The user can rename later.
 func sessionTitle(query string) string {
 	const max = 48
 	title := strings.TrimSpace(strings.Join(strings.Fields(query), " "))
 	if title == "" {
 		return defaultSessionTitle
 	}
-	if len(title) > max {
-		title = strings.TrimSpace(title[:max]) + "…"
+	// Cap by runes, not bytes: a byte slice cuts a multibyte query mid-character
+	// and stores invalid UTF-8.
+	if runes := []rune(title); len(runes) > max {
+		title = strings.TrimSpace(string(runes[:max])) + "…"
 	}
 	return title
 }
