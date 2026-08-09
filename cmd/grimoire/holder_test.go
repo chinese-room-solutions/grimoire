@@ -86,6 +86,26 @@ func TestHolderBindOverSwitchesVaultAndPortFile(t *testing.T) {
 	require.Zero(t, readPort(portFileFor(t, first)), "the old vault's advertisement is removed")
 }
 
+// Re-binding the vault that is already open keeps the live service: a rebuild
+// would close a backend that is serving, and — both bindings advertising the
+// same port file — the released old binding would delete the advertisement the
+// new one just wrote, leaving the running backend undiscoverable.
+func TestHolderBindSameVaultIsNoOp(t *testing.T) {
+	h := newTestHolder(t, 5150)
+	t.Cleanup(h.close)
+	vault := tempVault(t)
+
+	require.NoError(t, h.bind(context.Background(), vault))
+	svc := h.current()
+	rebuilds := 0
+	h.rebuild = func() { rebuilds++ }
+
+	require.NoError(t, h.bind(context.Background(), vault))
+	require.Same(t, svc, h.current(), "the live service is kept")
+	require.Zero(t, rebuilds, "no route rebuild for a vault already open")
+	require.Equal(t, 5150, readPort(portFileFor(t, vault)), "the port advertisement survives")
+}
+
 // TestHolderConcurrentReadsDuringSwap exercises the swap path under -race:
 // readers calling current() must never see a torn state while bind/unbind run.
 func TestHolderConcurrentReadsDuringSwap(t *testing.T) {

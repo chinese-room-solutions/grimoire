@@ -99,10 +99,22 @@ func (h *serviceHolder) pickFolder(title string) (string, bool, error) {
 }
 
 // bind opens vault and makes it the current binding, replacing and closing any
-// previous one. The new service is fully live (stores open, watcher running, port
-// advertised) before the old one is torn down, so in-flight requests against the
-// old service finish cleanly. A no-op when vault is already current.
+// previous one. A no-op when vault is already the current one — rebuilding it
+// would tear down a live backend and, since both bindings advertise the same
+// port file, leave the vault with no port advertisement at all.
+//
+// The new service is fully live (stores open, watcher running, port advertised)
+// before the old one is torn down, so a request arriving after the swap gets the
+// new service; requests already in flight against the old one race its close —
+// there is no draining.
 func (h *serviceHolder) bind(ctx context.Context, vault string) error {
+	h.mu.Lock()
+	same := h.cur != nil && h.curVault == vault
+	h.mu.Unlock()
+	if same {
+		return nil
+	}
+
 	dir, err := vaultdir.For(vault)
 	if err != nil {
 		return err
