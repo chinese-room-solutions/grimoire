@@ -259,6 +259,49 @@ func TestSearch_ExactKeywordWinsRRFTie(t *testing.T) {
 	require.Equal(t, "vectop.md", hits[1].Path)
 }
 
+// Every hit reports the 1-based rank it held in each leg, 0 where it was
+// absent — the input a caller needs to re-fuse hits from several stores.
+func TestSearch_ReportsPerLegRanks(t *testing.T) {
+	s := openTemp(t, 2)
+	// "ulid-spec.md" matches the query in its path (the heaviest BM25 column),
+	// so it leads the keyword leg; its vector is orthogonal, banding it out of
+	// the vector leg entirely.
+	require.NoError(t, s.ReplaceNote("ulid-spec.md", []Chunk{
+		{Path: "ulid-spec.md", Index: 0, Text: "ULID identifiers", DocHash: "h", Vector: vec(0, 1)},
+	}))
+	require.NoError(t, s.ReplaceNote("both.md", []Chunk{
+		{Path: "both.md", Index: 0, Text: "we picked ULID", DocHash: "h", Vector: vec(1, 0)},
+	}))
+	require.NoError(t, s.ReplaceNote("vec-only.md", []Chunk{
+		{Path: "vec-only.md", Index: 0, Text: "generic prose", DocHash: "h", Vector: vec(0.99, 0.14106736)},
+	}))
+
+	hits, err := s.Search("ULID", vec(1, 0), SearchOptions{K: 5, TopRatio: 0.88})
+	require.NoError(t, err)
+	byPath := make(map[string]Hit, len(hits))
+	for _, h := range hits {
+		byPath[h.Path] = h
+	}
+	require.Len(t, byPath, 3)
+
+	tests := []struct {
+		path    string
+		vecRank int
+		ftsRank int
+	}{
+		{"both.md", 1, 2},      // both legs: vector rank 1 (sim 1.0), keyword runner-up.
+		{"vec-only.md", 2, 0},  // vector only: no keyword match.
+		{"ulid-spec.md", 0, 1}, // keyword only: banded out of the vector leg.
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			h := byPath[tt.path]
+			require.Equal(t, tt.vecRank, h.VecRank)
+			require.Equal(t, tt.ftsRank, h.FTSRank)
+		})
+	}
+}
+
 func TestSearch_BandFiltersVectorLeg(t *testing.T) {
 	s := openTemp(t, 2)
 	require.NoError(t, s.ReplaceNote("top.md", []Chunk{

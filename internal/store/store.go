@@ -60,9 +60,16 @@ type Chunk struct {
 // Hit is a search result: a chunk plus its cosine similarity to the query in
 // [-1, 1] (1 == identical direction). Similarity is 0 for hits surfaced only
 // by the keyword leg — they matched exact terms, not the embedding.
+//
+// The per-leg ranks are what a caller needs to re-fuse hits from several
+// stores: similarity scores from different embedding models are not
+// comparable, but rank positions are, so a cross-vault search fuses on
+// 1/(60+rank) per leg rather than on Similarity.
 type Hit struct {
 	Chunk
 	Similarity float64
+	VecRank    int // 1-based rank in the vector leg; 0 = absent from that leg.
+	FTSRank    int // 1-based rank in the keyword (FTS) leg; 0 = absent.
 }
 
 // SearchOptions are the relevance knobs the caller passes into a hybrid
@@ -467,12 +474,16 @@ func sanitizeFTSQuery(query string) string {
 
 // fuse merges the two legs with Reciprocal Rank Fusion and loads the chunk
 // metadata for every fused id in one query. Hits present in the vector leg
-// carry their cosine similarity; keyword-only hits report 0.
+// carry their cosine similarity; keyword-only hits report 0. Each hit also
+// reports the 1-based rank it held in either leg, so callers can re-fuse
+// results from several stores (see Hit).
 func (s *Store) fuse(vecHits []scored, ftsIDs []int64) ([]Hit, error) {
 	type fused struct {
-		score float64
-		fts   float64 // the keyword leg's share of score, for tie-breaking.
-		sim   float64
+		score   float64
+		fts     float64 // the keyword leg's share of score, for tie-breaking.
+		sim     float64
+		vecRank int
+		ftsRank int
 	}
 	byID := make(map[int64]*fused, len(vecHits)+len(ftsIDs))
 	at := func(id int64) *fused {
@@ -487,12 +498,14 @@ func (s *Store) fuse(vecHits []scored, ftsIDs []int64) ([]Hit, error) {
 		f := at(h.id)
 		f.score += 1 / float64(rrfK+rank+1)
 		f.sim = h.sim
+		f.vecRank = rank + 1
 	}
 	for rank, id := range ftsIDs {
 		f := at(id)
 		contrib := 1 / float64(rrfK+rank+1)
 		f.score += contrib
 		f.fts = contrib
+		f.ftsRank = rank + 1
 	}
 	if len(byID) == 0 {
 		return nil, nil
@@ -516,7 +529,9 @@ func (s *Store) fuse(vecHits []scored, ftsIDs []int64) ([]Hit, error) {
 		if err := rows.Scan(&h.ID, &h.Path, &h.Index, &h.Heading, &h.Text, &h.DocHash); err != nil {
 			return nil, fmt.Errorf("scanning fused hit: %w", err)
 		}
-		h.Similarity = byID[h.ID].sim
+		f := byID[h.ID]
+		h.Similarity = f.sim
+		h.VecRank, h.FTSRank = f.vecRank, f.ftsRank
 		hits = append(hits, h)
 	}
 	if err := rows.Err(); err != nil {
