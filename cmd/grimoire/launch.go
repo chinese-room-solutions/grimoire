@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/chinese-room-solutions/grimoire/internal/apiclient"
@@ -14,10 +15,12 @@ import (
 )
 
 // signalContext returns a context cancelled on Ctrl-C / SIGTERM, for the
-// long-running headless serve subcommand. Call the returned stop to release the
-// signal handler.
+// long-running headless serve subcommand — SIGTERM is how a container or a
+// service manager stops it. Call the returned stop to release the signal
+// handler. Windows never delivers SIGTERM, so registering it is simply inert
+// there.
 func signalContext() (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(context.Background(), os.Interrupt)
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
 // headlessIdleTimeout is how long a CLI-spawned headless backend stays up after
