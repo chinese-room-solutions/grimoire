@@ -60,7 +60,7 @@ func TestAPIImportBatchPartialFailure(t *testing.T) {
 	svc := app.New(testShared(t), t.TempDir(), t.TempDir(), vault, zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	mux := http.NewServeMux()
-	mountAPI(mux, grimoireapi.NewStatic(svc), zerolog.Nop())
+	mountAPI(mux, grimoireapi.NewStatic(svc), testControl(), zerolog.Nop())
 
 	rec := doImport(t, mux, []importFile{
 		{"a.md", "# A\n"},

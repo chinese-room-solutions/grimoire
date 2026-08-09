@@ -95,7 +95,7 @@ func noteRenderer(svc *app.Service) ui.NoteRenderer {
 // picker, settings, the MASS connection, the agent JSON API) directly, and the
 // per-vault action surface through vaultMux, which resolves the vault each
 // request names.
-func grimoireRoutes(reg *vaultRegistry, api *grimoireapi.API, appDir string, settings *masgui.Settings, connCfg masgui.ConnectionConfig, store *connstore.Store, client *app.GatewayClient, logger zerolog.Logger) http.Handler {
+func grimoireRoutes(reg *vaultRegistry, api *grimoireapi.API, ctl *daemonControl, appDir string, settings *masgui.Settings, connCfg masgui.ConnectionConfig, store *connstore.Store, client *app.GatewayClient, logger zerolog.Logger) http.Handler {
 	logger = logger.With().Str("component", "gui").Logger()
 	mux := http.NewServeMux()
 	vm := vaultMux{mux: mux, reg: reg, logger: logger}
@@ -179,7 +179,7 @@ func grimoireRoutes(reg *vaultRegistry, api *grimoireapi.API, appDir string, set
 
 	// Read/write JSON HTTP surface for external consumers (the CLI is built on it),
 	// over the registry-backed grimoireapi operations.
-	mountAPI(mux, api, logger)
+	mountAPI(mux, api, ctl, logger)
 
 	return mux
 }

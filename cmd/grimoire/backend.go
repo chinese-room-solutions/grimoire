@@ -144,15 +144,19 @@ func startBackend(logger zerolog.Logger, idleTimeout time.Duration) (*backend, e
 		Logger: logger,
 	}
 
-	// Routes are static: the daemon serves every vault, and each request names the
-	// one it acts on, so there is nothing to rebuild.
-	mux := buildMux(grimoireRoutes(reg, api, appDir, settings, connCfg, store, client, logger).ServeHTTP, port)
-
+	// The server exists before its routes: the control surface they mount (ping,
+	// shutdown, the closing signal) is the server's own.
 	server := &http.Server{
-		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	ctl := newDaemonControl(version, server, logger)
+
+	// Routes are static: the daemon serves every vault, and each request names the
+	// one it acts on, so there is nothing to rebuild.
+	mux := buildMux(grimoireRoutes(reg, api, ctl, appDir, settings, connCfg, store, client, logger).ServeHTTP, port)
+	server.Handler = mux
+
 	// When an idle timeout is set (the CLI's on-demand `serve` path), shut the
 	// daemon down after a quiet spell so an on-demand instance doesn't linger once
 	// the agent stops calling it. A request holds the countdown for as long as it
@@ -162,9 +166,7 @@ func startBackend(logger zerolog.Logger, idleTimeout time.Duration) (*backend, e
 	if idleTimeout > 0 {
 		idle = newIdleTracker(idleTimeout, reg.busyKernels, func() {
 			logger.Info().Dur("idle", idleTimeout).Msg("idle timeout reached; shutting down headless backend")
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = server.Shutdown(shutdownCtx)
+			ctl.stopGracefully()
 		})
 		server.Handler = idle.wrap(mux)
 	}
@@ -212,9 +214,7 @@ func startBackend(logger zerolog.Logger, idleTimeout time.Duration) (*backend, e
 				idle.stop()
 			}
 			stopWarm()
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = server.Shutdown(shutdownCtx)
+			ctl.stopGracefully()
 			<-done // wait for Serve to return.
 			if portFile != "" {
 				removePortFile(portFile)

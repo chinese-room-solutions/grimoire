@@ -16,7 +16,7 @@ func newVaultMux(t *testing.T) *http.ServeMux {
 	t.Helper()
 	reg := newTestRegistry(t)
 	mux := http.NewServeMux()
-	mountAPI(mux, grimoireapi.New(reg.runtimeOrLast, reg.open), zerolog.Nop())
+	mountAPI(mux, grimoireapi.New(reg.runtimeOrLast, reg.open), testControl(), zerolog.Nop())
 	return mux
 }
 

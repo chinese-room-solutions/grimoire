@@ -20,7 +20,7 @@ func newMultiVaultMux(t *testing.T) *http.ServeMux {
 	t.Helper()
 	reg := newTestRegistry(t)
 	mux := http.NewServeMux()
-	mountAPI(mux, grimoireapi.New(reg.runtimeOrLast, reg.open), zerolog.Nop())
+	mountAPI(mux, grimoireapi.New(reg.runtimeOrLast, reg.open), testControl(), zerolog.Nop())
 	return mux
 }
 
@@ -120,7 +120,7 @@ func TestGUIRouteResolvesTheVaultFromTheSignal(t *testing.T) {
 func TestAPIFallsBackToTheLastUsedVault(t *testing.T) {
 	reg := newTestRegistry(t)
 	mux := http.NewServeMux()
-	mountAPI(mux, grimoireapi.New(reg.runtimeOrLast, reg.open), zerolog.Nop())
+	mountAPI(mux, grimoireapi.New(reg.runtimeOrLast, reg.open), testControl(), zerolog.Nop())
 
 	vault := seedVault(t, map[string]string{"n.md": "# N\n"})
 	require.NoError(t, vaultdir.SetLastVault(vault))

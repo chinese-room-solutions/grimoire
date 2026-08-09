@@ -124,7 +124,7 @@ func newKernelEnv(t *testing.T, registryURL string) *kernelTestEnv {
 	env.svc = app.New(env.newShared(t, registryURL), env.configDir, t.TempDir(), t.TempDir(), zerolog.Nop())
 	t.Cleanup(func() { _ = env.svc.Close() })
 	env.mux = http.NewServeMux()
-	mountAPI(env.mux, grimoireapi.NewStatic(env.svc), zerolog.Nop())
+	mountAPI(env.mux, grimoireapi.NewStatic(env.svc), testControl(), zerolog.Nop())
 	return env
 }
 
@@ -355,7 +355,7 @@ func TestAPIKernelListVaultShadowsShared(t *testing.T) {
 	env.svc = app.New(env.newShared(t, reg.url()), configDir, t.TempDir(), t.TempDir(), zerolog.Nop())
 	t.Cleanup(func() { _ = env.svc.Close() })
 	env.mux = http.NewServeMux()
-	mountAPI(env.mux, grimoireapi.NewStatic(env.svc), zerolog.Nop())
+	mountAPI(env.mux, grimoireapi.NewStatic(env.svc), testControl(), zerolog.Nop())
 
 	// Installing the same family/version into the shared dir still succeeds —
 	// other vaults see it — but this vault keeps resolving its own copy.

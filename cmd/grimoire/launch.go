@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -121,6 +124,66 @@ const (
 	launchTimeout = 30 * time.Second
 	launchPoll    = 100 * time.Millisecond
 )
+
+// daemonProbeTimeout bounds a ping or a stop request against the advertised
+// port. The daemon is on loopback and answers both without touching a vault, so
+// a slow answer means a wedged process, not a busy one.
+const daemonProbeTimeout = 2 * time.Second
+
+// daemonVersion asks the daemon on port which build it is running.
+func daemonVersion(ctx context.Context, port int) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, daemonProbeTimeout)
+	defer cancel()
+	resp, err := daemonRequest(ctx, http.MethodGet, port, "/api/v1/ping")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("pinging the daemon: status %d", resp.StatusCode)
+	}
+	var out struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&out); err != nil {
+		return "", fmt.Errorf("decoding the daemon's ping: %w", err)
+	}
+	return out.Version, nil
+}
+
+// requestDaemonShutdown asks the daemon on port to retire gracefully. It returns
+// once the daemon has accepted; the stop itself runs after the response.
+func requestDaemonShutdown(ctx context.Context, port int) error {
+	ctx, cancel := context.WithTimeout(ctx, daemonProbeTimeout)
+	defer cancel()
+	resp, err := daemonRequest(ctx, http.MethodPost, port, "/api/v1/shutdown")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("asking the daemon to stop: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// daemonRequest issues one bodiless request against a daemon's loopback API.
+func daemonRequest(ctx context.Context, method string, port int, path string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, daemonURL(port, path), nil)
+	if err != nil {
+		return nil, fmt.Errorf("building the daemon request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s %s: %w", method, path, err)
+	}
+	return resp, nil
+}
+
+// daemonURL is an absolute URL for one of the daemon's routes on port.
+func daemonURL(port int, path string) string {
+	return fmt.Sprintf("http://127.0.0.1:%d%s", port, path)
+}
 
 // connectDaemon returns an API client for the running Grimoire daemon, launching
 // a headless one on demand when none is up. It reads the advertised port from the

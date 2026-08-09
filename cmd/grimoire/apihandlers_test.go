@@ -31,7 +31,7 @@ func newAPIMux(t *testing.T, notes map[string]string) *http.ServeMux {
 	svc := app.New(testShared(t), t.TempDir(), t.TempDir(), vault, zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	mux := http.NewServeMux()
-	mountAPI(mux, grimoireapi.NewStatic(svc), zerolog.Nop())
+	mountAPI(mux, grimoireapi.NewStatic(svc), testControl(), zerolog.Nop())
 	return mux
 }
 
@@ -178,7 +178,7 @@ func TestAPIScreenshot(t *testing.T) {
 	shared.SetScreenshotter(func() ([]byte, error) { return want, nil })
 
 	mux := http.NewServeMux()
-	mountAPI(mux, grimoireapi.NewStatic(svc), zerolog.Nop())
+	mountAPI(mux, grimoireapi.NewStatic(svc), testControl(), zerolog.Nop())
 
 	rec := doGET(t, mux, "/api/v1/screenshot")
 	require.Equal(t, http.StatusOK, rec.Code)
