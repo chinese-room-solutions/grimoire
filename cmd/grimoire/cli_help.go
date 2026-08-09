@@ -138,6 +138,19 @@ Permanently remove one item from the trash. This is not recoverable.`},
 	{"trash empty", "trash empty", "permanently empty the trash", `
 Permanently remove everything in the trash. This is not recoverable.`},
 
+	{"skill show", "skill show", "print the agent skill file", `
+Print the agent skill — the Markdown instruction file that teaches an AI agent
+to drive this CLI — to stdout, undecorated so it pipes. A bare "grimoire skill"
+does the same. It ships inside the binary, so it always documents this build.
+The file is agent-neutral: any agent that reads Markdown instructions can use it.`},
+
+	{"skill install", "skill install DIR", "write the agent skill into DIR", `
+Write the agent skill to DIR/grimoire-cli/SKILL.md, creating the directories as
+needed. DIR is wherever your agent discovers skills — this command has no
+built-in default and assumes no particular agent. An existing file is
+overwritten: reinstalling after an upgrade is how the instructions stay in step
+with the verbs. Needs no vault, so it works on a fresh install.`},
+
 	{"screenshot", "screenshot [-o out.png]", "capture the app window (GUI only)", `
 Capture the app window to a PNG. Needs a running GUI window — it fails under a
 headless backend.`},
@@ -175,8 +188,8 @@ func printHelp(w io.Writer, chain []string) bool {
 	}
 	for _, c := range commands {
 		if c.Name == prefix {
-			_, _ = fmt.Fprintf(w, "%s\n%s\n\nGlobal flags: --vault PATH, --json (before the command)\n",
-				c.Synopsis, strings.TrimRight(c.Detail, "\n"))
+			_, _ = fmt.Fprintf(w, "%s\n%s\n\n%s\n",
+				c.Synopsis, strings.TrimRight(c.Detail, "\n"), globalFlagsLine(c.Name))
 			return true
 		}
 	}
@@ -197,6 +210,17 @@ func printHelp(w io.Writer, chain []string) bool {
 	}
 	_, _ = fmt.Fprintf(w, "\nRun `grimoire %s <sub> --help` for one command's detail.\n", prefix)
 	return true
+}
+
+// globalFlagsLine is the footer under one command's help: the global flags that
+// reach it. A verb that resolves no vault ignores --vault, so naming it there
+// would send the reader looking for an effect it can't have.
+func globalFlagsLine(name string) string {
+	verb, _, _ := strings.Cut(name, " ")
+	if !needsVault(verb) {
+		return "Global flags: --json (before the command)"
+	}
+	return "Global flags: --vault PATH, --json (before the command)"
 }
 
 // commandList renders the Commands: block of the top-level usage from the same

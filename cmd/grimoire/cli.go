@@ -65,6 +65,14 @@ func runCLIWith(args []string, out, errW io.Writer) int {
 		return exitUsage
 	}
 
+	env := &cliEnv{out: out, err: errW, json: *jsonOut}
+	// A verb that reads nothing but the binary itself runs before the vault is
+	// resolved: a fresh install has no vault yet, and `skill` is exactly what a
+	// user reaches for at that point.
+	if !needsVault(rest[0]) {
+		return env.dispatch(rest)
+	}
+
 	vault, err := resolveVault(*vaultFlag)
 	if err != nil {
 		_, _ = fmt.Fprintf(errW, "error: %v\n", err)
@@ -75,16 +83,16 @@ func runCLIWith(args []string, out, errW io.Writer) int {
 		return exitUsage
 	}
 
-	env := &cliEnv{
-		out:     out,
-		err:     errW,
-		json:    *jsonOut,
-		vault:   vault,
-		connect: func(ctx context.Context) (*apiclient.Client, error) { return connectVault(ctx, vault) },
-		respawn: func(ctx context.Context) (*apiclient.Client, error) { return respawnVault(ctx, vault) },
-	}
+	env.vault = vault
+	env.connect = func(ctx context.Context) (*apiclient.Client, error) { return connectVault(ctx, vault) }
+	env.respawn = func(ctx context.Context) (*apiclient.Client, error) { return respawnVault(ctx, vault) }
 	return env.dispatch(rest)
 }
+
+// needsVault reports whether a verb acts on a vault, and so must resolve one
+// before dispatch. Every verb does except skill, which only prints or copies a
+// file compiled into the binary.
+func needsVault(verb string) bool { return verb != "skill" }
 
 // firstNonFlagIndex returns the index of the first argument that isn't a global
 // flag (or its value), which is the subcommand, or -1 when there is none. main
@@ -145,6 +153,8 @@ func (e *cliEnv) dispatch(args []string) int {
 		return e.runTheme(args[1:])
 	case "resolve":
 		return e.runResolve(args[1:])
+	case "skill":
+		return e.runSkill(args[1:])
 	case "screenshot":
 		return e.runScreenshot(args[1:])
 	default:

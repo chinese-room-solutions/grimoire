@@ -37,6 +37,32 @@ func TestCLIHelp(t *testing.T) {
 	}
 }
 
+// TestCLIHelpGlobalFlags: the footer names only the flags that reach the
+// command. skill resolves no vault, so --vault must not appear under it.
+func TestCLIHelpGlobalFlags(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantVault bool
+	}{
+		{"vault verb", []string{"note", "get", "--help"}, true},
+		{"vault-less verb", []string{"skill", "install", "--help"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newCLIBackend(t, nil)
+			e, out, _ := b.env(t, false)
+			require.Equal(t, exitOK, e.dispatch(tt.args))
+			require.Contains(t, out.String(), "--json (before the command)")
+			if tt.wantVault {
+				require.Contains(t, out.String(), "--vault PATH")
+			} else {
+				require.NotContains(t, out.String(), "--vault")
+			}
+		})
+	}
+}
+
 // TestCLIHelpAfterTerminator: "--" ends the flags, so a note literally named
 // --help is still addressable.
 func TestCLIHelpAfterTerminator(t *testing.T) {
@@ -58,6 +84,7 @@ func TestCommandListCoversEveryVerb(t *testing.T) {
 		"reindex", "kernel list", "kernel install", "kernel remove",
 		"theme list", "theme install", "theme remove",
 		"trash list", "trash restore", "trash delete", "trash empty",
+		"skill show", "skill install",
 		"screenshot", "serve",
 	}
 	documented := make(map[string]bool, len(commands))

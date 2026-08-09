@@ -176,20 +176,22 @@ spawn uses `2m`).
 
 ### For AI agents
 
-Point your agent at the [`grimoire-cli` skill](.claude/skills/grimoire-cli/SKILL.md),
+Point your agent at the [`grimoire-cli` skill](skills/grimoire-cli/SKILL.md),
 which covers vault targeting, the output contract, and the editing and search
 guidance an agent needs.
 
-The skill is a plain Markdown instruction file — any agent can use it: point
-yours at `SKILL.md` directly, or install it wherever your agent discovers
-skills. With Claude Code, for example, it's picked up automatically when
-working inside this repo; for other projects copy (or symlink) the skill
-directory into the project's `.claude/skills/grimoire-cli/`, or install it
-user-wide so every project sees it:
+The skill is a plain Markdown instruction file, tied to no particular agent, and
+it ships inside the binary — so it documents the verbs your build actually has,
+with no checkout required:
 
 ```bash
-cp -r .claude/skills/grimoire-cli ~/.claude/skills/
+grimoire skill                    # print it (pipe it wherever you like)
+grimoire skill install <dir>      # write it to <dir>/grimoire-cli/SKILL.md
 ```
+
+`<dir>` is whatever directory your agent discovers skills in — there is no
+default, and no vault is needed, so this works on a fresh install. Reinstall
+after upgrading Grimoire: an old copy describes verbs that may have moved.
 
 ### JSON HTTP API
 
