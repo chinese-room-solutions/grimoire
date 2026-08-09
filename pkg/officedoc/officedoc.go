@@ -197,9 +197,13 @@ func emphasize(text string, bold, italic bool) string {
 }
 
 // escapeMarkdown escapes the characters that would otherwise be read as Markdown
-// syntax in body text. Kept minimal: the markers our converters insert (** _ [])
-// are escaped so source text containing them stays literal, plus backslash and
-// the line-leading characters that start blocks.
+// syntax in body text: the inline markers our converters insert (** _ [] `) so
+// source text containing them stays literal, plus the backslash that escapes
+// them. It runs per run/span, with no idea where a line begins, so the
+// block-leading characters (# > + -) are left alone — escaping them everywhere
+// would mangle hyphens and pluses mid-sentence, and a paragraph that really does
+// start with "# " or "- " is text drawing its own structure, which the heuristics
+// in finishParagraph are meant to recover.
 func escapeMarkdown(s string) string {
 	return markdownEscaper.Replace(s)
 }
