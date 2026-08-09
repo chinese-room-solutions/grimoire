@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/chinese-room-solutions/grimoire/internal/apiclient"
 	"github.com/stretchr/testify/require"
@@ -499,6 +500,28 @@ func TestParseFlags(t *testing.T) {
 			require.Equal(t, tt.wantPos, pos)
 			require.Equal(t, tt.wantContent, *content)
 			require.Equal(t, tt.wantAll, *all)
+		})
+	}
+}
+
+// firstLine caps the snippet by rune: a byte-wise cut would land inside a
+// multibyte character and emit invalid UTF-8.
+func TestFirstLine(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{"trimmed to the first line", "  head\ntail  ", "head"},
+		{"short multibyte text is untouched", "проверка", "проверка"},
+		{"blank text yields nothing", " \n ", ""},
+		{"long multibyte text is cut at 120 runes", strings.Repeat("я", 130), strings.Repeat("я", 120) + "…"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := firstLine(tt.text)
+			require.Equal(t, tt.want, got)
+			require.True(t, utf8.ValidString(got), "the snippet stays valid UTF-8")
 		})
 	}
 }

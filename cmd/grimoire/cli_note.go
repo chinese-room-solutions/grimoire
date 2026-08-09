@@ -53,16 +53,16 @@ func (e *cliEnv) runSearch(args []string) int {
 }
 
 // firstLine is a one-line snippet of a hit's chunk text for the human view,
-// collapsed to a single trimmed line and capped so a long chunk doesn't flood
-// the terminal.
+// collapsed to a single trimmed line and capped (in runes, so the cut can't
+// split a multibyte character) so a long chunk doesn't flood the terminal.
 func firstLine(text string) string {
 	line := strings.TrimSpace(text)
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = line[:i]
 	}
-	const cap = 120
-	if len(line) > cap {
-		line = line[:cap] + "…"
+	const maxRunes = 120
+	if r := []rune(line); len(r) > maxRunes {
+		line = string(r[:maxRunes]) + "…"
 	}
 	return line
 }
