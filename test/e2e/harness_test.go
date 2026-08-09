@@ -230,10 +230,14 @@ func scratchEnv(scratch string) (env []string, cfgRoot string) {
 }
 
 // startServer seeds a scratch vault with the given notes (rel path → content),
-// then runs `grimoire serve --vault` with scratch HOME/XDG dirs and an
-// unreachable gateway (deterministic no-gateway behavior), discovers the
-// backend's port from <config>/grimoire/vaults/<hash>/singleton.port, and waits
-// for the page to answer. The process is stopped on cleanup by handle.
+// then runs `grimoire serve` with scratch HOME/XDG dirs and an unreachable
+// gateway (deterministic no-gateway behavior), discovers the daemon's port from
+// <config>/grimoire/app/daemon.port, and waits for the page to answer. The
+// process is stopped on cleanup by handle.
+//
+// The daemon serves every vault and resolves one per request, so there is no
+// --vault to pass: the scratch vault is recorded as the last-used one before the
+// process starts, which is what a bare page load (and a bare CLI verb) resolves.
 //
 // appCfg, when given, is written as the app-level grimoire.json before the
 // server starts — the way a test points the backend at a stub package registry
@@ -255,7 +259,8 @@ func startServer(t *testing.T, notes map[string]string, appCfg ...map[string]str
 	for _, cfg := range appCfg {
 		writeAppConfig(t, cfgRoot, cfg)
 	}
-	cmd := exec.Command(grimoireBin(t), "serve", "--vault", vault)
+	writeLastVault(t, cfgRoot, vault)
+	cmd := exec.Command(grimoireBin(t), "serve")
 	cmd.Env = env
 	logf, err := os.Create(filepath.Join(scratch, "serve.stderr"))
 	if err != nil {
@@ -271,22 +276,20 @@ func startServer(t *testing.T, notes map[string]string, appCfg ...map[string]str
 		_ = logf.Close()
 	})
 
-	// The backend advertises its ephemeral loopback port (never a fixed one) in
-	// the per-vault data dir; the vault dir name is a path hash, so glob it.
+	// One daemon per user, so one advertisement: the app dir's daemon.port, holding
+	// "port pid". The port itself is ephemeral (never a fixed one).
+	portFile := filepath.Join(cfgRoot, "grimoire", "app", "daemon.port")
 	var port int
-	poll(t, "singleton.port to appear", func() (bool, string) {
-		matches, _ := filepath.Glob(filepath.Join(cfgRoot, "grimoire", "vaults", "*", "singleton.port"))
-		for _, m := range matches {
-			data, err := os.ReadFile(m)
-			if err != nil {
-				continue
-			}
-			var pid int
-			if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d %d", &port, &pid); err == nil && port > 0 {
-				return true, ""
-			}
+	poll(t, "daemon.port to appear", func() (bool, string) {
+		data, err := os.ReadFile(portFile)
+		if err != nil {
+			return false, "no port file at " + portFile
 		}
-		return false, "no parseable port file under " + cfgRoot
+		var pid int
+		if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d %d", &port, &pid); err != nil || port == 0 {
+			return false, "unparseable port file: " + strings.TrimSpace(string(data))
+		}
+		return true, ""
 	})
 
 	s := &server{
@@ -349,6 +352,23 @@ func writeAppConfig(t *testing.T, cfgRoot string, cfg map[string]string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "grimoire.json"), data, 0o600); err != nil {
 		t.Fatalf("writing app config: %v", err)
+	}
+}
+
+// writeLastVault seeds the last-vault pointer (and the known-vaults registry the
+// empty-state picker reads) under a scratch config root, before the daemon
+// starts. It is what a bare page load and a bare CLI verb resolve to, and it also
+// makes the daemon warm the vault at startup.
+func writeLastVault(t *testing.T, cfgRoot, vault string) {
+	t.Helper()
+	dir := filepath.Join(cfgRoot, "grimoire")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("creating grimoire config dir: %v", err)
+	}
+	for name, content := range map[string]string{"last-vault": vault, "known-vaults": vault + "\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
 	}
 }
 
