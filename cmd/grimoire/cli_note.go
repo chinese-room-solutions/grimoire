@@ -45,7 +45,11 @@ func (e *cliEnv) runSearch(args []string) int {
 		e.outln("no results")
 		return exitOK
 	}
+	headers := modelHeaders(res.Hits)
 	for i, h := range res.Hits {
+		if header := headers[i]; header != "" {
+			e.outln(header)
+		}
 		e.outf("%d. %s  (%.3f)\n", i+1, hitLabel(h, e.vault), h.Similarity)
 		if h.Heading != "" {
 			e.outf("   %s\n", h.Heading)
@@ -55,6 +59,49 @@ func (e *cliEnv) runSearch(args []string) int {
 		}
 	}
 	return exitOK
+}
+
+// modelHeaders returns, per hit position, the group header to print above it —
+// empty for every position but the first of each model's run. Hits arrive
+// grouped by the model that ranked them, and only within a group are the
+// similarities comparable, so a result set spanning two models says where one
+// ranking ends and the next begins. One model needs no saying: no headers.
+func modelHeaders(hits []grimoireapi.Hit) []string {
+	out := make([]string, len(hits))
+	models := map[string]bool{}
+	for _, h := range hits {
+		models[h.Model] = true
+	}
+	if len(models) < 2 {
+		return out
+	}
+	for start := 0; start < len(hits); {
+		end := start + 1
+		for end < len(hits) && hits[end].Model == hits[start].Model {
+			end++
+		}
+		out[start] = groupHeader(hits[start:end])
+		start = end
+	}
+	return out
+}
+
+// groupHeader names one model group: the vaults its hits came from, and the
+// model that ranked them ("keyword only" when none did).
+func groupHeader(hits []grimoireapi.Hit) string {
+	var names []string
+	seen := map[string]bool{}
+	for _, h := range hits {
+		if name := vaultdir.Name(h.Vault); !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	model := hits[0].Model
+	if model == "" {
+		model = "keyword only"
+	}
+	return fmt.Sprintf("— vaults %s (%s)", strings.Join(names, ", "), model)
 }
 
 // hitLabel names a hit's note: bare when the search was narrowed to one vault

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -150,10 +151,29 @@ func hitPaths(hits []vaultHit) []string {
 
 // ── fusion ───────────────────────────────────────────────────────────
 
-// The regression guard: re-fusing one vault's hits must reproduce that vault's
-// own ranking exactly. Cross-vault fusion runs on every search, so a search of a
+// fuseOpts are the relevance knobs the fusion tests run under, the app's own.
+var fuseOpts = store.SearchOptions{K: 10, MinSim: 0.5, TopRatio: 0.88}
+
+// vaultsOf lists a fixture's vaults the way fuseGroup takes them.
+func vaultsOf(results map[string]legs) []string {
+	out := make([]string, 0, len(results))
+	for vault := range results {
+		out = append(out, vault)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// fuseOne fuses a fixture as one model group and returns its ranking.
+func fuseOne(results map[string]legs, opts store.SearchOptions) []vaultHit {
+	hits, _ := fuseGroup(results, vaultsOf(results), "model-x", opts)
+	return hits
+}
+
+// The regression guard: fusing one vault's legs must reproduce that vault's own
+// ranking exactly. Cross-vault fusion runs on every search, so a search of a
 // single vault must rank precisely as it did before there was such a thing.
-func TestFuse_SingleVaultReproducesTheStoreOrder(t *testing.T) {
+func TestFuseGroup_SingleVaultReproducesTheStoreOrder(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "index.db"), 2, "")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, st.Close()) })
@@ -177,111 +197,250 @@ func TestFuse_SingleVaultReproducesTheStoreOrder(t *testing.T) {
 		require.NoError(t, st.ReplaceNote(path, chunks))
 	}
 
-	want, err := st.Search("ULID", []float32{1, 0}, store.SearchOptions{K: 10, MinSim: 0.5, TopRatio: 0.88})
+	want, err := st.Search("ULID", []float32{1, 0}, fuseOpts)
 	require.NoError(t, err)
 	require.NotEmpty(t, want)
 
-	got := fuse(map[string][]store.Hit{"/vaults/notes": want}, 10)
+	vec, fts, err := st.SearchLegs("ULID", []float32{1, 0}, fuseOpts)
+	require.NoError(t, err)
+	got := fuseOne(map[string]legs{"/vaults/notes": {vec: vec, fts: fts}}, fuseOpts)
 	require.Len(t, got, len(want))
 	for i := range want {
 		require.Equal(t, want[i].Path, got[i].Path, "position %d", i)
 		require.Equal(t, want[i].Index, got[i].Index, "position %d", i)
 		require.Equal(t, "/vaults/notes", got[i].Vault)
+		require.Equal(t, "model-x", got[i].Model)
 	}
 }
 
-func TestFuse_CrossVault(t *testing.T) {
-	hit := func(path string, idx, vecRank, ftsRank int) store.Hit {
-		return store.Hit{
-			Chunk:   store.Chunk{Path: path, Index: idx},
-			VecRank: vecRank,
-			FTSRank: ftsRank,
-		}
+// The point of the rework: vaults that share a model are one corpus, so their
+// vector legs rank against each other by similarity. Under the old positional
+// fusion every vault's best hit outranked every vault's second-best, however
+// much weaker it was.
+func TestFuseGroup_RanksBySimilarityNotVaultInterleave(t *testing.T) {
+	vec := func(path string, id int64, sim float64) store.Hit {
+		return store.Hit{Chunk: store.Chunk{ID: id, Path: path}, Similarity: sim}
+	}
+	results := map[string]legs{
+		"/vaults/prep": {vec: []store.Hit{vec("prep-1.md", 1, 0.691), vec("prep-2.md", 2, 0.648)}},
+		"/vaults/blog": {vec: []store.Hit{vec("blog-1.md", 1, 0.641), vec("blog-2.md", 2, 0.602)}},
+	}
+	require.Equal(t,
+		[]string{"prep/prep-1.md", "prep/prep-2.md", "blog/blog-1.md", "blog/blog-2.md"},
+		hitPaths(fuseOne(results, store.SearchOptions{K: 10, MinSim: 0.5, TopRatio: 0.8})))
+}
+
+func TestFuseGroup(t *testing.T) {
+	vec := func(path string, id int64, sim float64) store.Hit {
+		return store.Hit{Chunk: store.Chunk{ID: id, Path: path}, Similarity: sim}
+	}
+	win := func(path string, id int64, idx int, sim float64) store.Hit {
+		return store.Hit{Chunk: store.Chunk{ID: id, Path: path, Index: idx}, Similarity: sim}
+	}
+	fts := func(path string, id int64) store.Hit {
+		return store.Hit{Chunk: store.Chunk{ID: id, Path: path}}
 	}
 
 	tests := []struct {
 		name    string
-		results map[string][]store.Hit
-		k       int
+		results map[string]legs
+		opts    store.SearchOptions
 		want    []string
 	}{
 		{
 			name: "the same note path in two vaults is two notes",
-			results: map[string][]store.Hit{
-				"/vaults/work": {hit("notes.md", 0, 1, 0)},
-				"/vaults/home": {hit("notes.md", 0, 1, 0)},
+			results: map[string]legs{
+				"/vaults/work": {vec: []store.Hit{vec("notes.md", 1, 0.7)}},
+				"/vaults/home": {vec: []store.Hit{vec("notes.md", 1, 0.7)}},
 			},
-			k:    10,
 			want: []string{"home/notes.md", "work/notes.md"}, // tie broken by vault.
 		},
 		{
 			name: "adjacent windows of one note collapse, per vault",
-			results: map[string][]store.Hit{
-				"/vaults/work": {hit("a.md", 0, 1, 0), hit("a.md", 1, 2, 0), hit("a.md", 5, 3, 0)},
+			results: map[string]legs{
+				"/vaults/work": {vec: []store.Hit{
+					win("a.md", 1, 0, 0.70), win("a.md", 2, 1, 0.69), win("a.md", 3, 5, 0.68),
+				}},
 			},
-			k:    10,
 			want: []string{"work/a.md", "work/a.md"}, // windows 0 and 5; 1 is adjacent to 0.
 		},
 		{
-			name: "ranks fuse across vaults, best first",
-			results: map[string][]store.Hit{
-				"/vaults/work": {hit("weak.md", 0, 3, 0)},
-				"/vaults/home": {hit("strong.md", 0, 1, 1), hit("mid.md", 0, 2, 0)},
+			name: "the band is measured against the best hit in the group",
+			results: map[string]legs{
+				"/vaults/strong": {vec: []store.Hit{vec("s1.md", 1, 0.90), vec("s2.md", 2, 0.85)}},
+				"/vaults/weak":   {vec: []store.Hit{vec("w1.md", 1, 0.60), vec("w2.md", 2, 0.55)}},
 			},
-			k:    10,
-			want: []string{"home/strong.md", "home/mid.md", "work/weak.md"},
+			// 0.90·0.88 = 0.792: the weak vault's own best is not the group's.
+			want: []string{"strong/s1.md", "strong/s2.md"},
+		},
+		{
+			name: "the keyword legs interleave by position",
+			results: map[string]legs{
+				"/vaults/work": {fts: []store.Hit{fts("w1.md", 1), fts("w2.md", 2), fts("w3.md", 3)}},
+				"/vaults/home": {fts: []store.Hit{fts("h1.md", 1)}},
+			},
+			want: []string{"home/h1.md", "work/w1.md", "work/w2.md", "work/w3.md"},
 		},
 		{
 			name: "an exact keyword match outranks a vector-only hit at the same score",
-			results: map[string][]store.Hit{
-				"/vaults/work": {hit("vector.md", 0, 1, 0)},
-				"/vaults/home": {hit("keyword.md", 0, 0, 1)},
+			results: map[string]legs{
+				"/vaults/work": {vec: []store.Hit{vec("vector.md", 1, 0.7)}},
+				"/vaults/home": {fts: []store.Hit{fts("keyword.md", 1)}},
 			},
-			k:    10,
 			want: []string{"home/keyword.md", "work/vector.md"},
 		},
 		{
-			name: "k truncates the fused ranking, not each vault's",
-			results: map[string][]store.Hit{
-				"/vaults/work": {hit("w1.md", 0, 1, 0), hit("w2.md", 0, 4, 0)},
-				"/vaults/home": {hit("h1.md", 0, 2, 0), hit("h2.md", 0, 3, 0)},
+			name: "a hit in both legs fuses once, with both contributions",
+			results: map[string]legs{
+				"/vaults/work": {
+					vec: []store.Hit{vec("solo.md", 1, 0.80), vec("both.md", 2, 0.75)},
+					fts: []store.Hit{fts("both.md", 2)},
+				},
 			},
-			k:    2,
+			want: []string{"work/both.md", "work/solo.md"},
+		},
+		{
+			name: "k truncates the group's ranking, not each vault's",
+			results: map[string]legs{
+				"/vaults/work": {vec: []store.Hit{vec("w1.md", 1, 0.90), vec("w2.md", 2, 0.80)}},
+				"/vaults/home": {vec: []store.Hit{vec("h1.md", 1, 0.85), vec("h2.md", 2, 0.82)}},
+			},
+			opts: store.SearchOptions{K: 2, MinSim: 0.5, TopRatio: 0.88},
 			want: []string{"work/w1.md", "home/h1.md"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := hitPaths(fuse(tt.results, tt.k))
-			require.Equal(t, tt.want, got)
+			opts := tt.opts
+			if opts.K == 0 {
+				opts = fuseOpts
+			}
 			// Map iteration order must not reach the result: repeat it.
 			for i := 0; i < 5; i++ {
-				require.Equal(t, tt.want, hitPaths(fuse(tt.results, tt.k)), "run %d", i)
+				require.Equal(t, tt.want, hitPaths(fuseOne(tt.results, opts)), "run %d", i)
 			}
 		})
+	}
+}
+
+// Vaults on different models can't be ranked against each other, so each model
+// keeps its own group; the groups are ordered by their best fused score.
+func TestFuseGroups_OneGroupPerModel(t *testing.T) {
+	vec := func(path string, id int64, sim float64) store.Hit {
+		return store.Hit{Chunk: store.Chunk{ID: id, Path: path}, Similarity: sim}
+	}
+	fts := func(path string, id int64) store.Hit {
+		return store.Hit{Chunk: store.Chunk{ID: id, Path: path}}
+	}
+	results := map[string]legs{
+		// Vector-only: one RRF leg.
+		"/vaults/prep": {vec: []store.Hit{vec("prep-1.md", 1, 0.70), vec("prep-2.md", 2, 0.66)}},
+		"/vaults/blog": {vec: []store.Hit{vec("blog-1.md", 1, 0.69)}},
+		// Both legs: a higher best score, so this group comes first.
+		"/vaults/code": {vec: []store.Hit{vec("code-1.md", 1, 0.80)}, fts: []store.Hit{fts("code-1.md", 1)}},
+	}
+	models := map[string]string{
+		"/vaults/prep": "model-x",
+		"/vaults/blog": "model-x",
+		"/vaults/code": "model-y",
+	}
+
+	groups := fuseGroups(results, models, fuseOpts)
+	require.Len(t, groups, 2)
+	require.Equal(t, "model-y", groups[0].Model)
+	require.Equal(t, []string{"/vaults/code"}, groups[0].Vaults)
+	require.Equal(t, []string{"code/code-1.md"}, hitPaths(groups[0].Hits))
+	require.Equal(t, "model-x", groups[1].Model)
+	require.Equal(t, []string{"/vaults/blog", "/vaults/prep"}, groups[1].Vaults)
+	require.Equal(t,
+		[]string{"prep/prep-1.md", "blog/blog-1.md", "prep/prep-2.md"},
+		hitPaths(groups[1].Hits))
+	require.Equal(t, []string{"code/code-1.md", "prep/prep-1.md", "blog/blog-1.md", "prep/prep-2.md"},
+		hitPaths(flatten(groups)))
+}
+
+// A model whose embedding failed still answers from its keyword leg: the group
+// is there, ranked on positions alone, and its hits carry no similarity.
+func TestFuseGroups_KeywordOnlyGroup(t *testing.T) {
+	fts := func(path string, id int64) store.Hit {
+		return store.Hit{Chunk: store.Chunk{ID: id, Path: path}}
+	}
+	groups := fuseGroups(
+		map[string]legs{"/vaults/work": {fts: []store.Hit{fts("a.md", 1), fts("b.md", 2)}}},
+		map[string]string{"/vaults/work": "model-x"},
+		fuseOpts)
+	require.Len(t, groups, 1)
+	require.Equal(t, []string{"work/a.md", "work/b.md"}, hitPaths(groups[0].Hits))
+	require.Zero(t, groups[0].Hits[0].Similarity)
+	require.Equal(t, 1, groups[0].Hits[0].FTSRank)
+}
+
+// k caps every group, so a two-model search returns up to k per model rather
+// than k split between rankings that can't be compared.
+func TestFuseGroups_KCapsEachGroup(t *testing.T) {
+	vec := func(path string, id int64, sim float64) store.Hit {
+		return store.Hit{Chunk: store.Chunk{ID: id, Path: path}, Similarity: sim}
+	}
+	results := map[string]legs{
+		"/vaults/prep": {vec: []store.Hit{vec("p1.md", 1, 0.70), vec("p2.md", 2, 0.69)}},
+		"/vaults/blog": {vec: []store.Hit{vec("b1.md", 1, 0.70), vec("b2.md", 2, 0.69)}},
+	}
+	models := map[string]string{"/vaults/prep": "model-x", "/vaults/blog": "model-y"}
+
+	groups := fuseGroups(results, models, store.SearchOptions{K: 1, MinSim: 0.5, TopRatio: 0.88})
+	require.Len(t, groups, 2)
+	for _, g := range groups {
+		require.Len(t, g.Hits, 1, "group %s", g.Model)
 	}
 }
 
 // ── coordination ─────────────────────────────────────────────────────
 
 // The default: one query, every vault, one ranking — with each hit saying which
-// vault it came from.
+// vault it came from. Vaults sharing a model rank as one group.
 func TestMultiSearch_CoversEveryVault(t *testing.T) {
 	gw := newEmbedServer(t)
 	reg := newEmbedRegistry(t, gw)
 	work := openIndexedVault(t, reg, "model-x", map[string]string{"specs/alpha.md": "# Alpha\n\nthe alpha protocol\n"})
 	home := openIndexedVault(t, reg, "model-x", map[string]string{"alpha-diary.md": "# Diary\n\nalpha again\n"})
 
-	hits, warnings, err := multiSearch(context.Background(), reg, "alpha", 10, 0)
+	groups, warnings, err := multiSearch(context.Background(), reg, "alpha", 10, 0)
 	require.NoError(t, err)
 	require.Empty(t, warnings)
-	require.Len(t, hits, 2)
+	require.Len(t, groups, 1, "one model, one group")
+	require.Equal(t, "model-x", groups[0].Model)
+	require.ElementsMatch(t, []string{work, home}, groups[0].Vaults)
 
+	hits := flatten(groups)
+	require.Len(t, hits, 2)
 	byVault := map[string]string{}
 	for _, h := range hits {
 		byVault[h.Vault] = h.Path
+		require.Equal(t, "model-x", h.Model)
 	}
 	require.Equal(t, map[string]string{work: "specs/alpha.md", home: "alpha-diary.md"}, byVault)
+}
+
+// Two models are two corpora: each keeps its own ranking, so nothing is ordered
+// against a similarity it can't be compared with.
+func TestMultiSearch_GroupsByModel(t *testing.T) {
+	gw := newEmbedServer(t)
+	reg := newEmbedRegistry(t, gw)
+	openIndexedVault(t, reg, "model-x", map[string]string{"a.md": "alpha one\n"})
+	openIndexedVault(t, reg, "model-y", map[string]string{"b.md": "alpha two\n"})
+
+	groups, warnings, err := multiSearch(context.Background(), reg, "alpha", 10, 0)
+	require.NoError(t, err)
+	require.Empty(t, warnings)
+	require.Len(t, groups, 2)
+
+	models := []string{groups[0].Model, groups[1].Model}
+	require.ElementsMatch(t, []string{"model-x", "model-y"}, models)
+	for _, g := range groups {
+		require.Len(t, g.Vaults, 1)
+		require.Len(t, g.Hits, 1)
+		require.Equal(t, g.Model, g.Hits[0].Model)
+	}
 }
 
 // The query is embedded once per distinct model, not once per vault: vaults that
@@ -294,10 +453,10 @@ func TestMultiSearch_EmbedsOncePerModel(t *testing.T) {
 	openIndexedVault(t, reg, "model-y", map[string]string{"c.md": "alpha three\n"})
 	gw.resetCalls()
 
-	hits, warnings, err := multiSearch(context.Background(), reg, "alpha", 10, 0)
+	groups, warnings, err := multiSearch(context.Background(), reg, "alpha", 10, 0)
 	require.NoError(t, err)
 	require.Empty(t, warnings)
-	require.Len(t, hits, 3, "all three vaults answered")
+	require.Len(t, flatten(groups), 3, "all three vaults answered")
 	require.Equal(t, 1, gw.callsFor("model-x"), "two vaults, one model, one embedding")
 	require.Equal(t, 1, gw.callsFor("model-y"))
 }
@@ -310,8 +469,9 @@ func TestMultiSearch_SkipsVaultsThatCannotAnswer(t *testing.T) {
 	good := openIndexedVault(t, reg, "model-x", map[string]string{"alpha.md": "alpha here\n"})
 	openIndexedVault(t, reg, "", map[string]string{"alpha.md": "alpha there\n"}) // no model: no index.
 
-	hits, warnings, err := multiSearch(context.Background(), reg, "alpha", 10, 0)
+	groups, warnings, err := multiSearch(context.Background(), reg, "alpha", 10, 0)
 	require.NoError(t, err)
+	hits := flatten(groups)
 	require.Len(t, hits, 1)
 	require.Equal(t, good, hits[0].Vault)
 	require.Len(t, warnings, 1)

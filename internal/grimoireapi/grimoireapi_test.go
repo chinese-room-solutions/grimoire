@@ -144,10 +144,10 @@ func TestToHits(t *testing.T) {
 	in := []store.Hit{
 		{Chunk: store.Chunk{Path: "a.md", Heading: "H", Text: "t"}, Similarity: 0.9},
 	}
-	got := toHits(in, "/vaults/notes")
+	got := toHits(in, "/vaults/notes", "model-x")
 	require.Len(t, got, 1)
 	require.Equal(t,
-		Hit{Path: "a.md", Heading: "H", Text: "t", Similarity: 0.9, Vault: "/vaults/notes"},
+		Hit{Path: "a.md", Heading: "H", Text: "t", Similarity: 0.9, Vault: "/vaults/notes", Model: "model-x"},
 		got[0])
 }
 

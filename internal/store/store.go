@@ -354,15 +354,12 @@ func (s *Store) Search(query string, qvec []float32, opts SearchOptions) ([]Hit,
 	if k <= 0 {
 		k = 10
 	}
-	// Both legs fetch well beyond K so fusion sees enough candidates; the
-	// floor keeps small-K searches from starving it. Untuned default.
-	pool := max(4*k, 40)
 
 	var vecHits []scored
 	if len(qvec) > 0 {
-		vecHits = s.vectorLeg(qvec, pool, opts)
+		vecHits = band(s.vectorLeg(qvec, searchPool(k), opts.MinSim), opts)
 	}
-	ftsHits, err := s.keywordLeg(query, pool)
+	ftsHits, err := s.keywordLeg(query, searchPool(k))
 	if err != nil {
 		return nil, err
 	}
@@ -378,18 +375,75 @@ func (s *Store) Search(query string, qvec []float32, opts SearchOptions) ([]Hit,
 	return hits, nil
 }
 
+// SearchLegs returns the two retrieval legs unfused: the vector leg's pool
+// sorted by descending similarity but *not* band-filtered, and the keyword leg
+// in BM25 order. Both carry the 1-based rank they hold in their own leg, and a
+// chunk found by both appears once per leg.
+//
+// It exists for cross-vault search: several stores built with the same
+// embedding model form one corpus whose similarities are comparable, so the
+// band belongs to the caller, applied once across the merged vector legs (see
+// BandCutoff). opts.TopRatio is therefore ignored here; opts.MinSim still
+// floors the vector leg, as in Search.
+func (s *Store) SearchLegs(query string, qvec []float32, opts SearchOptions) (vec, fts []Hit, err error) {
+	if len(qvec) != 0 && len(qvec) != s.dim {
+		return nil, nil, fmt.Errorf("query dimension %d, want %d", len(qvec), s.dim)
+	}
+	k := opts.K
+	if k <= 0 {
+		k = 10
+	}
+
+	var vecHits []scored
+	if len(qvec) > 0 {
+		vecHits = s.vectorLeg(qvec, searchPool(k), opts.MinSim)
+	}
+	ftsIDs, err := s.keywordLeg(query, searchPool(k))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ids := make([]int64, 0, len(vecHits)+len(ftsIDs))
+	for _, h := range vecHits {
+		ids = append(ids, h.id)
+	}
+	ids = append(ids, ftsIDs...)
+	chunks, err := s.chunks(ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	for rank, h := range vecHits {
+		c, ok := chunks[h.id]
+		if !ok {
+			continue // deleted between the scan and the load.
+		}
+		vec = append(vec, Hit{Chunk: c, Similarity: h.sim, VecRank: rank + 1})
+	}
+	for rank, id := range ftsIDs {
+		c, ok := chunks[id]
+		if !ok {
+			continue
+		}
+		fts = append(fts, Hit{Chunk: c, FTSRank: rank + 1})
+	}
+	return vec, fts, nil
+}
+
+// searchPool is how many candidates each leg fetches for a K-result search:
+// well beyond K so fusion sees enough of them, with a floor that keeps
+// small-K searches from starving it. Untuned default.
+func searchPool(k int) int { return max(4*k, 40) }
+
 // scored is a chunk id with its per-leg relevance.
 type scored struct {
 	id  int64
 	sim float64
 }
 
-// vectorLeg returns up to pool chunk ids by descending cosine similarity,
-// band-filtered: only candidates within TopRatio of the best hit and above
-// MinSim survive. Embedding models compress all similarities into a narrow,
-// model-specific band, so relevance is judged relative to the query's own
-// best match rather than by a universal cutoff.
-func (s *Store) vectorLeg(qvec []float32, pool int, opts SearchOptions) []scored {
+// vectorLeg returns up to pool chunk ids by descending cosine similarity, above
+// minSim. The relevance band (see band) is applied on top of it, by whoever
+// knows the corpus the best hit should be judged against.
+func (s *Store) vectorLeg(qvec []float32, pool int, minSim float64) []scored {
 	q := append([]float32(nil), qvec...)
 	if !normalize(q) {
 		return nil // a zero query has no direction; keyword leg only.
@@ -415,20 +469,38 @@ func (s *Store) vectorLeg(qvec []float32, pool int, opts SearchOptions) []scored
 	if len(candidates) > pool {
 		candidates = candidates[:pool]
 	}
-	if len(candidates) == 0 {
-		return nil
-	}
-	cutoff := candidates[0].sim * opts.TopRatio
-	if cutoff < opts.MinSim {
-		cutoff = opts.MinSim
-	}
 	kept := candidates[:0]
 	for _, c := range candidates {
-		if c.sim >= cutoff {
+		if c.sim >= minSim {
 			kept = append(kept, c)
 		}
 	}
 	return kept
+}
+
+// BandCutoff is the similarity a vector hit must reach to count as relevant:
+// TopRatio of the best hit in the corpus, never below MinSim. Embedding models
+// compress all similarities into a narrow, model-specific band, so relevance is
+// judged relative to the query's own best match rather than by a universal
+// cutoff — which makes "the best hit" the thing a cross-vault caller has to
+// decide, hence the exported rule.
+func BandCutoff(best float64, opts SearchOptions) float64 {
+	return max(best*opts.TopRatio, opts.MinSim)
+}
+
+// band keeps the leading candidates at or above the band cutoff. The input is
+// sorted by descending similarity, so the survivors are a prefix.
+func band(candidates []scored, opts SearchOptions) []scored {
+	if len(candidates) == 0 {
+		return nil
+	}
+	cutoff := BandCutoff(candidates[0].sim, opts)
+	for i, c := range candidates {
+		if c.sim < cutoff {
+			return candidates[:i]
+		}
+	}
+	return candidates
 }
 
 // keywordLeg returns up to pool chunk ids by ascending BM25 rank for the
@@ -517,31 +589,22 @@ func (s *Store) fuse(vecHits []scored, ftsIDs []int64) ([]Hit, error) {
 		return nil, nil
 	}
 
-	ids := make([]any, 0, len(byID))
+	ids := make([]int64, 0, len(byID))
 	for id := range byID {
 		ids = append(ids, id)
 	}
-	rows, err := s.db.Query(
-		"SELECT id, path, idx, heading, text, doc_hash FROM chunks WHERE id IN (?"+
-			strings.Repeat(",?", len(ids)-1)+")", ids...)
+	chunks, err := s.chunks(ids)
 	if err != nil {
-		return nil, fmt.Errorf("loading fused hits: %w", err)
+		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
 
 	hits := make([]Hit, 0, len(byID))
-	for rows.Next() {
-		var h Hit
-		if err := rows.Scan(&h.ID, &h.Path, &h.Index, &h.Heading, &h.Text, &h.DocHash); err != nil {
-			return nil, fmt.Errorf("scanning fused hit: %w", err)
+	for id, f := range byID {
+		c, ok := chunks[id]
+		if !ok {
+			continue // deleted between the legs and the load.
 		}
-		f := byID[h.ID]
-		h.Similarity = f.sim
-		h.VecRank, h.FTSRank = f.vecRank, f.ftsRank
-		hits = append(hits, h)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		hits = append(hits, Hit{Chunk: c, Similarity: f.sim, VecRank: f.vecRank, FTSRank: f.ftsRank})
 	}
 	sort.Slice(hits, func(i, j int) bool {
 		fi, fj := byID[hits[i].ID], byID[hits[j].ID]
@@ -564,6 +627,36 @@ func (s *Store) fuse(vecHits []scored, ftsIDs []int64) ([]Hit, error) {
 		return hits[i].Index < hits[j].Index
 	})
 	return hits, nil
+}
+
+// chunks loads the metadata (everything but the embedding) of the given chunk
+// ids in one query, keyed by id. Ids that no longer exist are simply absent —
+// a chunk can be deleted between a leg reading it and this load.
+func (s *Store) chunks(ids []int64) (map[int64]Chunk, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := s.db.Query(
+		"SELECT id, path, idx, heading, text, doc_hash FROM chunks WHERE id IN (?"+
+			strings.Repeat(",?", len(ids)-1)+")", args...)
+	if err != nil {
+		return nil, fmt.Errorf("loading chunks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make(map[int64]Chunk, len(ids))
+	for rows.Next() {
+		var c Chunk
+		if err := rows.Scan(&c.ID, &c.Path, &c.Index, &c.Heading, &c.Text, &c.DocHash); err != nil {
+			return nil, fmt.Errorf("scanning chunk: %w", err)
+		}
+		out[c.ID] = c
+	}
+	return out, rows.Err()
 }
 
 // dedupeAdjacent drops a hit when a better-ranked hit from the same note is an

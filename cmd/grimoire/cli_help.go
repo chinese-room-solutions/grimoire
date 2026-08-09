@@ -23,8 +23,11 @@ var commands = []commandDoc{
 	{"search", "search QUERY [-k N]", "hybrid search over every vault", `
 Hybrid search (full-text + embeddings) over every vault Grimoire knows about,
 with each hit labelled by the vault it lives in; --vault narrows it to one.
--k caps the number of hits (0 = the server's default). A vault that can't
-answer (its index still opening) is reported and skipped, not fatal.
+Vaults sharing an embedding model rank as one corpus; vaults on another model
+form a second group, headed by "— vaults A, B (model)" — the groups follow one
+another, but only within a group are the scores comparable. -k caps the hits
+per model group (0 = the server's default). A vault that can't answer (its
+index still opening) is reported and skipped, not fatal.
 Needs the MASS gateway, like any embedding.`},
 
 	{"note get", "note get PATH", "print a note's raw Markdown", `

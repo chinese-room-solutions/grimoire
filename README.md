@@ -134,9 +134,11 @@ come from the
 
 ### Vault targeting
 
-`search` covers **every** vault Grimoire knows about, fusing the per-vault
-rankings and labelling each hit with the vault it lives in; `--vault /abs/path`
-narrows it to one. Every other command acts on a single vault: the one `--vault`
+`search` covers **every** vault Grimoire knows about, labelling each hit with the
+vault it lives in; `--vault /abs/path` narrows it to one. Vaults sharing an
+embedding model are ranked as one corpus (their similarities are on one scale);
+vaults on another model form their own group, listed after it — `-k` caps each
+group, and across groups the order is presentational. Every other command acts on a single vault: the one `--vault`
 names, else the **last-used** one (the vault the app opened most recently). A
 `--vault` on a read never moves that default, so an agent looking around other
 vaults can't change which one the app reopens.

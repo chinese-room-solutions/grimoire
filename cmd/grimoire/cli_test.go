@@ -204,6 +204,61 @@ func TestCLISearchLabelsHitsWithTheirVault(t *testing.T) {
 	})
 }
 
+// Hits ranked by different embedding models sit on different similarity scales,
+// so the human view says where one model's ranking ends and the next begins —
+// and says nothing at all when there is only one, which is the usual case.
+func TestCLISearchHeadsEachModelGroup(t *testing.T) {
+	hits := []grimoireapi.Hit{
+		{Path: "a.md", Similarity: 0.9, Vault: "/vaults/work", Model: "model-x"},
+		{Path: "b.md", Similarity: 0.8, Vault: "/vaults/home", Model: "model-x"},
+		{Path: "c.md", Similarity: 0.7, Vault: "/vaults/old", Model: "model-y"},
+	}
+	tests := []struct {
+		name     string
+		hits     []grimoireapi.Hit
+		wantOut  []string
+		wantMiss string
+	}{
+		{
+			name:     "one model needs no header",
+			hits:     hits[:2],
+			wantOut:  []string{"1. work/a.md", "2. home/b.md"},
+			wantMiss: "— vaults",
+		},
+		{
+			name: "two models are headed by their vaults and model",
+			hits: hits,
+			wantOut: []string{
+				"— vaults work, home (model-x)\n1. work/a.md",
+				"— vaults old (model-y)\n3. old/c.md",
+			},
+		},
+		{
+			name:    "a keyword-only group says so",
+			hits:    []grimoireapi.Hit{hits[0], {Path: "d.md", Vault: "/vaults/plain"}},
+			wantOut: []string{"— vaults plain (keyword only)"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newCLIBackend(t, map[string]http.HandlerFunc{
+				"GET /api/v1/search": func(w http.ResponseWriter, _ *http.Request) {
+					stubJSON(t, w, grimoireapi.SearchResult{Query: "q", Hits: tt.hits})
+				},
+			})
+			e, out, _ := b.env(t, false)
+			e.vault = "" // cross-vault, so hits carry their vault.
+			require.Equal(t, exitOK, e.dispatch([]string{"search", "q"}))
+			for _, want := range tt.wantOut {
+				require.Contains(t, out.String(), want)
+			}
+			if tt.wantMiss != "" {
+				require.NotContains(t, out.String(), tt.wantMiss)
+			}
+		})
+	}
+}
+
 // Search is the one verb that runs without a vault: with none named and none
 // ever opened it covers every vault the daemon knows, so it must not be turned
 // away at the door. Every other verb still needs one.

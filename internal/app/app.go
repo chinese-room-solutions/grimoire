@@ -387,14 +387,17 @@ func (s *Service) indexer(ctx context.Context) (*index.Indexer, error) {
 // Vector relevance is judged relative to the best hit, not by a fixed cutoff:
 // embedding models compress all similarities into a narrow band (e.g. Qwen3
 // puts everything in ~0.57–0.71), so real matches sit just above the noise and
-// the band shifts per model. The store keeps vector hits within searchTopRatio
-// of the top hit (the query's own scale) and above searchFloor (a sanity guard
-// so an all-weak vector set contributes nothing rather than promoting its
-// least-bad member); keyword hits are unaffected. searchFloor is the default
-// minimum similarity when the caller passes 0 (the session panel overrides it).
+// the band shifts per model. Vector hits within SearchTopRatio of the top hit
+// (the query's own scale) and above SearchFloor (a sanity guard so an all-weak
+// vector set contributes nothing rather than promoting its least-bad member)
+// survive; keyword hits are unaffected. SearchFloor is the default minimum
+// similarity when the caller passes 0 (the session panel overrides it).
+//
+// They are exported because a cross-vault search over vaults sharing one model
+// applies the band itself, across their merged vector legs (see SearchLegsVec).
 const (
-	searchTopRatio = 0.88
-	searchFloor    = 0.50
+	SearchTopRatio = 0.88
+	SearchFloor    = 0.50
 )
 
 // Search embeds the query (with the model's query instruction) and runs the
@@ -440,17 +443,47 @@ func (s *Service) EmbedQuery(ctx context.Context, query string) ([]float32, erro
 // nil qvec runs the keyword leg alone — what a vault gets when its model group's
 // embedding failed.
 func (s *Service) SearchVec(query string, qvec []float32, k int, minSim float64) ([]store.Hit, error) {
+	st, err := s.searchStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.Search(query, qvec, SearchOptions(k, minSim))
+}
+
+// SearchLegsVec runs the same search as SearchVec but returns the vector and
+// keyword legs unfused and unbanded, for a cross-vault search that fuses the
+// vaults sharing an embedding model as one corpus — one ranking over all of
+// them, rather than an interleave of theirs. It applies the same similarity
+// floor; the band is the caller's, over the merged legs (store.BandCutoff).
+func (s *Service) SearchLegsVec(
+	query string, qvec []float32, k int, minSim float64,
+) (vec, fts []store.Hit, err error) {
+	st, err := s.searchStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	return st.SearchLegs(query, qvec, SearchOptions(k, minSim))
+}
+
+// SearchOptions are the relevance knobs of a search for k results with the
+// given similarity floor (≤0 → SearchFloor) — the policy this package owns,
+// in the shape the store takes it.
+func SearchOptions(k int, minSim float64) store.SearchOptions {
+	if minSim <= 0 {
+		minSim = SearchFloor
+	}
+	return store.SearchOptions{K: k, MinSim: minSim, TopRatio: SearchTopRatio}
+}
+
+// searchStore returns the store to search, or why this vault can't answer yet.
+func (s *Service) searchStore() (*store.Store, error) {
 	s.mu.Lock()
 	st, emb, model := s.store, s.embedder, s.cfg.EmbedModel
 	s.mu.Unlock()
 	if err := searchReady(st, emb, model); err != nil {
 		return nil, err
 	}
-	floor := minSim
-	if floor <= 0 {
-		floor = searchFloor
-	}
-	return st.Search(query, qvec, store.SearchOptions{K: k, MinSim: floor, TopRatio: searchTopRatio})
+	return st, nil
 }
 
 // searchReady reports why a vault can't answer a search yet: no model picked, or

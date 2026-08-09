@@ -49,6 +49,13 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
   gateway (`GRIMOIRE_GATEWAY_URL`, default
   `http://localhost:3455/mass.llama-cpp`); without it, exit 1. Reading and
   editing need no gateway.
+  - Every hit carries the embedding model that ranked it (`model` in `--json`).
+    Vaults sharing a model are ranked as one corpus; vaults on another model
+    form their own group, listed after it under a `— vaults A, B (model)`
+    header. **Across groups the order is presentational, not scored** —
+    similarities from different models mean different things — and `-k` caps
+    each group, so two models can return up to 2×k hits. One model (the usual
+    case) means one flat list and no headers.
 - `resolve TARGET` — a wikilink or bare name (`"My Note"`, `"My Note|alias"`,
   with or without `.md`) to a real path. Use it before assuming a path; exit 3
   if nothing matches.

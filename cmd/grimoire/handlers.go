@@ -693,7 +693,7 @@ func searchHandler(reg *vaultRegistry, logger zerolog.Logger) http.HandlerFunc {
 		if k <= 0 {
 			k = 10
 		}
-		hits, warnings, err := runSearch(r.Context(), reg, svc, sig.ThisVault, sig.Query, k, sig.MinSim)
+		groups, warnings, err := runSearch(r.Context(), reg, svc, sig.ThisVault, sig.Query, k, sig.MinSim)
 		if err != nil {
 			_ = sse.PatchElementTempl(ui.Notice("Error: "+shortErr(err)),
 				datastar.WithSelector(resultsSel), datastar.WithModeInner())
@@ -702,6 +702,7 @@ func searchHandler(reg *vaultRegistry, logger zerolog.Logger) http.HandlerFunc {
 			return
 		}
 		patchSignals(sse, map[string]any{"gSearchBusy": false})
+		hits := flatten(groups)
 		_ = sse.PatchElementTempl(ui.SearchResults(toUIHits(hits), warnings),
 			datastar.WithSelector(resultsSel), datastar.WithModeInner())
 
@@ -711,11 +712,12 @@ func searchHandler(reg *vaultRegistry, logger zerolog.Logger) http.HandlerFunc {
 }
 
 // runSearch answers a GUI search: every vault, or only the page's when the user
-// narrowed it. Both paths return vault-tagged hits, so the results render and
-// record identically whichever ran.
+// narrowed it. Both paths return model groups of vault-tagged hits, so the
+// results render and record identically whichever ran — narrowing to one vault
+// is just the one-group case.
 func runSearch(
 	ctx context.Context, reg *vaultRegistry, svc *app.Service, thisVault bool, query string, k int, minSim float64,
-) ([]vaultHit, []string, error) {
+) ([]searchGroup, []string, error) {
 	if !thisVault {
 		return multiSearch(ctx, reg, query, k, minSim)
 	}
@@ -723,11 +725,15 @@ func runSearch(
 	if err != nil {
 		return nil, nil, err
 	}
-	out := make([]vaultHit, len(hits))
-	for i, h := range hits {
-		out[i] = vaultHit{Hit: h, Vault: svc.Vault()}
+	if len(hits) == 0 {
+		return nil, nil, nil
 	}
-	return out, nil, nil
+	model := svc.EmbedModelName()
+	group := searchGroup{Model: model, Vaults: []string{svc.Vault()}}
+	for _, h := range hits {
+		group.Hits = append(group.Hits, vaultHit{Hit: h, Vault: svc.Vault(), Model: model})
+	}
+	return []searchGroup{group}, nil, nil
 }
 
 // appendTurn appends a conversation turn to the stream and scrolls it into view.

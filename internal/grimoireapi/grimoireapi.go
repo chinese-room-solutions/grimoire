@@ -119,6 +119,12 @@ type Hit struct {
 	// vault unless one is named, so a hit that didn't say which would be
 	// unresolvable.
 	Vault string `json:"vault"`
+	// Model is the embedding model that ranked the hit, empty when none did
+	// (a keyword-only vault). A cross-vault search ranks the vaults sharing a
+	// model together and lists one model's hits after another's, so Model says
+	// which similarities are comparable with which: within a model they are,
+	// across models the order is presentational.
+	Model string `json:"model,omitempty"`
 }
 
 // SearchResult wraps the ranked hits for a query. The query is echoed back so a
@@ -157,12 +163,12 @@ func (a *API) Search(ctx context.Context, vault, query string, k int) (SearchRes
 	if err != nil {
 		return SearchResult{}, err
 	}
-	return SearchResult{Query: query, Hits: toHits(hits, svc.Vault())}, nil
+	return SearchResult{Query: query, Hits: toHits(hits, svc.Vault(), svc.EmbedModelName())}, nil
 }
 
 // toHits projects store hits from one vault to the API's slim hit shape, tagged
-// with the vault they came from.
-func toHits(hits []store.Hit, vault string) []Hit {
+// with the vault they came from and the model that ranked them.
+func toHits(hits []store.Hit, vault, model string) []Hit {
 	out := make([]Hit, len(hits))
 	for i, h := range hits {
 		out[i] = Hit{
@@ -171,6 +177,7 @@ func toHits(hits []store.Hit, vault string) []Hit {
 			Text:       h.Text,
 			Similarity: h.Similarity,
 			Vault:      vault,
+			Model:      model,
 		}
 	}
 	return out
