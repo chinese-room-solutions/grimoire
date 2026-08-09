@@ -1,6 +1,10 @@
 package kernel
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestCompareVersions(t *testing.T) {
 	tests := []struct {
@@ -22,8 +26,6 @@ func TestCompareVersions(t *testing.T) {
 		{"3", "3.1", -1},      //
 	}
 	for _, tc := range tests {
-		if got := CompareVersions(tc.a, tc.b); got != tc.want {
-			t.Errorf("CompareVersions(%q, %q) = %d, want %d", tc.a, tc.b, got, tc.want)
-		}
+		require.Equal(t, tc.want, CompareVersions(tc.a, tc.b), "CompareVersions(%q, %q)", tc.a, tc.b)
 	}
 }

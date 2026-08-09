@@ -63,21 +63,15 @@ func TestIsUnusableShell(t *testing.T) {
 		{`C:\Program Files\Git\bin\bash.exe`, false},
 	}
 	for _, tt := range tests {
-		if got := isUnusableShell(tt.path); got != tt.want {
-			t.Errorf("isUnusableShell(%q) = %v, want %v", tt.path, got, tt.want)
-		}
+		require.Equal(t, tt.want, isUnusableShell(tt.path), "isUnusableShell(%q)", tt.path)
 	}
 }
 
 func TestIsBash(t *testing.T) {
 	for _, name := range []string{"bash", "bash.exe", `C:\x\bash.exe`, "BASH.EXE"} {
-		if !isBash(name) {
-			t.Errorf("isBash(%q) = false, want true", name)
-		}
+		require.True(t, isBash(name), "isBash(%q)", name)
 	}
 	for _, name := range []string{"python", "sh", "zsh.exe"} {
-		if isBash(name) {
-			t.Errorf("isBash(%q) = true, want false", name)
-		}
+		require.False(t, isBash(name), "isBash(%q)", name)
 	}
 }
