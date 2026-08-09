@@ -14,13 +14,15 @@ import (
 const shutdownGrace = 3 * time.Second
 
 // daemonControl is the part of the daemon no vault owns: the build it is running
-// (so a client can spot a version skew), the graceful stop that /api/v1/shutdown
-// triggers, and the closing signal long-lived streams select on. Streams need
-// that signal because http.Server.Shutdown waits for in-flight handlers without
-// cancelling their contexts — an open stream would otherwise sit through the
-// whole grace window.
+// (so a client can spot a version skew), the bridge to the attached GUI window,
+// the graceful stop that /api/v1/shutdown triggers, and the closing signal
+// long-lived streams select on. Streams need that signal because
+// http.Server.Shutdown waits for in-flight handlers without cancelling their
+// contexts — an open client channel would otherwise sit through the whole grace
+// window.
 type daemonControl struct {
 	version string
+	bridge  *clientBridge
 	server  *http.Server
 	logger  zerolog.Logger
 
@@ -30,8 +32,14 @@ type daemonControl struct {
 
 // newDaemonControl returns the control surface for a server that has not started
 // serving yet.
-func newDaemonControl(version string, server *http.Server, logger zerolog.Logger) *daemonControl {
-	return &daemonControl{version: version, server: server, logger: logger, closing: make(chan struct{})}
+func newDaemonControl(version string, bridge *clientBridge, server *http.Server, logger zerolog.Logger) *daemonControl {
+	return &daemonControl{
+		version: version,
+		bridge:  bridge,
+		server:  server,
+		logger:  logger,
+		closing: make(chan struct{}),
+	}
 }
 
 // beginClosing releases every long-lived stream so the graceful stop that

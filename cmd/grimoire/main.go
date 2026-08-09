@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/KernelPryanic/golog"
 	ui "github.com/chinese-room-solutions/grimoire/internal/ui"
 	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
+	masgui "github.com/chinese-room-solutions/mass-sdk/gui"
 	"github.com/chinese-room-solutions/mass-sdk/tray"
 	"github.com/chinese-room-solutions/mass-sdk/uikit"
 	"github.com/chinese-room-solutions/mass-sdk/webview"
@@ -118,42 +120,42 @@ func themeBase(name string) string {
 	return string(uikit.ThemeDark)
 }
 
-// runGUI starts the daemon and attaches a native webview window to it. The window
-// opens on vault, or — with none (empty or unresolvable) — into the empty state,
-// where the user picks one. Many windows may run for the same vault; the daemon
-// they share serves them all.
+// runGUI opens a native webview window onto the daemon, starting one if it isn't
+// already running. The GUI hosts no backend of its own: the window is a client
+// like any other, and everything native it owes the daemon — the folder dialog,
+// window captures, the title-bar theme — travels over the control channel it
+// holds open (which is also what keeps an on-demand daemon alive while the window
+// lives). The window opens on vault, or — with none (empty or unresolvable) —
+// into the empty state, where the user picks one.
 func runGUI(logger zerolog.Logger, vault string) {
-	// A GUI instance never idles out — the user keeps it open.
-	b, err := startBackend(logger, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	port, err := ensureDaemon(ctx, logger)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("starting backend")
+		logger.Fatal().Err(err).Msg("starting the grimoire daemon")
 	}
-	defer b.stop()
+	url := pageURL(port, vault)
 
 	wv := webview.Open(webview.Options{
 		Title:   appTitle,
-		URL:     b.pageURL(vault),
+		URL:     url,
 		Width:   defaultWindow,
 		Height:  defaultHeight,
 		IconPNG: ui.IconPNG,
-		Theme:   themeBase(b.cfg.Theme),
+		Theme:   initialTheme(),
 	})
 	if wv == nil {
-		_, _ = fmt.Fprintln(os.Stderr, "WebView2 unavailable. Open this URL in your browser:", b.url)
-		<-b.done
+		// The daemon runs detached and serves the page to any browser, so there is
+		// nothing left for this process to hold open.
+		_, _ = fmt.Fprintln(os.Stderr, "WebView2 unavailable. Open this URL in your browser:", url)
 		return
 	}
-	// Repaint the native title bar when the theme changes in the UI. The webview
-	// treats any non-"light" string as dark, so resolve a pluggable theme to its
-	// base (dark|light) — otherwise a light-based pluggable theme gets dark chrome.
-	b.settings.SetOnThemeChange(func(t string) { wv.SetTheme(themeBase(t)) })
-	// Let the vault picker use the native folder dialog, and the API surface
-	// capture the rendered window — wired on the registry, which owns the
-	// process-wide state every vault runtime shares.
-	b.reg.SetFolderPicker(wv.PickFolder)
-	b.reg.SetScreenshotter(wv.Screenshot)
+	// The channel carries theme changes down and native-op results back, and
+	// reconnects on its own if the daemon restarts under the window.
+	go runClientChannel(ctx, wv, port, logger)
 
-	// Fold to the system tray: minimizing hides the window (the backend keeps
+	// Fold to the system tray: minimizing hides the window (the daemon keeps
 	// running); the tray icon / "Show" restores it; "Quit" or closing the
 	// window (the X) exits. The tray runs on its own loop; Quit terminates the
 	// webview from there, so Run() returns on this (main) thread and the normal
@@ -170,12 +172,24 @@ func runGUI(logger zerolog.Logger, vault string) {
 	// would otherwise navigate to the dropped file, replacing the UI with its
 	// document viewer); the handler imports them like the in-page dropzone.
 	// A no-op on Windows/macOS, whose engines deliver drops to the DOM.
-	wv.SetOnFileDrop(nativeDropHandler(wv, b.reg, logger))
+	wv.SetOnFileDrop(nativeDropHandler(ctx, wv, port, logger))
 	trayStart()
 	defer trayEnd()
 
 	wv.Run()
 	wv.Destroy()
+}
+
+// initialTheme is the native chrome the window opens with, read straight from the
+// app config — the daemon's first channel event settles it a moment later. Only
+// the built-in themes resolve here: a pluggable one needs the theme registry the
+// daemon loads, so it briefly gets the default chrome and is then corrected.
+func initialTheme() string {
+	dir, err := vaultdir.AppDir()
+	if err != nil {
+		return string(uikit.ThemeDark)
+	}
+	return themeBase(masgui.LoadConfig(dir).Theme)
 }
 
 // runServe starts the daemon headless (no window) and blocks until the process

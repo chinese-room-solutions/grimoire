@@ -26,19 +26,19 @@ import (
 
 // backend is the running Grimoire daemon: one local HTTP server exposing the UI
 // and the agent-facing JSON /api surface, over a registry of resident vault
-// runtimes. It is independent of any window — runGUI attaches a webview to it,
-// runServe runs it headless. The routes are vault-independent; each request names
-// the vault it acts on. Build one with startBackend; release it with stop.
+// runtimes. It owns no window: `serve` runs it, and a GUI window is one more
+// client of its HTTP surface, reaching what it needs natively over the client
+// control channel. The routes are vault-independent; each request names the vault
+// it acts on. Build one with startBackend; release it with stop.
 type backend struct {
-	logger   zerolog.Logger
-	cfg      masgui.AppConfig // app-level config (theme for the native window).
-	settings *masgui.Settings // app-level settings (theme + log level), shared across vaults.
-	reg      *vaultRegistry
-	server   *http.Server
-	done     <-chan struct{} // closed when the HTTP server stops (any cause).
-	url      string
-	stop     func() // tears down everything startBackend set up; idempotent.
+	reg  *vaultRegistry
+	done <-chan struct{} // closed when the HTTP server stops (any cause).
+	stop func()          // tears down everything startBackend set up; idempotent.
 }
+
+// screenshotTimeout bounds a window capture relayed over the client channel, so
+// an unresponsive window fails the request instead of holding it open.
+const screenshotTimeout = 15 * time.Second
 
 // startBackend builds the daemon and starts serving on a loopback port. App-level
 // state (the gateway client, log file, shared theme/log-level config, the HTTP
@@ -132,6 +132,20 @@ func startBackend(logger zerolog.Logger, idleTimeout time.Duration) (*backend, e
 	// that fallback.
 	api := grimoireapi.New(reg.runtimeOrLast, reg.open)
 
+	// Native window operations reach the GUI over its control channel — the daemon
+	// holds no handle on the window. Unattached (a headless serve, a browser
+	// client) they degrade the same way they did with no window at all.
+	bridge := newClientBridge(themeBase(cfg.Theme))
+	settings.SetOnThemeChange(func(t string) { bridge.setTheme(themeBase(t)) })
+	reg.SetFolderPicker(bridge.PickFolder)
+	// The capture hook carries no context of its own, so bound the wait here: a
+	// window that never answers must not pin an API request open.
+	reg.SetScreenshotter(func() ([]byte, error) {
+		shotCtx, cancel := context.WithTimeout(context.Background(), screenshotTimeout)
+		defer cancel()
+		return bridge.Screenshot(shotCtx)
+	})
+
 	// The connection settings (endpoint/token/CA) the gear menu's Connect button
 	// drives — global, present whether or not a vault is bound. The probe uses
 	// the candidate CA so a private-CA gateway validates before being saved.
@@ -145,12 +159,12 @@ func startBackend(logger zerolog.Logger, idleTimeout time.Duration) (*backend, e
 	}
 
 	// The server exists before its routes: the control surface they mount (ping,
-	// shutdown, the closing signal) is the server's own.
+	// shutdown, the client channel's closing signal) is the server's own.
 	server := &http.Server{
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	ctl := newDaemonControl(version, server, logger)
+	ctl := newDaemonControl(version, bridge, server, logger)
 
 	// Routes are static: the daemon serves every vault, and each request names the
 	// one it acts on, so there is nothing to rebuild.
@@ -160,7 +174,8 @@ func startBackend(logger zerolog.Logger, idleTimeout time.Duration) (*backend, e
 	// When an idle timeout is set (the CLI's on-demand `serve` path), shut the
 	// daemon down after a quiet spell so an on-demand instance doesn't linger once
 	// the agent stops calling it. A request holds the countdown for as long as it
-	// runs (a reindex can outlive the window), and it restarts when the last
+	// runs (a reindex can outlive the window, and an attached GUI window holds its
+	// control channel open the whole time), and it restarts when the last
 	// in-flight request ends.
 	var idle *idleTracker
 	if idleTimeout > 0 {
@@ -195,18 +210,9 @@ func startBackend(logger zerolog.Logger, idleTimeout time.Duration) (*backend, e
 	warmCtx, stopWarm := context.WithCancel(context.Background())
 	go reg.warmup(warmCtx, warmupStagger)
 
-	url := fmt.Sprintf("http://127.0.0.1:%d/", port)
-	logger.Info().Str("url", url).Str("gateway", endpoint).Msg("started grimoire daemon")
+	logger.Info().Str("url", pageURL(port, "")).Str("gateway", endpoint).Msg("started grimoire daemon")
 
-	b := &backend{
-		logger:   logger,
-		cfg:      cfg,
-		settings: settings,
-		reg:      reg,
-		server:   server,
-		done:     done,
-		url:      url,
-	}
+	b := &backend{reg: reg, done: done}
 	var once sync.Once
 	b.stop = func() {
 		once.Do(func() {
@@ -234,11 +240,12 @@ func startBackend(logger zerolog.Logger, idleTimeout time.Duration) (*backend, e
 // pageURL is the daemon's page for a vault: the window opens straight on it, so
 // a `--vault` launch lands there whatever the last-used vault was (and records it
 // as the new one). An empty vault leaves the page to resolve the last-used one.
-func (b *backend) pageURL(vault string) string {
+func pageURL(port int, vault string) string {
+	base := fmt.Sprintf("http://127.0.0.1:%d/", port)
 	if vault == "" {
-		return b.url
+		return base
 	}
-	return b.url + "?vault=" + url.QueryEscape(vault)
+	return base + "?vault=" + url.QueryEscape(vault)
 }
 
 // gatewayEndpoint resolves the MASS gateway URL: the app's own env var, then the

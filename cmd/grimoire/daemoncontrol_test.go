@@ -16,7 +16,8 @@ import (
 // testControl is a daemonControl over a server nothing serves, for the handler
 // tests that only need the routes mounted.
 func testControl() *daemonControl {
-	return newDaemonControl(version, &http.Server{ReadHeaderTimeout: time.Second}, zerolog.Nop())
+	return newDaemonControl(version, newClientBridge("dark"),
+		&http.Server{ReadHeaderTimeout: time.Second}, zerolog.Nop())
 }
 
 // controlServer runs the daemon's control routes on a real loopback listener,
@@ -30,7 +31,7 @@ func controlServer(t *testing.T, buildVersion string) (port int, stopped <-chan 
 
 	mux := http.NewServeMux()
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
-	ctl := newDaemonControl(buildVersion, server, zerolog.Nop())
+	ctl := newDaemonControl(buildVersion, newClientBridge("dark"), server, zerolog.Nop())
 	mountAPI(mux, nil, ctl, zerolog.Nop())
 
 	done := make(chan struct{})

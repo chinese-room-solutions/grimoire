@@ -15,6 +15,7 @@ import (
 
 	"github.com/chinese-room-solutions/grimoire/internal/apiclient"
 	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
+	"github.com/rs/zerolog"
 )
 
 // signalContext returns a context cancelled on Ctrl-C / SIGTERM, for the
@@ -125,10 +126,92 @@ const (
 	launchPoll    = 100 * time.Millisecond
 )
 
-// daemonProbeTimeout bounds a ping or a stop request against the advertised
-// port. The daemon is on loopback and answers both without touching a vault, so
-// a slow answer means a wedged process, not a busy one.
-const daemonProbeTimeout = 2 * time.Second
+// ensureDaemon returns the loopback port of a live Grimoire daemon running this
+// build, starting one when needed. It is the single entry point both clients use
+// — the CLI for a one-shot verb, the GUI for the window it attaches:
+//
+//   - no advertisement: spawn a headless daemon and wait for its port;
+//   - advertised but silent (a crash, a retirement mid-read): relaunch;
+//   - advertised but a different build: ask it to stop, wait for it to drop the
+//     advertisement, and relaunch — an upgraded binary must never drive
+//     yesterday's process, whose API and page it no longer matches.
+func ensureDaemon(ctx context.Context, logger zerolog.Logger) (int, error) {
+	portFile, err := daemonPortFile()
+	if err != nil {
+		return 0, err
+	}
+	port := readPort(portFile)
+	if port == 0 {
+		return relaunchDaemon(ctx, portFile)
+	}
+
+	switch running, err := daemonVersion(ctx, port); {
+	case err != nil:
+		logger.Info().Err(err).Int("port", port).Msg("the advertised daemon does not answer; starting a fresh one")
+	case running == version:
+		return port, nil
+	default:
+		logger.Info().Str("daemon", running).Str("client", version).
+			Msg("the running daemon is a different build; restarting it")
+		if err := requestDaemonShutdown(ctx, port); err != nil {
+			logger.Warn().Err(err).Msg("asking the outdated daemon to stop; replacing it anyway")
+		} else if err := waitForPortRelease(ctx, portFile, port, daemonStopTimeout); err != nil {
+			logger.Warn().Err(err).Msg("waiting for the outdated daemon to retire; replacing it anyway")
+		}
+	}
+	return relaunchDaemon(ctx, portFile)
+}
+
+// connectDaemon returns an API client for a live daemon, launching or replacing
+// one as ensureDaemon decides. vault is the vault the client's requests act on
+// ("" lets the daemon fall back to the last-used one). The CLI has no logger of
+// its own — its output belongs to the caller's script — so the launch decisions
+// are silent there; the GUI calls ensureDaemon directly and logs them.
+func connectDaemon(ctx context.Context, vault string) (*apiclient.Client, error) {
+	port, err := ensureDaemon(ctx, zerolog.Nop())
+	if err != nil {
+		return nil, err
+	}
+	return apiclient.New(port, vault), nil
+}
+
+// respawnDaemon forces a fresh headless daemon, ignoring any advertisement, and
+// returns a client for it. The CLI calls it after a transport error against a
+// port that turned out dead, so a request that hit a crashed or retired daemon
+// retries once against a live one.
+func respawnDaemon(ctx context.Context, vault string) (*apiclient.Client, error) {
+	portFile, err := daemonPortFile()
+	if err != nil {
+		return nil, err
+	}
+	port, err := relaunchDaemon(ctx, portFile)
+	if err != nil {
+		return nil, err
+	}
+	return apiclient.New(port, vault), nil
+}
+
+// relaunchDaemon drops any existing advertisement and starts a fresh headless
+// daemon, returning its port. Clearing the file first is what makes the wait
+// meaningful: otherwise waitForPort returns the dead port immediately and the
+// retry hits the same corpse. Best-effort removal — removePortFile only clears
+// this process's own file, and a dead daemon's is another pid's.
+func relaunchDaemon(ctx context.Context, portFile string) (int, error) {
+	if err := os.Remove(portFile); err != nil && !os.IsNotExist(err) {
+		return 0, fmt.Errorf("clearing the stale daemon port file: %w", err)
+	}
+	return launchDaemonAndWait(ctx, portFile)
+}
+
+const (
+	// daemonProbeTimeout bounds a ping or a stop request against the advertised
+	// port. The daemon is on loopback and answers both without touching a vault, so
+	// a slow answer means a wedged process, not a busy one.
+	daemonProbeTimeout = 2 * time.Second
+	// daemonStopTimeout bounds the wait for a daemon asked to retire, which
+	// finishes its in-flight requests first.
+	daemonStopTimeout = 10 * time.Second
+)
 
 // daemonVersion asks the daemon on port which build it is running.
 func daemonVersion(ctx context.Context, port int) (string, error) {
@@ -185,45 +268,22 @@ func daemonURL(port int, path string) string {
 	return fmt.Sprintf("http://127.0.0.1:%d%s", port, path)
 }
 
-// connectDaemon returns an API client for the running Grimoire daemon, launching
-// a headless one on demand when none is up. It reads the advertised port from the
-// app-level daemon.port and — when absent (0) — spawns a daemon and waits for it
-// to publish. vault is the vault the client's requests act on ("" lets the daemon
-// fall back to the last-used one). The CLI uses it as its single entry point:
-// one daemon serves every vault.
-func connectDaemon(ctx context.Context, vault string) (*apiclient.Client, error) {
-	portFile, err := daemonPortFile()
-	if err != nil {
-		return nil, err
-	}
-	port := readPort(portFile)
-	if port == 0 {
-		if port, err = launchDaemonAndWait(ctx, portFile); err != nil {
-			return nil, err
+// waitForPortRelease blocks until the advertisement at portFile no longer names
+// port — the daemon asked to stop has dropped it — so the relaunch that follows
+// waits for the replacement's port rather than reading the corpse's.
+func waitForPortRelease(ctx context.Context, portFile string, port int, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	tick := time.NewTicker(launchPoll)
+	defer tick.Stop()
+	for {
+		if readPort(portFile) != port {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting up to %s for the daemon on port %d to retire: %w", timeout, port, ctx.Err())
+		case <-tick.C:
 		}
 	}
-	return apiclient.New(port, vault), nil
-}
-
-// respawnDaemon forces a fresh headless daemon, ignoring any stale port
-// advertisement, and returns a client for it. The CLI calls it after a transport
-// error against a port that turned out dead, so a request that hit a crashed or
-// retired daemon retries once against a live one.
-func respawnDaemon(ctx context.Context, vault string) (*apiclient.Client, error) {
-	portFile, err := daemonPortFile()
-	if err != nil {
-		return nil, err
-	}
-	// Drop the stale advertisement so waitForPort blocks on the new daemon's port
-	// rather than returning the dead one immediately. Best-effort: a foreign or
-	// already-gone file is left alone (removePortFile only clears our own; a dead
-	// daemon's file is another pid's, so force it here).
-	if err := os.Remove(portFile); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("clearing the stale daemon port file: %w", err)
-	}
-	port, err := launchDaemonAndWait(ctx, portFile)
-	if err != nil {
-		return nil, err
-	}
-	return apiclient.New(port, vault), nil
 }

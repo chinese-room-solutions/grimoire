@@ -48,9 +48,9 @@ type vaultRegistry struct {
 	// runtimes is keyed by vaultdir.Canonical(path), so equivalent spellings of
 	// the same vault collapse onto one runtime.
 	runtimes map[string]*vaultRuntime
-	// folderPicker is the native folder dialog, wired from the GUI window when
-	// there is one; nil in a headless daemon.
-	folderPicker func(title string) (string, bool, error)
+	// folderPicker is the native folder dialog, relayed to the attached GUI
+	// window; nil until one is wired.
+	folderPicker func(ctx context.Context, title string) (string, bool, error)
 	closed       bool
 }
 
@@ -226,7 +226,7 @@ func (reg *vaultRegistry) warmup(ctx context.Context, stagger time.Duration) {
 // SetFolderPicker records the native folder dialog the vault picker uses. The
 // window belongs to the process, not to a vault, so it lives here rather than on
 // any one runtime.
-func (reg *vaultRegistry) SetFolderPicker(fn func(title string) (string, bool, error)) {
+func (reg *vaultRegistry) SetFolderPicker(fn func(ctx context.Context, title string) (string, bool, error)) {
 	reg.mu.Lock()
 	defer reg.mu.Unlock()
 	reg.folderPicker = fn
@@ -239,15 +239,17 @@ func (reg *vaultRegistry) SetScreenshotter(fn func() ([]byte, error)) {
 }
 
 // pickFolder runs the native folder dialog, or reports false when no window is
-// attached (a headless daemon, or a browser client).
-func (reg *vaultRegistry) pickFolder(title string) (string, bool, error) {
+// attached (a headless daemon, or a browser client). ctx is the requesting
+// call's: a dialog waits on the user, and nothing should outlive the request
+// that opened it.
+func (reg *vaultRegistry) pickFolder(ctx context.Context, title string) (string, bool, error) {
 	reg.mu.Lock()
 	fn := reg.folderPicker
 	reg.mu.Unlock()
 	if fn == nil {
 		return "", false, nil
 	}
-	return fn(title)
+	return fn(ctx, title)
 }
 
 // signalPeekLimit caps how much of a Datastar POST body is buffered to find the

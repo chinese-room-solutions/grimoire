@@ -2,11 +2,20 @@ package main
 
 import (
 	"context"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,6 +70,90 @@ func TestRespawnDaemonClearsTheStalePortFile(t *testing.T) {
 	_, err = respawnDaemon(ctx, "/vaults/A")
 	require.Error(t, err, "no daemon comes up in a test binary")
 	require.Zero(t, readPort(path), "the stale advertisement is dropped before the wait")
+}
+
+// A daemon already up and running this build is reused as it stands — no
+// version dance, no second process.
+func TestEnsureDaemonReusesALiveDaemon(t *testing.T) {
+	isolateVaultDirs(t)
+	portFile, err := daemonPortFile()
+	require.NoError(t, err)
+
+	port, _ := controlServer(t, version)
+	require.NoError(t, writePortFile(portFile, port))
+
+	got, err := ensureDaemon(t.Context(), zerolog.Nop())
+	require.NoError(t, err)
+	require.Equal(t, port, got)
+	require.Equal(t, port, readPort(portFile), "a healthy daemon keeps its advertisement")
+}
+
+// An advertisement pointing at a port nobody answers on (a crashed or retired
+// daemon) is dropped and replaced. The relaunch itself can't succeed in a test
+// binary — what matters is that the corpse's advertisement is gone, so nothing
+// retries against it.
+func TestEnsureDaemonReplacesADeadAdvertisement(t *testing.T) {
+	isolateVaultDirs(t)
+	portFile, err := daemonPortFile()
+	require.NoError(t, err)
+	require.NoError(t, writePortFile(portFile, deadPort(t)))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	_, err = ensureDaemon(ctx, zerolog.Nop())
+	require.Error(t, err, "no daemon comes up in a test binary")
+	require.Zero(t, readPort(portFile), "the dead advertisement is dropped")
+}
+
+// A daemon running a different build is asked to retire before a fresh one
+// takes its place: an upgraded binary must never drive yesterday's process.
+func TestEnsureDaemonRestartsAnOutdatedDaemon(t *testing.T) {
+	isolateVaultDirs(t)
+	portFile, err := daemonPortFile()
+	require.NoError(t, err)
+
+	var asked atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/ping", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"version":"an-older-build"}`)
+	})
+	mux.HandleFunc("POST /api/v1/shutdown", func(w http.ResponseWriter, _ *http.Request) {
+		asked.Store(true)
+		// A retiring daemon drops its advertisement; the caller waits for that
+		// before launching the replacement.
+		require.NoError(t, os.Remove(portFile))
+		_, _ = io.WriteString(w, `{"status":"stopping"}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	require.NoError(t, writePortFile(portFile, serverPort(t, srv)))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	_, err = ensureDaemon(ctx, zerolog.Nop())
+	require.Error(t, err, "no daemon comes up in a test binary")
+	require.True(t, asked.Load(), "the outdated daemon is asked to stop")
+	require.Zero(t, readPort(portFile), "its advertisement is gone before the replacement is awaited")
+}
+
+// deadPort returns a loopback port nothing listens on.
+func deadPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+	return port
+}
+
+// serverPort is the loopback port an httptest server listens on.
+func serverPort(t *testing.T, srv *httptest.Server) int {
+	t.Helper()
+	_, portText, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portText)
+	require.NoError(t, err)
+	return port
 }
 
 // A cancelled caller (Ctrl-C during a CLI command) stops the wait instead of

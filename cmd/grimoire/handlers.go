@@ -100,6 +100,11 @@ func grimoireRoutes(reg *vaultRegistry, api *grimoireapi.API, ctl *daemonControl
 	mux := http.NewServeMux()
 	vm := vaultMux{mux: mux, reg: reg, logger: logger}
 
+	// The GUI window is a webview over these same routes, so everything native it
+	// owes the daemon (the folder dialog, a capture, the title-bar theme) travels
+	// over its control channel.
+	mountClientChannel(mux, ctl.bridge, ctl, logger)
+
 	mux.HandleFunc("GET /{$}", pageHandler(reg, appDir, store, client, logger))
 
 	// Opening a vault is available in any state: from the empty state's picker, or
@@ -312,7 +317,7 @@ func openVaultHandler(reg *vaultRegistry, logger zerolog.Logger) http.HandlerFun
 		pageVault := requestVault(r)
 		path := strings.TrimSpace(r.FormValue("path"))
 		if path == "" {
-			picked, ok, err := reg.pickFolder("Select a vault folder")
+			picked, ok, err := reg.pickFolder(r.Context(), "Select a vault folder")
 			if err != nil {
 				logger.Warn().Err(err).Msg("folder dialog failed")
 				http.Error(w, "folder dialog failed", http.StatusInternalServerError)
