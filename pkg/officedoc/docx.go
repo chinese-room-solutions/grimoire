@@ -123,7 +123,7 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 				// standalone image (emitted as its own block so a heading/list
 				// heuristic on the surrounding text can't swallow it); naming it also
 				// marks it for extraction.
-				if rel := attrNS(t, "embed"); rel != "" {
+				if rel := attr(t,"embed"); rel != "" {
 					if target := mediaByRelID[rel]; target != "" {
 						paraImages = append(paraImages, "![]("+AttachmentDir+"/"+namer.name(target)+")")
 					}
@@ -156,7 +156,7 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 					return nil, nil, ctxerr.With(fmt.Errorf("skipping tab stops: %w", serr), nil)
 				}
 			case "hyperlink":
-				linkTarget = linkByRelID[attrNS(t, "id")]
+				linkTarget = linkByRelID[attr(t,"id")]
 			case "t":
 				text, rerr := readText(dec, t)
 				if rerr != nil {

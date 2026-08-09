@@ -479,8 +479,9 @@ func readText(dec *xml.Decoder, start xml.StartElement) (string, error) {
 	}
 }
 
-// attr returns a start element's attribute by local name (namespace ignored), or
-// "" if absent.
+// attr returns a start element's attribute by local name, or "" if absent. The
+// namespace is ignored, which is enough even for the namespaced ones (r:id,
+// r:embed, xlink:href) — no element here carries two same-named attributes.
 func attr(e xml.StartElement, local string) string {
 	for _, a := range e.Attr {
 		if a.Name.Local == local {
@@ -488,12 +489,6 @@ func attr(e xml.StartElement, local string) string {
 		}
 	}
 	return ""
-}
-
-// attrNS is attr by local name but used where the attribute is namespaced (e.g.
-// the relationships r:id); it matches on local name alone, which is enough here.
-func attrNS(e xml.StartElement, local string) string {
-	return attr(e, local)
 }
 
 // attrBool reads a boolean toggle attribute (e.g. w:b's optional w:val): present
