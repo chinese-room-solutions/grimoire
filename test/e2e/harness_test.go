@@ -188,7 +188,45 @@ func startChromedriver(t *testing.T, bin string) (baseURL string) {
 type server struct {
 	baseURL string // http://127.0.0.1:<port>/
 	vault   string // the scratch vault directory
-	cfgRoot string // scratch XDG_CONFIG_HOME
+	cfgRoot string // the user config dir the child resolves inside the scratch root
+}
+
+// scratchEnv builds the child's environment inside a scratch root and reports
+// the user config dir the child will resolve there. os.UserConfigDir reads a
+// different variable per OS — $XDG_CONFIG_HOME on Linux, $HOME/Library/... on
+// macOS (XDG is ignored), %AppData% on Windows — so set all of them and mirror
+// the same resolution here, or the harness watches a directory the backend
+// never writes to.
+func scratchEnv(scratch string) (env []string, cfgRoot string) {
+	home := filepath.Join(scratch, "home")
+	config := filepath.Join(scratch, "config")
+	cache := filepath.Join(scratch, "cache")
+	env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + home,
+		"USERPROFILE=" + home, // os.UserHomeDir on Windows.
+		"XDG_CONFIG_HOME=" + config,
+		"XDG_CACHE_HOME=" + cache,
+		"XDG_STATE_HOME=" + filepath.Join(scratch, "state"),
+		"XDG_DATA_HOME=" + filepath.Join(scratch, "data"),
+		"APPDATA=" + config,
+		"LOCALAPPDATA=" + cache,
+		// A loopback port nothing listens on: gateway calls fail fast and
+		// deterministically (the no-gateway degrade paths under test).
+		"GRIMOIRE_GATEWAY_URL=http://127.0.0.1:9",
+	}
+	// Windows processes need these to start at all, and they carry no user
+	// state. Env lookup is case-insensitive there, so one spelling finds them.
+	for _, name := range []string{"SystemRoot", "windir"} {
+		if v := os.Getenv(name); v != "" {
+			env = append(env, name+"="+v)
+		}
+	}
+	cfgRoot = config
+	if runtime.GOOS == "darwin" {
+		cfgRoot = filepath.Join(home, "Library", "Application Support")
+	}
+	return env, cfgRoot
 }
 
 // startServer seeds a scratch vault with the given notes (rel path → content),
@@ -213,22 +251,12 @@ func startServer(t *testing.T, notes map[string]string, appCfg ...map[string]str
 		writeNote(t, vault, rel, content)
 	}
 
-	cfgRoot := filepath.Join(scratch, "config")
+	env, cfgRoot := scratchEnv(scratch)
 	for _, cfg := range appCfg {
 		writeAppConfig(t, cfgRoot, cfg)
 	}
 	cmd := exec.Command(grimoireBin(t), "serve", "--vault", vault)
-	cmd.Env = []string{
-		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + filepath.Join(scratch, "home"),
-		"XDG_CONFIG_HOME=" + cfgRoot,
-		"XDG_CACHE_HOME=" + filepath.Join(scratch, "cache"),
-		"XDG_STATE_HOME=" + filepath.Join(scratch, "state"),
-		"XDG_DATA_HOME=" + filepath.Join(scratch, "data"),
-		// A loopback port nothing listens on: gateway calls fail fast and
-		// deterministically (the no-gateway degrade paths under test).
-		"GRIMOIRE_GATEWAY_URL=http://127.0.0.1:9",
-	}
+	cmd.Env = env
 	logf, err := os.Create(filepath.Join(scratch, "serve.stderr"))
 	if err != nil {
 		t.Fatalf("creating server log: %v", err)
