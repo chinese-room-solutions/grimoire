@@ -127,7 +127,8 @@ func apiScreenshotHandler(api *grimoireapi.API, logger zerolog.Logger) http.Hand
 // writeServiceError maps a service error to an HTTP status: configuration gaps
 // (no vault/model) are 503 (the index is warming up or unconfigured), a path
 // escaping the vault is 400, a missing note is 404, anything else 500. The
-// detail is the error text — safe here since the surface is local + authed.
+// detail is the error text — safe here since the surface is loopback-only,
+// behind the loopback/origin guard (there is no auth).
 func writeServiceError(w http.ResponseWriter, err error, logger zerolog.Logger, op string) {
 	switch {
 	case errors.Is(err, app.ErrOutsideVault), errors.Is(err, grimoireapi.ErrKernelBuiltin),
