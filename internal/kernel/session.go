@@ -336,6 +336,13 @@ func sessionKey(notePath, kernelName string) string {
 	return notePath + "\x00" + kernelName
 }
 
+// splitSessionKey undoes sessionKey, so logs and errors carry a readable note and
+// kernel rather than the NUL-joined key.
+func splitSessionKey(key string) (notePath, kernelName string) {
+	notePath, kernelName, _ = strings.Cut(key, "\x00")
+	return notePath, kernelName
+}
+
 // session returns noteKey's live session, spawning one if absent. Spawning (PATH
 // probes, pipes, cmd.Start) happens outside m.mu so a slow start doesn't block
 // other notes or a close; a pending entry marks the key meanwhile, so a
@@ -373,10 +380,12 @@ func (m *Manager) session(noteKey string, man *Manifest) (*Session, error) {
 		case cancelled:
 			// The note (or the app) closed while this kernel was starting: nobody owns
 			// the process, so end it here rather than leak it.
+			note, kernelName := splitSessionKey(noteKey)
 			if cerr := s.Close(); cerr != nil {
-				m.logger.Warn().Err(cerr).Str("session", noteKey).Msg("closing an orphaned kernel")
+				m.logger.Warn().Err(cerr).Str("note", note).Str("kernel", kernelName).Msg("closing an orphaned kernel")
 			}
-			return nil, ctxerr.With(fmt.Errorf("%w: %s", ErrSessionClosed, man.Name()), map[string]any{"session": noteKey})
+			return nil, ctxerr.With(fmt.Errorf("%w: %s", ErrSessionClosed, man.Name()),
+				map[string]any{"note": note, "kernel": kernelName})
 		}
 		return s, nil
 	}
@@ -397,7 +406,8 @@ func (m *Manager) drop(noteKey string, sess *Session) {
 		return
 	}
 	if err := sess.Close(); err != nil {
-		m.logger.Warn().Err(err).Str("session", noteKey).Msg("closing dead kernel session")
+		note, kernelName := splitSessionKey(noteKey)
+		m.logger.Warn().Err(err).Str("note", note).Str("kernel", kernelName).Msg("closing dead kernel session")
 	}
 }
 
@@ -431,7 +441,8 @@ func (m *Manager) CloseNote(notePath string) {
 
 // CloseAll ends every kernel (called on app shutdown). Kernels still starting
 // are cancelled: each spawner closes its own process instead of publishing it,
-// rather than CloseAll waiting for a start it can't hurry.
+// rather than CloseAll waiting for a start it can't hurry. Every failed close is
+// logged, and all of them are returned joined.
 func (m *Manager) CloseAll() error {
 	m.mu.Lock()
 	sessions := m.sessions
@@ -440,12 +451,13 @@ func (m *Manager) CloseAll() error {
 		p.cancelled = true
 	}
 	m.mu.Unlock()
-	var firstErr error
+	var errs []error
 	for key, sess := range sessions {
-		if err := sess.Close(); err != nil && firstErr == nil {
-			firstErr = err
-			m.logger.Warn().Err(err).Str("note", key).Msg("closing kernel on shutdown")
+		if err := sess.Close(); err != nil {
+			errs = append(errs, err)
+			note, kernelName := splitSessionKey(key)
+			m.logger.Warn().Err(err).Str("note", note).Str("kernel", kernelName).Msg("closing kernel on shutdown")
 		}
 	}
-	return firstErr
+	return errors.Join(errs...)
 }

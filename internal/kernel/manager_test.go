@@ -3,6 +3,7 @@ package kernel
 import (
 	"context"
 	"io"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -203,6 +204,21 @@ func TestManagerCloseAllDuringSpawn(t *testing.T) {
 	require.ErrorIs(t, <-errc, ErrSessionClosed)
 	require.Equal(t, int32(1), in.closes.Load(), "the orphaned kernel was closed")
 	require.NotContains(t, m.sessions, key)
+}
+
+// TestManagerCloseAllReportsEveryFailure: a failing close must not hide the ones
+// after it. Waiting on a never-started process is the easiest reliable failure.
+func TestManagerCloseAllReportsEveryFailure(t *testing.T) {
+	m := NewManager(regOf(), zerolog.Nop())
+	for _, note := range []string{"a.md", "b.md"} {
+		m.sessions[sessionKey(note, "bash@5")] = newSession(
+			exec.Command("kernel-that-was-never-started"), &fakeStdin{}, io.NopCloser(strings.NewReader("")))
+	}
+
+	err := m.CloseAll()
+	require.Error(t, err)
+	require.Len(t, strings.Split(err.Error(), "\n"), 2, "both failures are reported")
+	require.Empty(t, m.sessions)
 }
 
 func TestSessionKeyDistinguishesKernels(t *testing.T) {
