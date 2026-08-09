@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -23,12 +24,29 @@ func TestSourceLabel(t *testing.T) {
 }
 
 func TestSnippet(t *testing.T) {
-	require.Equal(t, "short", snippet("  short  "))
-
-	long := strings.Repeat("x", 500)
-	out := snippet(long)
-	require.LessOrEqual(t, len(out), 244) // 240 + ellipsis bytes.
-	require.True(t, strings.HasSuffix(out, "…"))
+	tests := []struct {
+		name, in string
+		want     string // exact result, when short enough to spell out
+	}{
+		{name: "short text is trimmed, not cut", in: "  short  ", want: "short"},
+		{name: "long ascii", in: strings.Repeat("x", 500)},
+		{name: "long multibyte", in: strings.Repeat("日", 500)},
+		// A cut landing mid-character: 239 ascii runes then a 3-byte rune spanning
+		// the old 240-byte boundary.
+		{name: "cut lands inside a rune", in: strings.Repeat("a", 239) + strings.Repeat("日", 20)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out := snippet(tc.in)
+			require.True(t, utf8.ValidString(out), "a snippet never splits a rune")
+			if tc.want != "" {
+				require.Equal(t, tc.want, out)
+				return
+			}
+			require.True(t, strings.HasSuffix(out, "…"))
+			require.LessOrEqual(t, utf8.RuneCountInString(out), 241) // 240 runes + the ellipsis.
+		})
+	}
 }
 
 func TestRenderMarkdown(t *testing.T) {

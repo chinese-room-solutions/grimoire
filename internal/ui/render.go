@@ -654,14 +654,16 @@ func sourceLabel(h Hit) string {
 	return h.Path
 }
 
-// snippet trims a chunk to a short preview for the search results list.
+// snippet trims a chunk to a short preview for the search results list. The cut
+// is by rune, so a multibyte character can't be split into invalid UTF-8.
 func snippet(s string) string {
-	const max = 240
+	const maxRunes = 240
 	s = strings.TrimSpace(s)
-	if len(s) <= max {
+	r := []rune(s)
+	if len(r) <= maxRunes {
 		return s
 	}
-	return strings.TrimSpace(s[:max]) + "…"
+	return strings.TrimSpace(string(r[:maxRunes])) + "…"
 }
 
 func script() string {
