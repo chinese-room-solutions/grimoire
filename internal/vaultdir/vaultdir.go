@@ -258,6 +258,18 @@ func migrateVaultData(dest, hash string) {
 	}
 }
 
+// Name is a vault's display name: its folder name. Everything that shows which
+// vault something belongs to — a search hit's label, a warning about a vault
+// that couldn't answer, the vault picker — names it this way, so one vault reads
+// the same everywhere. An empty or root-only path has no name.
+func Name(vault string) string {
+	vault = strings.TrimRight(strings.TrimSpace(vault), `/\`)
+	if vault == "" {
+		return ""
+	}
+	return filepath.Base(vault)
+}
+
 // Canonical normalizes a vault path to the absolute, cleaned form used as the
 // identity key for a vault (the same form For hashes). Callers that key their
 // own per-vault state use it so equivalent

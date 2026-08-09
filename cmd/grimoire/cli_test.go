@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/chinese-room-solutions/grimoire/internal/apiclient"
+	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -140,6 +141,92 @@ func TestCLINoteGet(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Search covers every vault, so the human view says which vault each hit lives
+// in — unless the caller narrowed the search themselves, when the answer is
+// already about one vault. A vault that couldn't answer is reported on stderr,
+// never mistaken for a result.
+func TestCLISearchLabelsHitsWithTheirVault(t *testing.T) {
+	routes := map[string]http.HandlerFunc{
+		"GET /api/v1/search": func(w http.ResponseWriter, _ *http.Request) {
+			stubJSON(t, w, grimoireapi.SearchResult{
+				Query: "q",
+				Hits: []grimoireapi.Hit{
+					{Path: "specs/a.md", Text: "one", Similarity: 0.9, Vault: "/vaults/work"},
+					{Path: "diary.md", Text: "two", Similarity: 0.8, Vault: "/vaults/home"},
+				},
+				Warnings: []string{"archive: index not ready yet"},
+			})
+		},
+	}
+	tests := []struct {
+		name     string
+		vault    string
+		wantOut  []string
+		wantMiss string
+	}{
+		{
+			name:    "cross-vault hits carry their vault",
+			wantOut: []string{"1. work/specs/a.md", "2. home/diary.md"},
+		},
+		{
+			name:     "a narrowed search prints bare paths",
+			vault:    "/vaults/work",
+			wantOut:  []string{"1. specs/a.md", "2. diary.md"},
+			wantMiss: "work/specs",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newCLIBackend(t, routes)
+			e, out, errBuf := b.env(t, false)
+			e.vault = tt.vault
+			require.Equal(t, exitOK, e.dispatch([]string{"search", "q"}))
+			for _, want := range tt.wantOut {
+				require.Contains(t, out.String(), want)
+			}
+			if tt.wantMiss != "" {
+				require.NotContains(t, out.String(), tt.wantMiss)
+			}
+			require.Contains(t, errBuf.String(), "archive: index not ready yet")
+		})
+	}
+
+	t.Run("json carries the vault verbatim", func(t *testing.T) {
+		b := newCLIBackend(t, routes)
+		e, out, _ := b.env(t, true)
+		require.Equal(t, exitOK, e.dispatch([]string{"search", "q"}))
+		var res grimoireapi.SearchResult
+		require.NoError(t, json.Unmarshal(out.Bytes(), &res))
+		require.Equal(t, "/vaults/work", res.Hits[0].Vault)
+		require.Equal(t, []string{"archive: index not ready yet"}, res.Warnings)
+	})
+}
+
+// Search is the one verb that runs without a vault: with none named and none
+// ever opened it covers every vault the daemon knows, so it must not be turned
+// away at the door. Every other verb still needs one.
+func TestCLISearchNeedsNoVault(t *testing.T) {
+	isolateVaultDirs(t) // no last-used vault anywhere.
+	require.False(t, requiresVault("search"))
+	require.True(t, needsVault("search"), "--vault still narrows it")
+	for _, verb := range []string{"note", "vault", "resolve", "reindex", "import"} {
+		require.True(t, requiresVault(verb), verb)
+	}
+
+	// Through the real entry point, which is where the gate lives. `search --help`
+	// stops short of the daemon but only after the vault has been resolved, so it
+	// shows the resolution let it through; a vault-bound verb is still turned away.
+	var out, errBuf bytes.Buffer
+	require.Equal(t, exitOK, runCLIWith([]string{"search", "--help"}, &out, &errBuf))
+	require.Contains(t, out.String(), "search QUERY")
+	require.Empty(t, errBuf.String())
+
+	out.Reset()
+	errBuf.Reset()
+	require.Equal(t, exitUsage, runCLIWith([]string{"note", "get", "a.md"}, &out, &errBuf))
+	require.Contains(t, errBuf.String(), "no vault")
 }
 
 func TestCLINoteWriteExitCodes(t *testing.T) {

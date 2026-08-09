@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/chinese-room-solutions/grimoire/internal/app"
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
@@ -34,7 +35,12 @@ func mountAPI(mux *http.ServeMux, api *grimoireapi.API, ctl *daemonControl, logg
 }
 
 // apiSearchHandler runs a hybrid search. Query params: q (required), k
-// (optional result count). Returns {"query","hits":[…]}.
+// (optional result count), vault (optional). Returns {"query","hits":[…]}.
+//
+// Search is the one route that does NOT fall back to the last-used vault: with
+// no vault named it searches every vault, which is the useful default for a
+// caller looking for something it doesn't know the home of. Naming one narrows
+// it to that vault.
 func apiSearchHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("q")
@@ -43,7 +49,7 @@ func apiSearchHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerF
 			return
 		}
 		k, _ := strconv.Atoi(r.URL.Query().Get("k")) // 0 (or junk) → API default.
-		res, err := api.Search(r.Context(), requestVault(r), query, k)
+		res, err := api.Search(r.Context(), strings.TrimSpace(r.URL.Query().Get("vault")), query, k)
 		if err != nil {
 			writeServiceError(w, err, logger, "search")
 			return

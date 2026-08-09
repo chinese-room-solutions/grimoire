@@ -20,9 +20,12 @@ type commandDoc struct {
 // commands is the single source for both the top-level usage list and every
 // `--help`. Order is the printed order.
 var commands = []commandDoc{
-	{"search", "search QUERY [-k N]", "hybrid search over the vault", `
-Hybrid search over the vault (full-text + embeddings). -k caps the number of
-hits (0 = the server's default). Needs the MASS gateway, like any embedding.`},
+	{"search", "search QUERY [-k N]", "hybrid search over every vault", `
+Hybrid search (full-text + embeddings) over every vault Grimoire knows about,
+with each hit labelled by the vault it lives in; --vault narrows it to one.
+-k caps the number of hits (0 = the server's default). A vault that can't
+answer (its index still opening) is reported and skipped, not fatal.
+Needs the MASS gateway, like any embedding.`},
 
 	{"note get", "note get PATH", "print a note's raw Markdown", `
 Print a note's raw Markdown to stdout, undecorated so it pipes cleanly.

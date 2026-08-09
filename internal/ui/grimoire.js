@@ -2548,6 +2548,14 @@
       var hit = e.target.closest("[data-note]");
       if (hit) {
         if ((e.ctrlKey || e.metaKey || e.shiftKey) && hit.classList.contains("g-tree-note")) return;
+        // A search covers every vault, but the page speaks to one: a hit from
+        // another vault navigates there with the note to open (see openPendingNote).
+        var hitVault = hit.getAttribute("data-vault");
+        if (hitVault && hitVault !== pageVault()) {
+          location.assign("/?vault=" + encodeURIComponent(hitVault) +
+            "&note=" + encodeURIComponent(hit.getAttribute("data-note")));
+          return;
+        }
         nav.openNote(hit.getAttribute("data-note"), hit.getAttribute("data-heading"));
         return;
       }
@@ -4449,9 +4457,28 @@
       // navRestore (restoreTabs) fetches the persisted tabs server-side; reveal
       // only once it resolves so the restored view doesn't flash in after paint.
       var done = navRestore ? navRestore() : null;
-      if (done && typeof done.then === "function") done.then(revealMain, revealMain);
-      else revealMain();
+      if (done && typeof done.then === "function") done.then(finishRestore, finishRestore);
+      else finishRestore();
     });
+  }
+
+  function finishRestore() {
+    revealMain();
+    openPendingNote();
+  }
+
+  // ?note= is how a cross-vault search result opens: clicking a hit from another
+  // vault navigates here with the note named, since the page's panels all speak
+  // to one vault. Open it on top of the restored tabs, then drop it from the URL
+  // so a later refresh restores the workspace instead of reopening the note.
+  function openPendingNote() {
+    var match = /[?&]note=([^&]*)/.exec(location.search);
+    if (!match) return;
+    if (nav) nav.openNote(decodeURIComponent(match[1].replace(/\+/g, "%20")), "");
+    if (window.history && history.replaceState) {
+      var search = location.search.replace(/([?&])note=[^&]*&?/, "$1").replace(/[?&]$/, "");
+      history.replaceState(null, "", location.pathname + search + location.hash);
+    }
   }
 
   // Boot gates on the SDK layout's massDatastarReady, not on a delay after

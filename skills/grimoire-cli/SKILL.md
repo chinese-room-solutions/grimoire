@@ -19,6 +19,9 @@ grimoire <command> --help      # synopsis + detail for any command
 `--vault` and `--json` are global: they go **before** the verb. A verb's own
 flags may trail its arguments (`grimoire search "q" -k 5`).
 
+`search` covers **every** vault; `--vault` narrows it to one. Every other verb
+acts on a single vault: the one `--vault` names, else the last-used one.
+
 ## Indexing is automatic — don't reindex
 
 Every write is indexed for you: create, update, edit, props, rename, delete,
@@ -36,10 +39,14 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
 
 ## Finding things
 
-- `search QUERY [-k N]` — hybrid keyword + vector retrieval. Needs the MASS
-  gateway (`GRIMOIRE_GATEWAY_URL`, default
-  `http://localhost:3455/mass.llama-cpp`); without it, exit 1. Reading and
-  editing need no gateway.
+- `search QUERY [-k N]` — hybrid keyword + vector retrieval across **every**
+  vault, best matches first whichever vault they live in. Each hit is printed as
+  `vault/path` (`--json`: a `vault` field with the absolute path — pass it as
+  `--vault` to read the note). `--vault PATH` narrows the search to one vault,
+  and its hits print bare. A vault that can't answer is named in a warning line
+  on stderr (`warnings` in `--json`) and skipped. Needs the MASS gateway
+  (`GRIMOIRE_GATEWAY_URL`, default `http://localhost:3455/mass.llama-cpp`);
+  without it, exit 1. Reading and editing need no gateway.
 - `resolve TARGET` — a wikilink or bare name (`"My Note"`, `"My Note|alias"`,
   with or without `.md`) to a real path. Use it before assuming a path; exit 3
   if nothing matches.
@@ -106,7 +113,8 @@ Parse the JSON, never the tables.
 ## Examples
 
 ```sh
-grimoire search "vector index rebuild" -k 5
+grimoire search "vector index rebuild" -k 5   # every vault
+grimoire --vault ~/notes search "rrf"         # one vault
 grimoire resolve "Meeting Notes"
 grimoire note get projects/ideas.md
 grimoire note edit projects/ideas.md --old "TODO: bench" --new "Benchmarked: 45ms"

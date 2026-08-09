@@ -22,7 +22,6 @@ import (
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
 	"github.com/chinese-room-solutions/grimoire/internal/index"
 	"github.com/chinese-room-solutions/grimoire/internal/pdfconvert"
-	"github.com/chinese-room-solutions/grimoire/internal/store"
 	"github.com/chinese-room-solutions/grimoire/internal/ui"
 	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
 	"github.com/chinese-room-solutions/mass-sdk/connstore"
@@ -131,7 +130,9 @@ func grimoireRoutes(reg *vaultRegistry, api *grimoireapi.API, ctl *daemonControl
 	vm.handle("POST /api/convert-model", convertModelHandler)
 	vm.handle("POST /api/convert-resolution", convertResolutionHandler)
 	vm.handle("POST /api/convert-timeout", convertTimeoutHandler)
-	vm.handle("POST /action/search", searchHandler)
+	// Search spans every vault, so it is mounted over the registry rather than
+	// over the request's one service.
+	mux.HandleFunc("POST /action/search", searchHandler(reg, logger))
 	vm.handle("POST /action/preview", previewHandler)
 	vm.handle("POST /action/run-block", runBlockHandler)
 	vm.handle("POST /action/run-above", runAboveHandler)
@@ -558,22 +559,33 @@ func convertTimeoutHandler(svc *app.Service, logger zerolog.Logger) http.Handler
 	}
 }
 
-// searchHandler runs a hybrid search and patches the results list.
-func searchHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
+// searchHandler runs a hybrid search and patches the results list. It covers
+// every vault by default — knowledge spans them, and a searcher rarely knows
+// which one holds the answer — and narrows to the page's vault when the tuning
+// bar's "this vault only" is ticked. It is mounted over the registry rather than
+// over one service because of that; the page's own vault is still resolved, for
+// the narrow case and to record the turn.
+func searchHandler(reg *vaultRegistry, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		svc, err := reg.runtime(r.Context(), requestVault(r))
+		if err != nil {
+			writeVaultError(w, err, logger)
+			return
+		}
 		// ReadSignals before NewSSE — NewSSE closes the request body. gSeq is a
 		// string signal (a hidden input written by JS), so read it as one.
 		var sig struct {
-			Query  string  `json:"gQuery"`
-			Seq    string  `json:"gSeq"`
-			K      int     `json:"gSearchK"`
-			MinSim float64 `json:"gSearchMinSim"`
+			Query     string  `json:"gQuery"`
+			Seq       string  `json:"gSeq"`
+			K         int     `json:"gSearchK"`
+			MinSim    float64 `json:"gSearchMinSim"`
+			ThisVault bool    `json:"gSearchThisVault"`
 		}
 		if err := datastar.ReadSignals(r, &sig); err != nil {
 			logger.Warn().Err(err).Msg("reading search signals")
 		}
 		sse := datastar.NewSSE(w, r)
-		logger.Debug().Str("query", sig.Query).Msg("search request")
+		logger.Debug().Str("query", sig.Query).Bool("thisVault", sig.ThisVault).Msg("search request")
 		if sig.Query == "" {
 			return
 		}
@@ -588,7 +600,7 @@ func searchHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 		if k <= 0 {
 			k = 10
 		}
-		hits, err := svc.Search(r.Context(), sig.Query, k, sig.MinSim)
+		hits, warnings, err := runSearch(r.Context(), reg, svc, sig.ThisVault, sig.Query, k, sig.MinSim)
 		if err != nil {
 			_ = sse.PatchElementTempl(ui.Notice("Error: "+shortErr(err)),
 				datastar.WithSelector(resultsSel), datastar.WithModeInner())
@@ -597,12 +609,32 @@ func searchHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 			return
 		}
 		patchSignals(sse, map[string]any{"gSearchBusy": false})
-		_ = sse.PatchElementTempl(ui.SearchResults(toUIHits(hits)),
+		_ = sse.PatchElementTempl(ui.SearchResults(toUIHits(hits), warnings),
 			datastar.WithSelector(resultsSel), datastar.WithModeInner())
 
-		svc.RecordSearch(sig.Query, hits)
+		svc.RecordSearchHits(sig.Query, toSessionHits(hits))
 		renderSessions(sse, svc, logger)
 	}
+}
+
+// runSearch answers a GUI search: every vault, or only the page's when the user
+// narrowed it. Both paths return vault-tagged hits, so the results render and
+// record identically whichever ran.
+func runSearch(
+	ctx context.Context, reg *vaultRegistry, svc *app.Service, thisVault bool, query string, k int, minSim float64,
+) ([]vaultHit, []string, error) {
+	if !thisVault {
+		return multiSearch(ctx, reg, query, k, minSim)
+	}
+	hits, err := svc.Search(ctx, query, k, minSim)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]vaultHit, len(hits))
+	for i, h := range hits {
+		out[i] = vaultHit{Hit: h, Vault: svc.Vault()}
+	}
+	return out, nil, nil
 }
 
 // appendTurn appends a conversation turn to the stream and scrolls it into view.
@@ -1070,11 +1102,22 @@ func toUIRunResult(r app.RunResult) ui.RunResult {
 	}
 }
 
-// toUIHits adapts store hits to the UI's display shape.
-func toUIHits(hits []store.Hit) []ui.Hit {
+// toUIHits adapts vault-tagged hits to the UI's display shape.
+func toUIHits(hits []vaultHit) []ui.Hit {
 	out := make([]ui.Hit, len(hits))
 	for i, h := range hits {
-		out[i] = ui.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text}
+		out[i] = ui.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: h.Vault}
+	}
+	return out
+}
+
+// toSessionHits projects search hits to the shape the history persists, each
+// keeping the vault it came from so a replayed cross-vault turn still says where
+// every hit lives.
+func toSessionHits(hits []vaultHit) []app.SessionHit {
+	out := make([]app.SessionHit, len(hits))
+	for i, h := range hits {
+		out[i] = app.SessionHit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: h.Vault}
 	}
 	return out
 }
@@ -1764,7 +1807,7 @@ func sessionOpenHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFun
 			return
 		}
 		svc.SetActiveSession(id)
-		_ = sse.PatchElementTempl(ui.ConversationPanel(toUITurns(turns)),
+		_ = sse.PatchElementTempl(ui.ConversationPanel(toUITurns(turns, svc.Vault())),
 			datastar.WithSelector("#g-conversation"), datastar.WithModeReplace())
 		patchSignals(sse, map[string]any{"gHasContent": len(turns) > 0})
 		renderSessions(sse, svc, logger)
@@ -1845,7 +1888,7 @@ func turnDeleteHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc
 			logger.Warn().Err(err).Int64("session", sessionID).Msg("reloading turns after delete")
 			return
 		}
-		_ = sse.PatchElementTempl(ui.ConversationPanel(toUITurns(turns)),
+		_ = sse.PatchElementTempl(ui.ConversationPanel(toUITurns(turns, svc.Vault())),
 			datastar.WithSelector("#g-conversation"), datastar.WithModeReplace())
 		patchSignals(sse, map[string]any{"gHasContent": len(turns) > 0})
 	}
@@ -1889,23 +1932,31 @@ func sessionDeleteManyHandler(svc *app.Service, logger zerolog.Logger) http.Hand
 
 // toUITurns adapts stored search turns to the UI's display shape, carrying each
 // turn's ranked hits (with snippets) so reopening renders the same result cards.
-func toUITurns(turns []app.Turn) []ui.Turn {
+// pageVault is where a hit recorded before searches spanned vaults came from —
+// the only vault there was then.
+func toUITurns(turns []app.Turn, pageVault string) []ui.Turn {
 	out := make([]ui.Turn, len(turns))
 	for i, t := range turns {
 		out[i] = ui.Turn{
 			ID:    t.ID,
 			Query: t.Query,
-			Hits:  toUISessionHits(t.Hits),
+			Hits:  toUISessionHits(t.Hits, pageVault),
 		}
 	}
 	return out
 }
 
-// toUISessionHits adapts a search turn's persisted hits to the UI's hit shape.
-func toUISessionHits(hits []app.SessionHit) []ui.Hit {
+// toUISessionHits adapts a search turn's persisted hits to the UI's hit shape,
+// resolving a hit with no recorded vault (written before turns carried one) to
+// the page's.
+func toUISessionHits(hits []app.SessionHit, pageVault string) []ui.Hit {
 	out := make([]ui.Hit, len(hits))
 	for i, h := range hits {
-		out[i] = ui.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text}
+		vault := h.Vault
+		if vault == "" {
+			vault = pageVault
+		}
+		out[i] = ui.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: vault}
 	}
 	return out
 }

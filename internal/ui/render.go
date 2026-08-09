@@ -17,6 +17,7 @@ import (
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/chinese-room-solutions/grimoire/internal/fence"
 	"github.com/chinese-room-solutions/grimoire/internal/frontmatter"
+	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
 	"github.com/chinese-room-solutions/mass-sdk/uikit"
 	"github.com/yuin/goldmark"
 	highlighting "github.com/yuin/goldmark-highlighting/v2"
@@ -685,11 +686,13 @@ func initialSignals(st State) string {
 		"gPreviewTitle": "",
 		"gGraphK":       6,
 		"gGraphMinSim":  0.5,
-		// Search tuning, surfaced as the session view's top-panel sliders.
-		"gSearchK":      10,
-		"gSearchMinSim": 0.5,
-		"gModel":        st.EmbedModel,
-		"gConvertModel": st.ConvertModel,
+		// Search tuning, surfaced as the session view's top-panel sliders. Search
+		// covers every vault unless gSearchThisVault narrows it to this page's.
+		"gSearchK":         10,
+		"gSearchMinSim":    0.5,
+		"gSearchThisVault": false,
+		"gModel":           st.EmbedModel,
+		"gConvertModel":    st.ConvertModel,
 		// gRunKernel/gRunVersion carry a block's per-run {kernel=FAMILY}{version=VER}
 		// override to the run path.
 		"gRunKernel":  "",
@@ -707,13 +710,19 @@ func initialSignals(st State) string {
 	return string(b)
 }
 
-// sourceLabel formats a hit's provenance line: its note path, and the heading
-// the match fell under when one is known.
+// sourceLabel formats a hit's provenance line: the vault it came from, its note
+// path, and the heading the match fell under when one is known. Search spans
+// every vault, so the vault is always shown when known — a label that only
+// sometimes says where a note lives is one the reader has to think about.
 func sourceLabel(h Hit) string {
+	label := h.Path
 	if h.Heading != "" {
-		return h.Path + " › " + h.Heading
+		label += " › " + h.Heading
 	}
-	return h.Path
+	if name := vaultdir.Name(h.Vault); name != "" {
+		label = name + " › " + label
+	}
+	return label
 }
 
 // snippet trims a chunk to a short preview for the search results list. The cut
@@ -1133,6 +1142,8 @@ var styleBlock = `<style>
 #app-grimoire .g-hit{border:1px solid var(--mass-border);border-radius:0.45rem;padding:0.6rem 0.7rem;background:var(--mass-bg-panel);margin-top:0.5rem}
 #app-grimoire .g-hit-src{font-size:0.72rem;color:var(--mass-accent);margin-bottom:0.25rem}
 #app-grimoire .g-hit-text{font-size:0.8rem;color:var(--mass-text);white-space:pre-wrap;word-break:break-word}
+/* A vault a cross-vault search couldn't reach, named under its results. */
+#app-grimoire .g-hit-warning{font-size:0.72rem;margin-top:0.5rem}
 
 /* Input bar */
 #app-grimoire .g-input-row{display:flex;gap:0.5rem;align-items:flex-end;width:100%}

@@ -9,9 +9,11 @@ import (
 
 	"github.com/chinese-room-solutions/grimoire/internal/apiclient"
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
+	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
 )
 
-// runSearch handles `grimoire search QUERY [-k N]`.
+// runSearch handles `grimoire search QUERY [-k N]`. With no --vault it searches
+// every vault at once, so each hit is printed with the vault it came from.
 func (e *cliEnv) runSearch(args []string) int {
 	fs := flag.NewFlagSet("search", flag.ContinueOnError)
 	k := fs.Int("k", 0, "number of results (0 = server default)")
@@ -36,12 +38,15 @@ func (e *cliEnv) runSearch(args []string) int {
 		e.writeJSON(e.out, res)
 		return exitOK
 	}
+	for _, w := range res.Warnings {
+		e.errorf("%s", w)
+	}
 	if len(res.Hits) == 0 {
 		e.outln("no results")
 		return exitOK
 	}
 	for i, h := range res.Hits {
-		e.outf("%d. %s  (%.3f)\n", i+1, h.Path, h.Similarity)
+		e.outf("%d. %s  (%.3f)\n", i+1, hitLabel(h, e.vault), h.Similarity)
 		if h.Heading != "" {
 			e.outf("   %s\n", h.Heading)
 		}
@@ -50,6 +55,16 @@ func (e *cliEnv) runSearch(args []string) int {
 		}
 	}
 	return exitOK
+}
+
+// hitLabel names a hit's note: bare when the search was narrowed to one vault
+// (the caller already knows which), prefixed with the vault's folder name when
+// it covered them all.
+func hitLabel(h grimoireapi.Hit, vault string) string {
+	if vault != "" || h.Vault == "" {
+		return h.Path
+	}
+	return vaultdir.Name(h.Vault) + "/" + h.Path
 }
 
 // firstLine is a one-line snippet of a hit's chunk text for the human view,

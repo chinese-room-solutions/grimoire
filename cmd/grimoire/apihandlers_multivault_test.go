@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/chinese-room-solutions/grimoire/internal/app"
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
 	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
 	"github.com/rs/zerolog"
@@ -113,6 +115,41 @@ func TestGUIRouteResolvesTheVaultFromTheSignal(t *testing.T) {
 	// No signal and no last-used vault: the route says so instead of guessing.
 	rec := doGET(t, mux, "/api/files/render")
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+// Search is the one route that must NOT fall back to the last-used vault:
+// naming none means "every vault", even on a machine that has one open.
+func TestAPISearchWithoutAVaultFansOut(t *testing.T) {
+	reg := newTestRegistry(t)
+	vault := seedVault(t, map[string]string{"n.md": "# N\n"})
+	require.NoError(t, vaultdir.SetLastVault(vault))
+
+	var fannedOut, narrowedTo int
+	api := grimoireapi.New(
+		func(_ context.Context, v string) (*app.Service, error) {
+			narrowedTo++
+			require.Equal(t, vault, v)
+			return reg.runtime(context.Background(), v)
+		},
+		reg.open,
+	).WithSearchFanout(func(context.Context, string, int, float64) ([]grimoireapi.Hit, []string, error) {
+		fannedOut++
+		return []grimoireapi.Hit{{Path: "x.md", Vault: "/other"}}, nil, nil
+	})
+	mux := http.NewServeMux()
+	mountAPI(mux, api, testControl(), zerolog.Nop())
+
+	rec := doGET(t, mux, "/api/v1/search?q=alpha")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"vault":"/other"`)
+	require.Equal(t, 1, fannedOut)
+	require.Zero(t, narrowedTo, "no vault named: nothing is resolved, everything is searched")
+
+	require.Equal(t, http.StatusServiceUnavailable,
+		doGET(t, mux, "/api/v1/search?q=alpha&vault="+url.QueryEscape(vault)).Code,
+		"a named vault goes to that vault, which has no index here")
+	require.Equal(t, 1, fannedOut, "a named vault never fans out")
+	require.Equal(t, 1, narrowedTo)
 }
 
 // A request that names no vault falls back to the last-used one, so an agent that

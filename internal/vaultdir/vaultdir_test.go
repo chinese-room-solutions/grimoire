@@ -76,6 +76,23 @@ func TestForNormalizesEquivalentPaths(t *testing.T) {
 	require.Equal(t, clean, dirty)
 }
 
+func TestName(t *testing.T) {
+	tests := []struct {
+		vault, want string
+	}{
+		{filepath.Join("home", "u", "notes"), "notes"},
+		{filepath.Join("home", "u", "notes") + string(filepath.Separator), "notes"},
+		{"  " + filepath.Join("home", "u", "My Vault") + "  ", "My Vault"},
+		{"", ""},
+		{"   ", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.vault, func(t *testing.T) {
+			require.Equal(t, tt.want, Name(tt.vault))
+		})
+	}
+}
+
 func TestLastVaultRoundTrip(t *testing.T) {
 	useTempDirs(t)
 

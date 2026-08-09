@@ -13,6 +13,7 @@ package grimoireapi
 import (
 	"context"
 	"path/filepath"
+	"strings"
 
 	"github.com/chinese-room-solutions/grimoire/internal/app"
 	"github.com/chinese-room-solutions/grimoire/internal/store"
@@ -35,7 +36,18 @@ type API struct {
 	// open makes a vault the one a bare invocation acts on (the last-used vault),
 	// warming its runtime; nil where opening isn't supported (a fixed-vault API).
 	open func(ctx context.Context, vault string) error
+	// fanout runs a search across every vault at once; nil where there is only
+	// one to search, in which case a search that names no vault falls back to
+	// resolve like every other operation.
+	fanout SearchFanout
 }
+
+// SearchFanout runs one query across every vault the daemon serves and returns
+// the fused hits, each tagged with the vault it came from, plus a warning per
+// vault that couldn't answer. It is the seam the daemon's cross-vault
+// coordinator plugs into: the operations here stay transport-agnostic and the
+// coordinator stays with the vault registry that owns the runtimes.
+type SearchFanout func(ctx context.Context, query string, k int, minSim float64) ([]Hit, []string, error)
 
 // New returns an API that resolves each call's vault through resolve. open is the
 // hook OpenVault drives; pass nil for a context where the vault is fixed.
@@ -44,6 +56,13 @@ func New(
 	open func(ctx context.Context, vault string) error,
 ) *API {
 	return &API{resolve: resolve, open: open}
+}
+
+// WithSearchFanout installs the cross-vault search seam and returns the API, so
+// a daemon that serves many vaults searches them all when a caller names none.
+func (a *API) WithSearchFanout(fn SearchFanout) *API {
+	a.fanout = fn
+	return a
 }
 
 // NewStatic returns an API over a single fixed service, ignoring the vault every
@@ -80,21 +99,40 @@ type Hit struct {
 	Heading    string  `json:"heading"`    // breadcrumb of enclosing headings.
 	Text       string  `json:"text"`       // the matched chunk text.
 	Similarity float64 `json:"similarity"` // cosine similarity to the query, [-1, 1]; 0 for keyword-only matches.
+	// Vault is the absolute path of the vault the hit lives in — the value to
+	// pass as `vault` when reading or writing the note. A search spans every
+	// vault unless one is named, so a hit that didn't say which would be
+	// unresolvable.
+	Vault string `json:"vault"`
 }
 
 // SearchResult wraps the ranked hits for a query. The query is echoed back so a
-// caller batching searches can correlate responses.
+// caller batching searches can correlate responses. Warnings name the vaults a
+// cross-vault search couldn't reach, so partial results never pass for complete
+// ones; it is absent when every vault answered.
 type SearchResult struct {
-	Query string `json:"query"`
-	Hits  []Hit  `json:"hits"`
+	Query    string   `json:"query"`
+	Hits     []Hit    `json:"hits"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
-// Search runs a hybrid (vector + keyword) search over the vault and returns
-// the relevant chunks, already filtered to those about the query. k ≤ 0 uses
-// the default.
+// Search runs a hybrid (vector + keyword) search and returns the relevant
+// chunks, already filtered to those about the query. k ≤ 0 uses the default.
+//
+// With no vault named it searches every vault at once (the default: knowledge
+// spans them), fusing the per-vault rankings; naming one narrows it to that
+// vault. Without a fan-out installed a nameless search falls back to the
+// last-used vault, like every other operation.
 func (a *API) Search(ctx context.Context, vault, query string, k int) (SearchResult, error) {
 	if k <= 0 {
 		k = defaultSearchK
+	}
+	if strings.TrimSpace(vault) == "" && a.fanout != nil {
+		hits, warnings, err := a.fanout(ctx, query, k, 0)
+		if err != nil {
+			return SearchResult{}, err
+		}
+		return SearchResult{Query: query, Hits: hits, Warnings: warnings}, nil
 	}
 	svc, err := a.service(ctx, vault)
 	if err != nil {
@@ -104,11 +142,12 @@ func (a *API) Search(ctx context.Context, vault, query string, k int) (SearchRes
 	if err != nil {
 		return SearchResult{}, err
 	}
-	return SearchResult{Query: query, Hits: toHits(hits)}, nil
+	return SearchResult{Query: query, Hits: toHits(hits, svc.Vault())}, nil
 }
 
-// toHits projects store hits to the API's slim hit shape.
-func toHits(hits []store.Hit) []Hit {
+// toHits projects store hits from one vault to the API's slim hit shape, tagged
+// with the vault they came from.
+func toHits(hits []store.Hit, vault string) []Hit {
 	out := make([]Hit, len(hits))
 	for i, h := range hits {
 		out[i] = Hit{
@@ -116,6 +155,7 @@ func toHits(hits []store.Hit) []Hit {
 			Heading:    h.Heading,
 			Text:       h.Text,
 			Similarity: h.Similarity,
+			Vault:      vault,
 		}
 	}
 	return out

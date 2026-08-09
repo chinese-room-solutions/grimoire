@@ -129,8 +129,8 @@ func startBackend(logger zerolog.Logger, idleTimeout time.Duration) (*backend, e
 
 	// The agent API runs over the registry: each call names its vault (falling back
 	// to the last-used one), and opening a vault warms its runtime and makes it
-	// that fallback.
-	api := grimoireapi.New(reg.runtimeOrLast, reg.open)
+	// that fallback. Search is the exception — naming no vault searches them all.
+	api := grimoireapi.New(reg.runtimeOrLast, reg.open).WithSearchFanout(searchFanout(reg))
 
 	// Native window operations reach the GUI over its control channel — the daemon
 	// holds no handle on the window. Unattached (a headless serve, a browser

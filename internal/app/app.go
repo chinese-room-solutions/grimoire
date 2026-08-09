@@ -1601,14 +1601,18 @@ func (s *Service) DeleteTurn(sessionID, turnID int64) error {
 	return s.shared.DeleteTurn(sessionID, turnID)
 }
 
-// RecordSearch saves a search turn (query + the ranked hits it surfaced, with
-// snippets) into the active session, so reopening it re-renders the result cards.
+// RecordSearch saves a search turn over this vault (query + the ranked hits it
+// surfaced, with snippets) into the active session, so reopening it re-renders
+// the result cards.
 func (s *Service) RecordSearch(query string, hits []store.Hit) {
-	s.shared.recordTurn(session.Turn{
-		Kind:  session.KindSearch,
-		Query: query,
-		Hits:  toSessionHits(hits, s.Vault()),
-	})
+	s.RecordSearchHits(query, toSessionHits(hits, s.Vault()))
+}
+
+// RecordSearchHits saves a search turn whose hits already carry the vault each
+// came from — a cross-vault search, where the turn spans several. The history is
+// process-wide, so it holds them all.
+func (s *Service) RecordSearchHits(query string, hits []SessionHit) {
+	s.shared.recordTurn(session.Turn{Kind: session.KindSearch, Query: query, Hits: hits})
 }
 
 // toSessionHits projects store hits to the slimmer shape persisted with a search

@@ -73,14 +73,21 @@ func runCLIWith(args []string, out, errW io.Writer) int {
 		return env.dispatch(rest)
 	}
 
-	vault, err := resolveVault(*vaultFlag)
-	if err != nil {
-		_, _ = fmt.Fprintf(errW, "error: %v\n", err)
-		return exitError
-	}
-	if vault == "" {
-		_, _ = fmt.Fprintln(errW, "error: no vault: pass --vault PATH, or open one in the app first")
-		return exitUsage
+	// Search takes the flag alone: no --vault means every vault, so falling back
+	// to the last-used one would silently narrow it. Every other verb acts on one
+	// vault and must have one.
+	vault := *vaultFlag
+	if requiresVault(rest[0]) {
+		resolved, err := resolveVault(vault)
+		if err != nil {
+			_, _ = fmt.Fprintf(errW, "error: %v\n", err)
+			return exitError
+		}
+		if resolved == "" {
+			_, _ = fmt.Fprintln(errW, "error: no vault: pass --vault PATH, or open one in the app first")
+			return exitUsage
+		}
+		vault = resolved
 	}
 
 	// The vault rides on each request rather than binding the daemon to it: a CLI
@@ -92,10 +99,14 @@ func runCLIWith(args []string, out, errW io.Writer) int {
 	return env.dispatch(rest)
 }
 
-// needsVault reports whether a verb acts on a vault, and so must resolve one
-// before dispatch. Every verb does except skill, which only prints or copies a
-// file compiled into the binary.
+// needsVault reports whether --vault means anything to a verb. Every verb takes
+// it except skill, which only prints or copies a file compiled into the binary.
 func needsVault(verb string) bool { return verb != "skill" }
+
+// requiresVault reports whether a verb can't run without one. Search can: with
+// no vault named it covers them all, so it is the one verb that works on a
+// machine that has never opened a vault in the app.
+func requiresVault(verb string) bool { return needsVault(verb) && verb != "search" }
 
 // firstNonFlagIndex returns the index of the first argument that isn't a global
 // flag (or its value), which is the subcommand, or -1 when there is none. main

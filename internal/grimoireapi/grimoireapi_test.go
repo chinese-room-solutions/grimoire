@@ -144,7 +144,32 @@ func TestToHits(t *testing.T) {
 	in := []store.Hit{
 		{Chunk: store.Chunk{Path: "a.md", Heading: "H", Text: "t"}, Similarity: 0.9},
 	}
-	got := toHits(in)
+	got := toHits(in, "/vaults/notes")
 	require.Len(t, got, 1)
-	require.Equal(t, Hit{Path: "a.md", Heading: "H", Text: "t", Similarity: 0.9}, got[0])
+	require.Equal(t,
+		Hit{Path: "a.md", Heading: "H", Text: "t", Similarity: 0.9, Vault: "/vaults/notes"},
+		got[0])
+}
+
+// A search that names no vault fans out over every vault; naming one narrows it
+// to that vault's own service, fan-out installed or not.
+func TestSearch_FansOutOnlyWithoutAVault(t *testing.T) {
+	vault := t.TempDir()
+	var fannedOut int
+	api := newAPI(t, vault).WithSearchFanout(
+		func(_ context.Context, query string, k int, _ float64) ([]Hit, []string, error) {
+			fannedOut++
+			return []Hit{{Path: "x.md", Vault: "/other"}}, []string{"gone: unreachable"}, nil
+		})
+
+	res, err := api.Search(context.Background(), "", "q", 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, fannedOut)
+	require.Equal(t, []Hit{{Path: "x.md", Vault: "/other"}}, res.Hits)
+	require.Equal(t, []string{"gone: unreachable"}, res.Warnings)
+
+	// Naming a vault goes to that vault's service, which has no index here.
+	_, err = api.Search(context.Background(), vault, "q", 0)
+	require.ErrorIs(t, err, app.ErrNoModel)
+	require.Equal(t, 1, fannedOut, "a named vault never fans out")
 }

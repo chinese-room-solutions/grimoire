@@ -17,6 +17,9 @@ func TestSourceLabel(t *testing.T) {
 	}{
 		{Hit{Path: "a.md", Heading: "Intro"}, "a.md › Intro"},
 		{Hit{Path: "b.md"}, "b.md"},
+		// A search spans vaults, so a hit that knows its vault always names it.
+		{Hit{Path: "a.md", Heading: "Intro", Vault: "/home/u/notes"}, "notes › a.md › Intro"},
+		{Hit{Path: "b.md", Vault: "/home/u/work/"}, "work › b.md"},
 	}
 	for _, tc := range tests {
 		require.Equal(t, tc.want, sourceLabel(tc.hit))

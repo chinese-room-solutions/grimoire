@@ -262,6 +262,12 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 							data-on:input="$gSearchMinSim = evt.target.value"/>
 						<span class="g-muted g-graph-ctl-val" data-text="$gSearchMinSim"></span>
 					</label>
+					<!-- Search covers every vault by default; this narrows it to the one
+					     this page has open. -->
+					<label class="g-graph-ctl">
+						<span class="g-muted g-ctl-tip" title="Search only the vault this window has open. Off, search covers every vault Grimoire knows about.">This vault only</span>
+						<input type="checkbox" id="g-search-this-vault" data-bind="gSearchThisVault"/>
+					</label>
 				</div>
 			</div>
 			<div id="g-stream" class="g-stream flex-1">
@@ -457,6 +463,10 @@ type Hit struct {
 	Path    string
 	Heading string
 	Text    string
+	// Vault is the absolute path of the vault the hit lives in. Search spans
+	// every vault, so a result says which one it came from, and a hit from
+	// another vault opens by navigating there.
+	Vault string
 }
 
 // SearchTurn is the shell appended when a search runs: a query bubble and a
@@ -472,15 +482,21 @@ templ SearchTurn(seq string, query string) {
 }
 
 // SearchResults renders the ranked hits into a search turn's results block.
-templ SearchResults(hits []Hit) {
+// warnings name the vaults that couldn't answer, so a partial cross-vault
+// search never passes for a complete one; nil when every vault answered (and
+// when replaying a stored turn, which kept only the hits).
+templ SearchResults(hits []Hit, warnings []string) {
 	if len(hits) == 0 {
 		<div class="g-muted">No matches.</div>
 	}
 	for _, h := range hits {
 		<div class="g-hit">
-			@previewLink(h.Path, h.Heading, sourceLabel(h))
+			@previewLink(h.Path, h.Heading, h.Vault, sourceLabel(h))
 			<div class="g-hit-text">{ snippet(h.Text) }</div>
 		</div>
+	}
+	for _, w := range warnings {
+		<div class="g-muted g-hit-warning">{ w }</div>
 	}
 }
 
@@ -628,9 +644,11 @@ templ RunTime(blockID string, at time.Time) {
 // preview navigator (initPreview) delegates clicks via the data-note attribute,
 // so opening here goes through the same history stack as wikilink clicks. When
 // the result came from a specific section, data-heading carries that heading so
-// the preview scrolls to it.
-templ previewLink(path, heading, label string) {
-	<button type="button" class="g-hit-src g-preview-link" data-note={ path } data-heading={ heading }>{ label }</button>
+// the preview scrolls to it. data-vault is the vault the note lives in: a hit
+// from another one navigates there with the note open, since the page's panels
+// all speak to one vault.
+templ previewLink(path, heading, vault, label string) {
+	<button type="button" class="g-hit-src g-preview-link" data-note={ path } data-heading={ heading } data-vault={ vault }>{ label }</button>
 }
 
 // Preview renders a note for the preview panel: an always-editable properties
@@ -1257,7 +1275,7 @@ templ Conversation(turns []Turn) {
 	for _, t := range turns {
 		<div class="g-turn" data-turn-id={ strconv.FormatInt(t.ID, 10) }>
 			<div class="g-bubble g-bubble-user">{ t.Query }</div>
-			@SearchResults(t.Hits)
+			@SearchResults(t.Hits, nil)
 		</div>
 	}
 }
