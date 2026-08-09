@@ -44,8 +44,8 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
   `<vault-folder-name>/path` (`--json`: a `vault` field with the vault's absolute
   path — pass it as `--vault` to read the note). `--vault PATH` narrows the
   search to one vault, and its hits print bare. A vault that can't answer is
-  named on stderr (`warnings` in `--json`) and skipped — the search still exits
-  0, so judge it by the exit code, not by stderr being non-empty. Needs the MASS
+  named on stderr with a `warning:` prefix (`warnings` in `--json`) and skipped —
+  the search still exits 0. Needs the MASS
   gateway (`GRIMOIRE_GATEWAY_URL`, default
   `http://localhost:3455/mass.llama-cpp`); without it, exit 1. Reading and
   editing need no gateway.

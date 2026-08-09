@@ -299,6 +299,12 @@ func (e *cliEnv) errorf(format string, args ...any) {
 	_, _ = fmt.Fprintf(e.err, "error: "+format+"\n", args...)
 }
 
+// warnf writes `warning: <msg>` to stderr — for advisories on a successful
+// (exit 0) command, so agents don't mistake them for failures.
+func (e *cliEnv) warnf(format string, args ...any) {
+	_, _ = fmt.Fprintf(e.err, "warning: "+format+"\n", args...)
+}
+
 // usageErrf prints `error: <msg>` followed by the top-level usage, for a
 // misused verb. The caller returns exitUsage.
 func (e *cliEnv) usageErrf(format string, args ...any) {

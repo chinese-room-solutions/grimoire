@@ -39,7 +39,7 @@ func (e *cliEnv) runSearch(args []string) int {
 		return exitOK
 	}
 	for _, w := range res.Warnings {
-		e.errorf("%s", w)
+		e.warnf("%s", w)
 	}
 	if len(res.Hits) == 0 {
 		e.outln("no results")

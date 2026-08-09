@@ -67,7 +67,7 @@ func (e *cliEnv) runKernelList(args []string) int {
 		}
 	}
 	if res.Warning != "" {
-		e.errorf("%s", res.Warning)
+		e.warnf("%s", res.Warning)
 	}
 	return exitOK
 }
