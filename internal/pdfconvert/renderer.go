@@ -83,6 +83,9 @@ func (r *Renderer) RenderPage(ctx context.Context, pdfData []byte, pageNum, dpi,
 		return nil, fmt.Errorf("%w: opening document: %w", ErrPageRender, err)
 	}
 	defer func() {
+		// Dropped deliberately: a defer can't return it and this package has no
+		// logger, and no caller could act on it anyway — the handle lives inside
+		// the instance, which Close tears down wholesale.
 		_, _ = r.instance.FPDF_CloseDocument(&requests.FPDF_CloseDocument{
 			Document: doc.Document,
 		})
@@ -137,18 +140,21 @@ func capPixels(img image.Image, maxPixels int) image.Image {
 	return dst
 }
 
-// Close releases the PDFium instance and pool.
+// Close releases the PDFium instance and pool, reporting either failure. Both
+// are released either way — a failed instance close must not strand the pool's
+// wazero runtime — and a second Close is a no-op.
 func (r *Renderer) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	var instErr, poolErr error
 	if r.instance != nil {
-		_ = r.instance.Close()
+		instErr = r.instance.Close()
 		r.instance = nil
 	}
 	if r.pool != nil {
-		_ = r.pool.Close()
+		poolErr = r.pool.Close()
 		r.pool = nil
 	}
-	return nil
+	return errors.Join(instErr, poolErr)
 }
