@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -178,6 +180,17 @@ func TestCLINoteWriteExitCodes(t *testing.T) {
 			routes:   map[string]http.HandlerFunc{},
 			args:     []string{"note", "edit", "n.md", "--old", "a"},
 			wantExit: exitUsage,
+		},
+		{
+			name: "rename takes dash-leading paths after --",
+			routes: map[string]http.HandlerFunc{
+				"POST /api/v1/note/rename": func(w http.ResponseWriter, _ *http.Request) {
+					stubJSON(t, w, map[string]string{"path": "-b.md"})
+				},
+			},
+			args:     []string{"note", "rename", "--", "-a.md", "-b.md"},
+			wantExit: exitOK,
+			wantBody: `{"from":"-a.md","to":"-b.md","overwrite":false}`,
 		},
 	}
 	for _, tt := range tests {
@@ -435,6 +448,57 @@ func TestFirstNonFlag(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.want, firstNonFlag(tt.args))
+		})
+	}
+}
+
+// parseFlags intersperses flags and positionals, and stops flag parsing for good
+// at a `--` — everything after it is a positional, however it is spelled.
+func TestParseFlags(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		wantPos     []string
+		wantContent string
+		wantAll     bool
+		wantOK      bool
+	}{
+		{name: "no args", wantOK: true},
+		{
+			name: "flags interspersed with positionals", args: []string{"a.md", "--content", "x", "b.md"},
+			wantPos: []string{"a.md", "b.md"}, wantContent: "x", wantOK: true,
+		},
+		{
+			name: "everything after -- is positional", args: []string{"--", "-a.md", "-b.md"},
+			wantPos: []string{"-a.md", "-b.md"}, wantOK: true,
+		},
+		{
+			name: "flags before -- still parse", args: []string{"--all", "--content", "x", "--", "-a.md", "-b.md"},
+			wantPos: []string{"-a.md", "-b.md"}, wantContent: "x", wantAll: true, wantOK: true,
+		},
+		{
+			name: "-- mid-args, after a positional", args: []string{"a.md", "--content", "x", "--", "-b.md"},
+			wantPos: []string{"a.md", "-b.md"}, wantContent: "x", wantOK: true,
+		},
+		{
+			name: "a known flag after -- is a positional", args: []string{"--", "--content", "x"},
+			wantPos: []string{"--content", "x"}, wantOK: true,
+		},
+		{name: "unknown flag is a usage error", args: []string{"-a.md"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			content := fs.String("content", "", "")
+			all := fs.Bool("all", false, "")
+			pos, ok := parseFlags(fs, io.Discard, tt.args)
+			require.Equal(t, tt.wantOK, ok)
+			if !ok {
+				return
+			}
+			require.Equal(t, tt.wantPos, pos)
+			require.Equal(t, tt.wantContent, *content)
+			require.Equal(t, tt.wantAll, *all)
 		})
 	}
 }

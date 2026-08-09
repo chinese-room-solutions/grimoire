@@ -290,6 +290,12 @@ func parseFlags(fs *flag.FlagSet, errW io.Writer, args []string) (positional []s
 		if len(rest) == 0 {
 			return positional, true
 		}
+		// fs.Parse consumes a `--` terminator and stops there, so everything left is
+		// positional however it is spelled — re-parsing it would read a dash-leading
+		// argument as a flag again.
+		if consumed := len(args) - len(rest); consumed > 0 && args[consumed-1] == "--" {
+			return append(positional, rest...), true
+		}
 		positional = append(positional, rest[0])
 		args = rest[1:]
 	}
