@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -101,6 +103,37 @@ func TestSync_Concurrent(t *testing.T) {
 	count, err := st.Count()
 	require.NoError(t, err)
 	require.Equal(t, n, count)
+}
+
+// Progress counts completed notes, so it runs from 1 to total and never reports
+// 0 — the SSE handler prints it verbatim.
+func TestSync_ProgressCountsCompletedNotes(t *testing.T) {
+	ix, vault, _, _ := newTestIndexer(t)
+	ix.SetConcurrency(4)
+	const n = 10
+	for i := range n {
+		writeNote(t, vault, fmt.Sprintf("n%02d.md", i), fmt.Sprintf("# N%d", i))
+	}
+
+	var mu sync.Mutex
+	var seen []int
+	paths := map[string]struct{}{}
+	_, err := ix.Sync(context.Background(), func(done, total int, path string) {
+		require.Equal(t, n, total)
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, done)
+		paths[path] = struct{}{}
+	}, false)
+	require.NoError(t, err)
+
+	sort.Ints(seen)
+	want := make([]int, n)
+	for i := range want {
+		want[i] = i + 1
+	}
+	require.Equal(t, want, seen, "every note reports once, counting 1..total")
+	require.Len(t, paths, n, "each report names a distinct note")
 }
 
 func TestSync_IndexesNotes(t *testing.T) {

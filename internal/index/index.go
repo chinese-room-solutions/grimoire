@@ -38,8 +38,13 @@ type StoreInterface interface {
 	DeleteNote(path string) error
 }
 
-// Progress reports indexing progress: done is the count of notes processed so
-// far, total the number that needed work this run.
+// Progress reports indexing progress after each note lands: done counts the
+// notes indexed so far including this one (1 on the first, total on the last),
+// total the number that needed work this run, path the note just indexed. It is
+// called outside the indexer's lock, so a slow callback (writing SSE to a
+// browser) can't stall the worker pool. That means concurrent calls, in no
+// guaranteed order: a callback with state of its own has to guard it, and a
+// counter rendered from done may tick back a place before moving on.
 type Progress func(done, total int, path string)
 
 // DefaultConcurrency is how many notes Sync embeds at once when the caller
@@ -210,11 +215,12 @@ func (ix *Indexer) Sync(ctx context.Context, progress Progress, force bool) (Sta
 			mu.Lock()
 			stats.Indexed++
 			stats.Chunks += n
-			if progress != nil {
-				progress(done, len(todo), w.path)
-			}
 			done++
+			at := done
 			mu.Unlock()
+			if progress != nil {
+				progress(at, len(todo), w.path) // outside the lock: the callback may do I/O.
+			}
 			return nil
 		})
 	}

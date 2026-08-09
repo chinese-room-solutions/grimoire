@@ -360,7 +360,7 @@ func reindexHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 
 		progress := func(done, total int, path string) {
 			patchSignals(sse, map[string]any{
-				"gStatus": fmt.Sprintf("Reindexing %d/%d: %s", done+1, total, path),
+				"gStatus": fmt.Sprintf("Reindexing %d/%d: %s", done, total, path),
 				"gBusy":   true,
 			})
 		}
