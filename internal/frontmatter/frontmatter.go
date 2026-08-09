@@ -20,8 +20,13 @@ type Property struct {
 }
 
 // fence matches a leading YAML frontmatter block: --- ... --- at the very start
-// of a note. Anchored at the start so a mid-note "---" rule isn't mistaken for it.
-var fence = regexp.MustCompile(`(?s)\A---\r?\n(.*?)\r?\n---\r?\n?`)
+// of a note. Anchored at the start so a mid-note "---" rule isn't mistaken for
+// it, and each fence must be a whole line of its own — otherwise a "----" rule
+// or a "---junk" line closes the block early and leaks its leftovers into the
+// body. Trailing spaces and tabs on a fence line are tolerated (Obsidian does
+// the same). The block may be empty ("---\n---\n"), and its closing fence may be
+// the last line of the note with no trailing newline.
+var fence = regexp.MustCompile(`(?ms)\A---[ \t]*\r?\n(.*?)^---[ \t]*(?:\r?\n|\z)`)
 
 // Has reports whether source begins with a YAML frontmatter block. Unlike
 // checking Split's props, it is true even for an empty or malformed block —

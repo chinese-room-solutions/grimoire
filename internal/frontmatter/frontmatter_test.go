@@ -7,35 +7,110 @@ import (
 )
 
 func TestSplit(t *testing.T) {
-	t.Run("parses ordered properties and returns the body", func(t *testing.T) {
-		src := "---\ntitle: NATS\ntags:\n  - system-design\n  - component\naliases:\n  - NATS JetStream\n---\n# NATS\n\nbody"
-		props, body := Split(src)
-		require.Equal(t, []Property{
-			{Key: "title", Values: []string{"NATS"}},
-			{Key: "tags", Values: []string{"system-design", "component"}},
-			{Key: "aliases", Values: []string{"NATS JetStream"}},
-		}, props)
-		require.Equal(t, "# NATS\n\nbody", body)
-	})
-
-	t.Run("no frontmatter leaves source untouched", func(t *testing.T) {
-		props, body := Split("# Note\n\ntext")
-		require.Nil(t, props)
-		require.Equal(t, "# Note\n\ntext", body)
-	})
-
-	t.Run("mid-note --- is not frontmatter", func(t *testing.T) {
-		src := "# Title\n\ntext\n\n---\n\nmore"
-		props, body := Split(src)
-		require.Nil(t, props)
-		require.Equal(t, src, body)
-	})
-
-	t.Run("malformed yaml drops the block", func(t *testing.T) {
-		props, body := Split("---\n: : bad\n---\nbody")
-		require.Nil(t, props)
-		require.Equal(t, "body", body)
-	})
+	tests := []struct {
+		name      string
+		src       string
+		wantProps []Property
+		wantBody  string
+		wantHas   bool
+	}{
+		{
+			name: "parses ordered properties and returns the body",
+			src:  "---\ntitle: NATS\ntags:\n  - system-design\n  - component\naliases:\n  - NATS JetStream\n---\n# NATS\n\nbody",
+			wantProps: []Property{
+				{Key: "title", Values: []string{"NATS"}},
+				{Key: "tags", Values: []string{"system-design", "component"}},
+				{Key: "aliases", Values: []string{"NATS JetStream"}},
+			},
+			wantBody: "# NATS\n\nbody",
+			wantHas:  true,
+		},
+		{
+			name:     "no frontmatter leaves source untouched",
+			src:      "# Note\n\ntext",
+			wantBody: "# Note\n\ntext",
+		},
+		{
+			name:     "mid-note --- is not frontmatter",
+			src:      "# Title\n\ntext\n\n---\n\nmore",
+			wantBody: "# Title\n\ntext\n\n---\n\nmore",
+		},
+		{
+			name:     "malformed yaml drops the block",
+			src:      "---\n: : bad\n---\nbody",
+			wantBody: "body",
+			wantHas:  true,
+		},
+		{
+			name:     "a four-dash line does not close the block",
+			src:      "---\ntitle: x\n----\nbody",
+			wantBody: "---\ntitle: x\n----\nbody",
+		},
+		{
+			name:     "a horizontal rule does not close the block",
+			src:      "---\ntitle: x\n----------\nbody",
+			wantBody: "---\ntitle: x\n----------\nbody",
+		},
+		{
+			name:     "a ---junk line does not close the block",
+			src:      "---\ntitle: x\n---junk\nbody",
+			wantBody: "---\ntitle: x\n---junk\nbody",
+		},
+		{
+			name:     "an empty block is frontmatter with no properties",
+			src:      "---\n---\nbody",
+			wantBody: "body",
+			wantHas:  true,
+		},
+		{
+			name:      "the closing fence may end the note",
+			src:       "---\ntitle: x\n---",
+			wantProps: []Property{{Key: "title", Values: []string{"x"}}},
+			wantHas:   true,
+		},
+		{
+			name:      "trailing spaces on the fences are tolerated",
+			src:       "--- \ntitle: x\n---\t\nbody",
+			wantProps: []Property{{Key: "title", Values: []string{"x"}}},
+			wantBody:  "body",
+			wantHas:   true,
+		},
+		{
+			name:      "CRLF block",
+			src:       "---\r\ntitle: x\r\ntags:\r\n  - a\r\n---\r\nbody",
+			wantProps: []Property{{Key: "title", Values: []string{"x"}}, {Key: "tags", Values: []string{"a"}}},
+			wantBody:  "body",
+			wantHas:   true,
+		},
+		{
+			name:     "CRLF empty block",
+			src:      "---\r\n---\r\nbody",
+			wantBody: "body",
+			wantHas:  true,
+		},
+		{
+			name:     "CRLF four-dash line does not close the block",
+			src:      "---\r\ntitle: x\r\n----\r\nbody",
+			wantBody: "---\r\ntitle: x\r\n----\r\nbody",
+		},
+		{
+			name:      "a rule after the block stays in the body",
+			src:       "---\ntitle: x\n---\nbody\n\n----\nmore",
+			wantProps: []Property{{Key: "title", Values: []string{"x"}}},
+			wantBody:  "body\n\n----\nmore",
+			wantHas:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			props, body := Split(tt.src)
+			require.Equal(t, tt.wantProps, props)
+			require.Equal(t, tt.wantBody, body)
+			require.Equal(t, tt.wantHas, Has(tt.src))
+			// ReplaceBody agrees with Split on where the block ends.
+			require.Equal(t, tt.src, ReplaceBody(tt.src, body))
+		})
+	}
 }
 
 func TestReplace(t *testing.T) {
