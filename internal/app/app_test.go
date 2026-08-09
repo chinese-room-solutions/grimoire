@@ -504,8 +504,8 @@ func TestSessionTitle(t *testing.T) {
 		{
 			// 60 runes, 3 bytes each: a byte cap would slice mid-character.
 			name:  "a long multibyte query is capped by runes",
-			query: strings.Repeat("私", 60),
-			want:  strings.Repeat("私", 48) + "…",
+			query: strings.Repeat("€", 60),
+			want:  strings.Repeat("€", 48) + "…",
 		},
 	}
 	for _, tc := range tests {

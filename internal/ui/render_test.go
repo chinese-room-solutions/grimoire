@@ -30,10 +30,10 @@ func TestSnippet(t *testing.T) {
 	}{
 		{name: "short text is trimmed, not cut", in: "  short  ", want: "short"},
 		{name: "long ascii", in: strings.Repeat("x", 500)},
-		{name: "long multibyte", in: strings.Repeat("日", 500)},
+		{name: "long multibyte", in: strings.Repeat("€", 500)},
 		// A cut landing mid-character: 239 ascii runes then a 3-byte rune spanning
 		// the old 240-byte boundary.
-		{name: "cut lands inside a rune", in: strings.Repeat("a", 239) + strings.Repeat("日", 20)},
+		{name: "cut lands inside a rune", in: strings.Repeat("a", 239) + strings.Repeat("€", 20)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

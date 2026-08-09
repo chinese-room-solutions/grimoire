@@ -219,7 +219,7 @@ func TestStructurizer_CancelsAbandonedJob(t *testing.T) {
 			name:  "gateway already failed the job",
 			jobID: "job-settled",
 			awaitGET: func(w http.ResponseWriter, _ *http.Request) {
-				_ = json.NewEncoder(w).Encode(map[string]any{"status": "error", "error": "model not loaded"})
+				_, _ = w.Write([]byte(`{"status": "error", "error": "model not loaded"}`))
 			},
 			wantCancel: false,
 		},
