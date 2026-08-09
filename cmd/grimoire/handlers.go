@@ -765,28 +765,36 @@ func runDiscardHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc
 	}
 }
 
-// runSaveAllHandler commits every unsaved run in the open note (the per-note Save
-// all), then re-renders the preview so all blocks show as saved. The note path
-// arrives as gNotePath.
-func runSaveAllHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
+// runAllHandler is the shared body of the per-note run-panel buttons (Save all,
+// Discard all, Delete all): the open note arrives as gNotePath, apply changes it,
+// and the preview is re-rendered so every block re-hydrates from the new state.
+// An apply that changed nothing leaves the view alone. label names the action in
+// the logs.
+func runAllHandler(
+	svc *app.Service, logger zerolog.Logger, label string, apply func(notePath string) (bool, error),
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var sig struct {
 			NotePath string `json:"gNotePath"`
 		}
 		if err := datastar.ReadSignals(r, &sig); err != nil {
-			logger.Warn().Err(err).Msg("reading run-save-all signals")
+			logger.Warn().Err(err).Msg("reading " + label + " signals")
 		}
 		sse := datastar.NewSSE(w, r)
 		if sig.NotePath == "" {
 			return
 		}
-		if n := svc.SaveAllPendingRuns(sig.NotePath); n == 0 {
-			return // nothing was pending; leave the view as-is.
+		changed, err := apply(sig.NotePath)
+		if err != nil {
+			logger.Warn().Err(err).Str("note", sig.NotePath).Msg(label)
+			return
 		}
-		// Re-render so every just-saved block re-hydrates clean (no Unsaved marker).
+		if !changed {
+			return
+		}
 		source, err := svc.ReadNote(sig.NotePath)
 		if err != nil {
-			logger.Warn().Err(err).Str("note", sig.NotePath).Msg("re-reading note after save-all")
+			logger.Warn().Err(err).Str("note", sig.NotePath).Msg("re-reading note after " + label)
 			return
 		}
 		_ = sse.PatchElementTempl(ui.Preview(source, sig.NotePath),
@@ -794,33 +802,21 @@ func runSaveAllHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc
 	}
 }
 
+// runSaveAllHandler commits every unsaved run in the open note (the per-note Save
+// all), so all blocks re-render as saved.
+func runSaveAllHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
+	return runAllHandler(svc, logger, "saving all run results", func(notePath string) (bool, error) {
+		return svc.SaveAllPendingRuns(notePath) > 0, nil
+	})
+}
+
 // runDiscardAllHandler drops every unsaved re-run in the open note (the per-note
-// Discard all), then re-renders the preview so each block reverts to its saved
-// output (or clears where nothing was saved). The note path arrives as gNotePath.
+// Discard all), so each block reverts to its saved output (or clears where
+// nothing was saved).
 func runDiscardAllHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var sig struct {
-			NotePath string `json:"gNotePath"`
-		}
-		if err := datastar.ReadSignals(r, &sig); err != nil {
-			logger.Warn().Err(err).Msg("reading run-discard-all signals")
-		}
-		sse := datastar.NewSSE(w, r)
-		if sig.NotePath == "" {
-			return
-		}
-		if n := svc.DiscardAllPendingRuns(sig.NotePath); n == 0 {
-			return // nothing was pending; leave the view as-is.
-		}
-		// Re-render so every reverted block re-hydrates from its saved result.
-		source, err := svc.ReadNote(sig.NotePath)
-		if err != nil {
-			logger.Warn().Err(err).Str("note", sig.NotePath).Msg("re-reading note after discard-all")
-			return
-		}
-		_ = sse.PatchElementTempl(ui.Preview(source, sig.NotePath),
-			datastar.WithSelector("#g-preview-body"), datastar.WithModeInner())
-	}
+	return runAllHandler(svc, logger, "discarding all pending runs", func(notePath string) (bool, error) {
+		return svc.DiscardAllPendingRuns(notePath) > 0, nil
+	})
 }
 
 // runDeleteHandler removes a block's saved output (the per-block trash button) and
@@ -851,32 +847,13 @@ func runDeleteHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc 
 }
 
 // runDeleteAllHandler removes every saved result in the open note (the per-note
-// trash button), then re-renders the preview so all panels clear. The note path
-// arrives as gNotePath.
+// trash button), so all panels clear. Unlike save/discard it always re-renders:
+// the service reports no count, and a delete over a note with nothing saved is
+// already a no-op.
 func runDeleteAllHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var sig struct {
-			NotePath string `json:"gNotePath"`
-		}
-		if err := datastar.ReadSignals(r, &sig); err != nil {
-			logger.Warn().Err(err).Msg("reading run-delete-all signals")
-		}
-		sse := datastar.NewSSE(w, r)
-		if sig.NotePath == "" {
-			return
-		}
-		if err := svc.DeleteNoteRunResults(sig.NotePath); err != nil {
-			logger.Warn().Err(err).Str("note", sig.NotePath).Msg("deleting note run results")
-			return
-		}
-		source, err := svc.ReadNote(sig.NotePath)
-		if err != nil {
-			logger.Warn().Err(err).Str("note", sig.NotePath).Msg("re-reading note after delete-all")
-			return
-		}
-		_ = sse.PatchElementTempl(ui.Preview(source, sig.NotePath),
-			datastar.WithSelector("#g-preview-body"), datastar.WithModeInner())
-	}
+	return runAllHandler(svc, logger, "deleting note run results", func(notePath string) (bool, error) {
+		return true, svc.DeleteNoteRunResults(notePath)
+	})
 }
 
 // runErrorMessage turns a RunBlock failure into a user-facing panel message,

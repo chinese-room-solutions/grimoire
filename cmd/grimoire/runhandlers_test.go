@@ -3,7 +3,9 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -67,6 +69,30 @@ func TestRunBlockBash(t *testing.T) {
 	require.Contains(t, body, "g-code-output-2")
 	require.Contains(t, body, "hi")           // stdout chunk
 	require.Contains(t, body, "g-run-status") // exit footer
+}
+
+// The per-note run-panel buttons share one handler: it re-renders the preview
+// when the note changed, and leaves the view alone when nothing did.
+func TestRunSaveAllPatchesPreviewOnlyOnChange(t *testing.T) {
+	vault := t.TempDir()
+	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, os.WriteFile(filepath.Join(vault, "n.md"), []byte("# n\n"), 0o600))
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /action/run-save-all", runSaveAllHandler(svc, zerolog.Nop()))
+
+	rec := postSignals(t, mux, "/action/run-save-all", `{"gNotePath":"n.md"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotContains(t, rec.Body.String(), "g-preview-body", "nothing pending: the view is left as-is")
+
+	const code = "echo hi\n"
+	result := app.RunResult{Items: []app.RunItem{{MIME: app.MIMEText, Data: "hi\n"}}}
+	require.True(t, svc.AutoSaveRunResult("n.md", code, result), "first run auto-saves")
+	require.False(t, svc.AutoSaveRunResult("n.md", code, result), "second run is held pending")
+
+	rec = postSignals(t, mux, "/action/run-save-all", `{"gNotePath":"n.md"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "g-preview-body", "the saved run re-renders the preview")
 }
 
 func TestCloseNoteReturns204(t *testing.T) {
