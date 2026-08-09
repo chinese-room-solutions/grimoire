@@ -3,6 +3,7 @@ package officedoc
 import (
 	"archive/zip"
 	"bytes"
+	"regexp"
 	"sort"
 	"testing"
 
@@ -139,7 +140,8 @@ func TestConvertBuiltParity(t *testing.T) {
 		docx       []byte
 		odt        []byte
 		want       string
-		wantImages []string // expected extracted image names, in any single order.
+		wantImages []string          // expected extracted image names, in any single order.
+		wantBytes  map[string]string // expected content per image name, where it matters.
 	}{
 		{
 			name: "headings map and clamp",
@@ -241,10 +243,11 @@ func TestConvertBuiltParity(t *testing.T) {
 					"Pictures/pic.png":     pngA,
 					"Pictures/alt/pic.png": pngB,
 				}),
-			// Two sources share the basename; links keep the basename and the
-			// extraction de-duplicates by name, so exactly one pic.png is written.
-			want:       "# Photo\n\n![](attachments/pic.png)\n\n![](attachments/pic.png)\n",
-			wantImages: []string{"pic.png"},
+			// Two distinct sources share a basename: both survive, the second under
+			// a suffixed name, and each link points at its own bytes.
+			want:       "# Photo\n\n![](attachments/pic.png)\n\n![](attachments/pic-2.png)\n",
+			wantImages: []string{"pic.png", "pic-2.png"},
+			wantBytes:  map[string]string{"pic.png": string(pngA), "pic-2.png": string(pngB)},
 		},
 		{
 			// "*" is both a bullet glyph and Markdown syntax: the marker must be
@@ -283,12 +286,32 @@ func TestConvertBuiltParity(t *testing.T) {
 					for i, img := range res.Images {
 						names[i] = img.Name
 						require.NotEmpty(t, img.Data)
+						if want, ok := tt.wantBytes[img.Name]; ok {
+							require.Equal(t, want, string(img.Data), img.Name)
+						}
 					}
 					require.ElementsMatch(t, tt.wantImages, names)
+					// Every attachment link in the body resolves to an extracted image.
+					for _, link := range attachmentLinks(res.Markdown) {
+						require.Contains(t, names, link)
+					}
 				})
 			}
 		})
 	}
+}
+
+// attachmentLinkRe matches the image links the converters emit, capturing the
+// file name they point at.
+var attachmentLinkRe = regexp.MustCompile(`!\[]\(` + AttachmentDir + `/([^)]+)\)`)
+
+// attachmentLinks lists the file names a document's image links point at.
+func attachmentLinks(markdown string) []string {
+	var out []string
+	for _, m := range attachmentLinkRe.FindAllStringSubmatch(markdown, -1) {
+		out = append(out, m[1])
+	}
+	return out
 }
 
 // TestConvertBuiltDocx covers docx-only markup quirks that have no .odt

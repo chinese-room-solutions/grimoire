@@ -36,11 +36,11 @@ func DocxToMarkdown(data []byte) (Result, error) {
 	// in the body resolves to a file under word/.
 	mediaByRelID := docxRelTargetsByType(rels, "/image")
 
-	blocks, usedRels, err := docxBlocks(doc, ordered, links, mediaByRelID)
+	blocks, namer, err := docxBlocks(doc, ordered, links, mediaByRelID)
 	if err != nil {
 		return Result{}, err
 	}
-	images, err := extractImages(zr, "word/", mediaByRelID, usedRels)
+	images, err := extractImages(zr, "word/", namer)
 	if err != nil {
 		return Result{}, err
 	}
@@ -51,11 +51,11 @@ func DocxToMarkdown(data []byte) (Result, error) {
 // bold/italic and a hyperlink's wrapped runs are handled in document order, which
 // a struct unmarshal of the deeply-nested, mixed-content body can't do cleanly.
 // mediaByRelID maps an image relationship id to its media path; an <a:blip
-// r:embed> in the body emits an ![](attachments/name) image and records the rel
-// in usedRels so only referenced images are extracted.
-func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaByRelID map[string]string) (blocks []block, usedRels map[string]bool, err error) {
+// r:embed> in the body emits an ![](attachments/name) image and records the
+// target in the returned namer so only referenced images are extracted.
+func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaByRelID map[string]string) (blocks []block, namer *imageNamer, err error) {
 	dec := xml.NewDecoder(bytes.NewReader(doc))
-	usedRels = map[string]bool{}
+	namer = newImageNamer()
 
 	// Per-paragraph state, reset on each <w:p>.
 	var (
@@ -107,12 +107,11 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 			case "blip":
 				// An embedded image: r:embed names its media rel. Collect it as a
 				// standalone image (emitted as its own block so a heading/list
-				// heuristic on the surrounding text can't swallow it) and mark the rel
-				// used so its file is extracted.
+				// heuristic on the surrounding text can't swallow it); naming it also
+				// marks it for extraction.
 				if rel := attrNS(t, "embed"); rel != "" {
 					if target := mediaByRelID[rel]; target != "" {
-						usedRels[rel] = true
-						paraImages = append(paraImages, "![]("+AttachmentDir+"/"+imageName(target)+")")
+						paraImages = append(paraImages, "![]("+AttachmentDir+"/"+namer.name(target)+")")
 					}
 				}
 			case "pStyle":
@@ -181,7 +180,7 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 			}
 		}
 	}
-	return blocks, usedRels, nil
+	return blocks, namer, nil
 }
 
 // docxOrderedByNumID maps a w:numId to whether its list is ordered (decimal etc.)

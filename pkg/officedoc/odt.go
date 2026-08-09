@@ -31,19 +31,13 @@ func OdtToMarkdown(data []byte) (Result, error) {
 	emph := odtEmphasisByStyle(content, styles)
 	orderedList := odtOrderedListStyles(content, styles)
 
-	blocks, imageHrefs, err := odtBlocks(content, emph, orderedList)
+	blocks, namer, err := odtBlocks(content, emph, orderedList)
 	if err != nil {
 		return Result{}, err
 	}
 	// An odt <draw:image> href is the archive path directly (e.g. Pictures/x.png),
-	// so the href is both the rel target and its key; the prefix is empty.
-	mediaByRelID := map[string]string{}
-	used := map[string]bool{}
-	for _, href := range imageHrefs {
-		mediaByRelID[href] = href
-		used[href] = true
-	}
-	images, err := extractImages(zr, "", mediaByRelID, used)
+	// so the href is the media target and the prefix is empty.
+	images, err := extractImages(zr, "", namer)
 	if err != nil {
 		return Result{}, err
 	}
@@ -56,10 +50,11 @@ type odtStyle struct{ bold, italic bool }
 // odtBlocks walks content.xml into Markdown blocks. Token streaming keeps spans,
 // links, and nested lists in document order. List nesting is the depth of open
 // <text:list> elements; a paragraph inside a list item becomes one list item. A
-// <draw:image> emits an ![](attachments/name) link and its href is returned so
-// the file is extracted.
-func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListStyle map[string]bool) (blocks []block, imageHrefs []string, err error) {
+// <draw:image> emits an ![](attachments/name) link and its href is recorded in
+// the returned namer so the file is extracted under the same name.
+func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListStyle map[string]bool) (blocks []block, namer *imageNamer, err error) {
 	dec := xml.NewDecoder(bytes.NewReader(content))
+	namer = newImageNamer()
 
 	var (
 		para       strings.Builder
@@ -108,11 +103,10 @@ func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListSty
 			case "image":
 				// <draw:image xlink:href="Pictures/..">: collect as a standalone image
 				// (its own block, so a heuristic on the surrounding text can't swallow
-				// it) and record the href for extraction. Skip linked (external) images
-				// whose href isn't a packaged Pictures path.
+				// it); naming it also marks it for extraction. Skip linked (external)
+				// images whose href isn't a packaged Pictures path.
 				if href := attr(t, "href"); strings.HasPrefix(href, "Pictures/") {
-					imageHrefs = append(imageHrefs, href)
-					paraImages = append(paraImages, "![]("+AttachmentDir+"/"+imageName(href)+")")
+					paraImages = append(paraImages, "![]("+AttachmentDir+"/"+namer.name(href)+")")
 				}
 			case "h":
 				inParagraph, isHead, allBold = true, true, true
@@ -187,7 +181,7 @@ func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListSty
 			}
 		}
 	}
-	return blocks, imageHrefs, nil
+	return blocks, namer, nil
 }
 
 // odtEmphasisByStyle collects, from both content.xml's automatic styles and

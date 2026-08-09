@@ -387,37 +387,54 @@ const heuristicHeadingLevel = 2
 
 // ── image extraction ─────────────────────────────────────────────────
 
-// extractImages pulls the referenced image files from the archive. mediaByRelID
-// maps a relationship id to its target path (relative to prefix, e.g. "word/" for
-// docx or "" for odt); usedRels limits extraction to images actually placed in
-// the body. Each image's Name is its basename, matching the ![](attachments/Name)
-// link the body emits. Names are de-duplicated so two sources can't collide.
-func extractImages(zr *zip.Reader, prefix string, mediaByRelID map[string]string, usedRels map[string]bool) ([]Image, error) {
-	seen := map[string]bool{}
-	var images []Image
-	for rel := range usedRels {
-		target := mediaByRelID[rel]
-		if target == "" {
-			continue
-		}
-		name := imageName(target)
-		if seen[name] {
-			continue // same media referenced twice: write it once.
-		}
+// imageNamer is the single naming decision behind both the emitted
+// ![](attachments/Name) link and the extracted file, so the two always agree. A
+// target keeps its basename; a second target sharing that basename (word/media/
+// pic.png vs word/media2/pic.png) gets a "-2" suffix rather than overwriting it.
+// Names are handed out in first-reference order, so a document always converts
+// to the same Markdown.
+type imageNamer struct {
+	nameByTarget map[string]string
+	taken        map[string]bool
+	targets      []string // distinct targets in first-reference order.
+}
+
+func newImageNamer() *imageNamer {
+	return &imageNamer{nameByTarget: map[string]string{}, taken: map[string]bool{}}
+}
+
+// name returns the file name for a media target, assigning one on first
+// reference; referencing the same target again reuses it (one written file).
+func (n *imageNamer) name(target string) string {
+	if got, ok := n.nameByTarget[target]; ok {
+		return got
+	}
+	base := path.Base(filepath.ToSlash(target))
+	ext := path.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	name := base
+	for i := 2; n.taken[name]; i++ {
+		name = fmt.Sprintf("%s-%d%s", stem, i, ext)
+	}
+	n.nameByTarget[target] = name
+	n.taken[name] = true
+	n.targets = append(n.targets, target)
+	return name
+}
+
+// extractImages reads every media target the body referenced, in that order,
+// under the name the emitted link already used. prefix is where the format keeps
+// its media relative to the archive root ("word/" for docx, "" for odt).
+func extractImages(zr *zip.Reader, prefix string, namer *imageNamer) ([]Image, error) {
+	images := make([]Image, 0, len(namer.targets))
+	for _, target := range namer.targets {
 		data, err := readZipEntry(zr, prefix+target)
 		if err != nil {
 			return nil, err
 		}
-		seen[name] = true
-		images = append(images, Image{Name: name, Data: data})
+		images = append(images, Image{Name: namer.nameByTarget[target], Data: data})
 	}
 	return images, nil
-}
-
-// imageName is the basename of a media target path, used both in the emitted
-// ![](attachments/Name) link and as the written file's name.
-func imageName(target string) string {
-	return path.Base(filepath.ToSlash(target))
 }
 
 // ── shared XML / zip helpers ─────────────────────────────────────────
