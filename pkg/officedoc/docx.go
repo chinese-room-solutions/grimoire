@@ -70,8 +70,11 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 		indent     int  // paragraph left indent in twips (w:ind), for heuristic nesting.
 		// Per-run state.
 		bold, italic bool
-		// Hyperlink: the target wrapping the current runs (empty = none).
+		// Hyperlink: the target wrapping the current runs (empty = none) and the
+		// Markdown its runs have contributed so far. A link's text often spans
+		// several runs, and it must come out as one [text](target).
 		linkTarget string
+		linkText   strings.Builder
 	)
 
 	resetPara := func() {
@@ -79,6 +82,17 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 		plain.Reset()
 		paraImages = nil
 		heading, listLvl, ordered, styled, allBold, indent = 0, 0, false, false, true, 0
+		linkTarget = ""
+		linkText.Reset()
+	}
+	// writeMarkup appends to the paragraph, or to the open hyperlink's text when
+	// one is active, so a link's runs stay together and in order.
+	writeMarkup := func(s string) {
+		if linkTarget != "" {
+			linkText.WriteString(s)
+			return
+		}
+		para.WriteString(s)
 	}
 
 	for {
@@ -152,22 +166,22 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 					allBold = allBold && bold
 				}
 				plain.WriteString(text)
-				frag := emphasize(escapeMarkdown(text), bold, italic)
-				if linkTarget != "" && frag != "" {
-					frag = "[" + frag + "](" + linkTarget + ")"
-				}
-				para.WriteString(frag)
+				writeMarkup(emphasize(escapeMarkdown(text), bold, italic))
 			case "tab":
-				para.WriteByte('\t')
+				writeMarkup("\t")
 				plain.WriteByte('\t')
 			case "br":
-				para.WriteString("  \n") // a soft line break within a paragraph.
+				writeMarkup("  \n") // a soft line break within a paragraph.
 				plain.WriteByte('\n')
 			}
 		case xml.EndElement:
 			switch t.Name.Local {
 			case "hyperlink":
+				if text := linkText.String(); text != "" {
+					para.WriteString("[" + text + "](" + linkTarget + ")")
+				}
 				linkTarget = ""
+				linkText.Reset()
 			case "p":
 				blocks = append(blocks, finishParagraph(para.String(), plain.String(), heading, listLvl, ordered, styled, allBold, indent)...)
 				for _, img := range paraImages {

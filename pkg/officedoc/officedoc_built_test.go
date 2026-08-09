@@ -198,6 +198,25 @@ func TestConvertBuiltParity(t *testing.T) {
 			want: "see [the site](https://example.com/x) for details\n",
 		},
 		{
+			// The link text is split across runs/spans, one of them emphasized: it
+			// must come out as a single link, not one per fragment.
+			name: "hyperlink text split across runs",
+			docx: docxZip(t,
+				docxP("", `<w:hyperlink r:id="rId9">`+
+					`<w:r><w:t>the </w:t></w:r>`+
+					`<w:r><w:rPr><w:b/></w:rPr><w:t>site</w:t></w:r>`+
+					`</w:hyperlink>`),
+				map[string][]byte{
+					"word/_rels/document.xml.rels": docxRels([3]string{"rId9", "hyperlink", "https://example.com/x"}),
+				}),
+			odt: odtZip(t,
+				`<text:p><text:a xlink:href="https://example.com/x">the `+
+					`<text:span text:style-name="TB">site</text:span></text:a></text:p>`,
+				`<style:style style:name="TB" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style>`,
+				nil),
+			want: "[the **site**](https://example.com/x)\n",
+		},
+		{
 			name: "bold and italic runs",
 			docx: docxZip(t,
 				docxP("", `<w:r><w:t>plain </w:t></w:r>`+
