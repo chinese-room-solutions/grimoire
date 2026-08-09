@@ -239,7 +239,7 @@ func finishParagraph(markup, plain string, heading, listLvl int, ordered, styled
 			lvl := indentLevel(indent)
 			var out []block
 			for _, line := range strings.Split(markup, "\n") {
-				item, isOrdered, isAlpha, ok := stripListMarker(strings.TrimSpace(line))
+				item, isOrdered, isAlpha, ok := stripMarkupListMarker(strings.TrimSpace(line))
 				if !ok {
 					item = strings.TrimSpace(line)
 				}
@@ -273,6 +273,23 @@ func stripListMarker(s string) (rest string, ordered, alpha, isItem bool) {
 	}
 	if r, isAlpha, ok := stripOrderedMarker(s); ok {
 		return r, true, isAlpha, true
+	}
+	return s, false, false, false
+}
+
+// stripMarkupListMarker is stripListMarker for a line of emitted Markdown, where
+// escapeMarkdown has backslash-escaped any marker it also treats as syntax — a
+// "* foo" bullet reaches us as "\* foo". Only a single escaping backslash is
+// stepped over, so source text that really began with a backslash ("\\* foo"
+// once escaped) stays a paragraph.
+func stripMarkupListMarker(s string) (rest string, ordered, alpha, isItem bool) {
+	if r, isOrdered, isAlpha, ok := stripListMarker(s); ok {
+		return r, isOrdered, isAlpha, ok
+	}
+	if unescaped, found := strings.CutPrefix(strings.TrimLeft(s, " \t"), `\`); found {
+		if r, isOrdered, isAlpha, ok := stripListMarker(unescaped); ok {
+			return r, isOrdered, isAlpha, ok
+		}
 	}
 	return s, false, false, false
 }

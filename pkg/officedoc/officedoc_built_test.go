@@ -247,6 +247,15 @@ func TestConvertBuiltParity(t *testing.T) {
 			wantImages: []string{"pic.png"},
 		},
 		{
+			// "*" is both a bullet glyph and Markdown syntax: the marker must be
+			// stripped even though escapeMarkdown wrote it as "\*".
+			name: "asterisk bullets keep no escaped marker",
+			docx: docxZip(t, docxP("", `<w:r><w:t>* foo</w:t></w:r>`)+
+				docxP("", `<w:r><w:t>* bar</w:t></w:r>`), nil),
+			odt:  odtZip(t, `<text:p>* foo</text:p><text:p>* bar</text:p>`, "", nil),
+			want: "- foo\n- bar\n",
+		},
+		{
 			name: "empty document",
 			docx: docxZip(t, docxP("", `<w:r><w:t>   </w:t></w:r>`), nil),
 			odt:  odtZip(t, `<text:p>   </text:p>`, "", nil),

@@ -198,6 +198,25 @@ func TestStripListMarker(t *testing.T) {
 	}
 }
 
+func TestStripMarkupListMarker(t *testing.T) {
+	tests := []struct {
+		in     string
+		rest   string
+		isItem bool
+	}{
+		{`\* foo`, "foo", true},       // an escaped "*" bullet.
+		{"• item", "item", true},      // an unescaped glyph still works.
+		{"1. step", "step", true},     // ordered markers aren't escaped.
+		{`\\* foo`, `\\* foo`, false}, // source text that really starts with a backslash.
+		{`\_foo\_`, `\_foo\_`, false},
+	}
+	for _, tt := range tests {
+		rest, _, _, isItem := stripMarkupListMarker(tt.in)
+		require.Equal(t, tt.isItem, isItem, tt.in)
+		require.Equal(t, tt.rest, rest, tt.in)
+	}
+}
+
 func TestIndentLevel(t *testing.T) {
 	require.Equal(t, 1, indentLevel(0))   // no indent: top level.
 	require.Equal(t, 1, indentLevel(360)) // Word's default list indent: still level 1.
