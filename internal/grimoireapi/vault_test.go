@@ -61,12 +61,14 @@ func TestOpenAndCurrentVault(t *testing.T) {
 	require.Equal(t, "/vaults/notes", got.Path)
 }
 
-func TestSwitchVaultReplaces(t *testing.T) {
+// TestOpenVaultReplaces is the switch case: opening a second vault rebinds the
+// backend, which is what the /vault/switch route relies on.
+func TestOpenVaultReplaces(t *testing.T) {
 	api, b := newStubAPI(t)
 	ctx := context.Background()
 	_, err := api.OpenVault(ctx, "/vaults/a")
 	require.NoError(t, err)
-	v, err := api.SwitchVault(ctx, "/vaults/b")
+	v, err := api.OpenVault(ctx, "/vaults/b")
 	require.NoError(t, err)
 	require.Equal(t, "/vaults/b", v.Path)
 	require.Equal(t, "/vaults/b", b.bound, "switching replaces the bound vault")

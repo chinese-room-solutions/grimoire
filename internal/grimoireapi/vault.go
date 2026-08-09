@@ -28,13 +28,6 @@ func (a *API) OpenVault(ctx context.Context, path string) (Vault, error) {
 	return Vault{Name: filepath.Base(current), Path: current, Current: true}, nil
 }
 
-// SwitchVault is OpenVault under the name an agent reaches for when a vault is
-// already open: binding a new vault replaces the old one, so the two are the same
-// operation.
-func (a *API) SwitchVault(ctx context.Context, path string) (Vault, error) {
-	return a.OpenVault(ctx, path)
-}
-
 // CloseVault returns the backend to the empty state (no vault open).
 func (a *API) CloseVault(ctx context.Context) error {
 	if a.unbind == nil {

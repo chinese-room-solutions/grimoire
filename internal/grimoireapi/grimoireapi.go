@@ -183,45 +183,11 @@ func toTree(nodes []app.TreeNode) []TreeNode {
 	return out
 }
 
-// NoteRef is a single note in the flat vault listing: its display name and
-// vault-relative path. The flat form exists for consumers (notably the CLI's
-// vault listing) that want a simple enumerable list rather than a nested tree —
-// and because it is non-recursive, unlike TreeNode.
+// NoteRef names one note or folder a write returned: its display name and
+// vault-relative path.
 type NoteRef struct {
 	Name string `json:"name"` // display name (without .md).
 	Path string `json:"path"` // vault-relative slash path.
-}
-
-// ListVaultFlat returns every note in the vault as a flat, depth-first list of
-// (name, path) refs — the same notes ListVault surfaces, without the folder
-// nesting. Folders themselves aren't listed; only notes.
-func (a *API) ListVaultFlat(ctx context.Context) ([]NoteRef, error) {
-	svc, err := a.service()
-	if err != nil {
-		return nil, err
-	}
-	root, err := svc.VaultTree()
-	if err != nil {
-		return nil, err
-	}
-	var out []NoteRef
-	flatten(root.Children, &out)
-	return out, nil
-}
-
-// flatten appends every note under nodes (depth-first) to out, descending into
-// folders and skipping non-note files.
-func flatten(nodes []app.TreeNode, out *[]NoteRef) {
-	for _, n := range nodes {
-		if n.IsDir {
-			flatten(n.Children, out)
-			continue
-		}
-		if !n.IsNote {
-			continue
-		}
-		*out = append(*out, NoteRef{Name: n.Name, Path: n.Path})
-	}
 }
 
 // Resolution is the outcome of resolving a wikilink/name to a note path: the
