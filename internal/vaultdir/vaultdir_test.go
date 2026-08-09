@@ -12,20 +12,29 @@ import (
 
 // useTempDirs points os.UserConfigDir and os.UserCacheDir at two distinct temp
 // dirs for the test via the platform env vars they read, so Root/For/LastVault
-// don't touch the real directories, and returns them (config, cache).
-func useTempDirs(t *testing.T) (config, cache string) {
+// don't touch the real directories, and returns the Grimoire roots that landed
+// there (<config>/grimoire, <cache>/grimoire).
+func useTempDirs(t *testing.T) (configRoot, cacheRoot string) {
 	t.Helper()
-	config, cache = t.TempDir(), t.TempDir()
+	config, cache, home := t.TempDir(), t.TempDir(), t.TempDir()
 	// os.UserConfigDir reads %AppData% on Windows, $XDG_CONFIG_HOME (then
 	// $HOME/.config) on Unix; os.UserCacheDir reads %LocalAppData%,
-	// $XDG_CACHE_HOME (then $HOME/.cache); macOS derives both from $HOME. Set all
-	// the likely ones so the test is host-agnostic.
+	// $XDG_CACHE_HOME (then $HOME/.cache); macOS ignores XDG and derives both
+	// from $HOME (which keeps them distinct too). Set all the likely ones, then
+	// ask the production resolvers where that landed — hardcoding the temp dirs
+	// would assert against paths macOS never touches.
 	t.Setenv("AppData", config)
 	t.Setenv("XDG_CONFIG_HOME", config)
 	t.Setenv("LocalAppData", cache)
 	t.Setenv("XDG_CACHE_HOME", cache)
-	t.Setenv("HOME", cache)
-	return config, cache
+	t.Setenv("HOME", home)
+	var err error
+	configRoot, err = Root()
+	require.NoError(t, err)
+	cacheRoot, err = CacheRoot()
+	require.NoError(t, err)
+	require.NotEqual(t, configRoot, cacheRoot, "config and cache roots must differ")
+	return configRoot, cacheRoot
 }
 
 func TestForIsStableAndDistinct(t *testing.T) {
@@ -116,9 +125,8 @@ func TestKnownVaults(t *testing.T) {
 
 // legacyLayout populates the pre-migration cache-root layout: root-level
 // pointers, the app dir, and one vault dir holding durable files plus an index.
-func legacyLayout(t *testing.T, cache, vault string) (legacyVaultDir string) {
+func legacyLayout(t *testing.T, legacy, vault string) (legacyVaultDir string) {
 	t.Helper()
-	legacy := filepath.Join(cache, rootName)
 	hash, err := vaultHash(vault)
 	require.NoError(t, err)
 	legacyVaultDir = filepath.Join(legacy, vaultsSubdir, hash)
@@ -138,22 +146,22 @@ func legacyLayout(t *testing.T, cache, vault string) (legacyVaultDir string) {
 }
 
 func TestMigrationMovesDurableDataToConfigDir(t *testing.T) {
-	config, cache := useTempDirs(t)
+	configRoot, cacheRoot := useTempDirs(t)
 	vault := t.TempDir()
-	legacyVaultDir := legacyLayout(t, cache, vault)
+	legacyVaultDir := legacyLayout(t, cacheRoot, vault)
 
 	// Root-level durable files migrate on first Root() touch.
 	last, err := LastVault()
 	require.NoError(t, err)
 	require.Equal(t, vault, last)
-	require.FileExists(t, filepath.Join(config, rootName, lastVaultFile))
-	require.NoFileExists(t, filepath.Join(cache, rootName, lastVaultFile))
-	require.FileExists(t, filepath.Join(config, rootName, appSubdir, "config.json"))
+	require.FileExists(t, filepath.Join(configRoot, lastVaultFile))
+	require.NoFileExists(t, filepath.Join(cacheRoot, lastVaultFile))
+	require.FileExists(t, filepath.Join(configRoot, appSubdir, "config.json"))
 
 	// Per-vault durable files migrate on first For() touch; the index stays put.
 	dir, err := For(vault)
 	require.NoError(t, err)
-	require.Equal(t, filepath.Join(config, rootName, vaultsSubdir, filepath.Base(dir)), dir)
+	require.Equal(t, filepath.Join(configRoot, vaultsSubdir, filepath.Base(dir)), dir)
 	for _, name := range []string{"sessions.db", "runs.db", "grimoire.json"} {
 		require.FileExists(t, filepath.Join(dir, name))
 		require.NoFileExists(t, filepath.Join(legacyVaultDir, name))
@@ -168,13 +176,13 @@ func TestMigrationMovesDurableDataToConfigDir(t *testing.T) {
 }
 
 func TestMigrationPrefersExistingConfigData(t *testing.T) {
-	config, cache := useTempDirs(t)
+	configRoot, cacheRoot := useTempDirs(t)
 	vault := t.TempDir()
-	legacyLayout(t, cache, vault)
+	legacyLayout(t, cacheRoot, vault)
 
 	// The config dir already has a (newer) last-vault: migration must not clobber it.
-	require.NoError(t, os.MkdirAll(filepath.Join(config, rootName), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(config, rootName, lastVaultFile), []byte("/newer"), 0o600))
+	require.NoError(t, os.MkdirAll(configRoot, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(configRoot, lastVaultFile), []byte("/newer"), 0o600))
 
 	last, err := LastVault()
 	require.NoError(t, err)
