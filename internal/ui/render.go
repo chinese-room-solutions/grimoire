@@ -1373,7 +1373,11 @@ var styleBlock = `<style>
 func RenderPage(theme, logLevel string, st State) string {
 	name := string(uikit.ParseTheme(theme))
 	var buf bytes.Buffer
-	_ = grimoirePage(settingsMenu(logLevel, name, st), name, st).Render(context.Background(), &buf)
+	if err := grimoirePage(settingsMenu(logLevel, name, st), name, st).Render(context.Background(), &buf); err != nil {
+		// Whatever was written is a half-page of broken markup; fall back to the
+		// bare container with a notice, as the run panel does.
+		return `<div id="app-grimoire">Failed to render the page.</div>`
+	}
 	return buf.String()
 }
 
