@@ -302,13 +302,19 @@ var preBlock = regexp.MustCompile(`(?s)<pre[ >].*?</pre>`)
 // data-lang in a rendered block).
 var preLang = regexp.MustCompile(`<pre[^>]* data-lang="([^"]*)"`)
 
+// preFenced tells a rendered fenced block from an indented one: codeWrapper marks
+// every fence's <pre> with class="chroma", while an indented block falls through
+// to goldmark's plain <pre><code>. Only fences are numbered, so a block's DOM id
+// matches the app's fenced-block index (see app.extractCodeBlocks).
+var preFenced = regexp.MustCompile(`^<pre[^>]*\bclass="chroma"`)
+
 // wrapCodeBlocks wraps each rendered code block in a relative box and pins a copy
 // button to it; blocks tagged with a language a kernel could run also get a Run
 // button and an (initially hidden) output panel. The buttons are plain
 // server-rendered markup; the webview delegates their clicks (see initCopy /
 // initRun). The <pre> scrolls horizontally, so the buttons can't live inside it —
-// the non-scrolling wrapper holds them instead. Each block gets a positional id
-// so run output can be streamed into its own panel.
+// the non-scrolling wrapper holds them instead. Each fenced block gets a
+// positional id so run output can be streamed into its own panel.
 // KernelResolver, when set, returns the label and version of the kernel that will
 // run a block of the given language with the given per-block family/version
 // override. ok is false when the language isn't runnable. The app wires this at
@@ -362,8 +368,14 @@ func wrapCodeBlocks(rendered string, overrides []blockFence) string {
 func wrapCodeBlocksWithRuns(rendered string, overrides []blockFence, sources []string, notePath string) string {
 	i := -1
 	return preBlock.ReplaceAllStringFunc(rendered, func(block string) string {
-		i++
 		copyBtn := `<sl-icon-button class="g-code-copy" name="copy" label="Copy code"></sl-icon-button>`
+		if !preFenced.MatchString(block) {
+			// An indented code block: copyable, but no id and no run plumbing. The
+			// app only knows fenced blocks, so numbering this one would shift every
+			// later block's id away from the index a run targets.
+			return `<div class="g-code-block">` + block + copyBtn + `</div>`
+		}
+		i++
 		lang := ""
 		if m := preLang.FindStringSubmatch(block); m != nil {
 			lang = m[1]

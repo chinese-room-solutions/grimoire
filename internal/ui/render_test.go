@@ -218,7 +218,7 @@ func TestWrapCodeBlocks(t *testing.T) {
 		},
 		{
 			"block ids increment across blocks",
-			`<pre data-lang="bash">a</pre><pre data-lang="sh">b</pre>`,
+			`<pre class="chroma" data-lang="bash">a</pre><pre class="chroma" data-lang="sh">b</pre>`,
 			[]string{`data-g-block="0"`, `data-g-block="1"`, `id="g-code-output-0"`, `id="g-code-output-1"`},
 			nil,
 		},
@@ -226,7 +226,7 @@ func TestWrapCodeBlocks(t *testing.T) {
 			// No kernel claims cobol, so the block can't run — but it names a
 			// language, so it carries the slot the install CTA fills.
 			"an unrunnable language block carries an install slot",
-			`<pre data-lang="cobol">DISPLAY 1</pre>`,
+			`<pre class="chroma" data-lang="cobol">DISPLAY 1</pre>`,
 			[]string{`data-g-block="0"`, `class="g-code-install" data-g-lang="cobol"`},
 			[]string{"g-code-run", "g-code-output"},
 		},
@@ -251,6 +251,20 @@ func TestWrapCodeBlocks(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIndentedBlockDoesNotShiftFencedIndexes(t *testing.T) {
+	stubKernelResolver(t)
+	// The app indexes fenced blocks only (extractCodeBlocks), so an indented block
+	// before a fence must not consume an id — otherwise a run targets the wrong
+	// panel and the stored result never re-attaches.
+	out := RenderMarkdown("    indented\n\n```bash\necho hi\n```\n")
+
+	require.Contains(t, out, `<div class="g-code-block"><pre><code>indented`, "the indented block is wrapped without a block id")
+	require.Contains(t, out, `data-g-block="0"`, "the fenced block is block 0")
+	require.Contains(t, out, `id="g-code-output-0"`)
+	require.NotContains(t, out, `data-g-block="1"`)
+	require.Equal(t, 1, strings.Count(out, "g-code-run\""), "only the fenced block is runnable")
 }
 
 // stubKernelResolver installs a resolver that treats common code languages as

@@ -32,7 +32,8 @@ func BlockHash(code string) string {
 // lowercased), an optional kernel-name override (from a {kernel=NAME} fence
 // attribute), its source, and its positional index among all the note's code
 // blocks. The index matches the renderer's per-block id (wrapCodeBlocks numbers
-// every code block in order), so it lines up with the output panel a run targets.
+// fenced blocks in order, skipping indented ones, which aren't runnable), so it
+// lines up with the output panel a run targets.
 type codeBlock struct {
 	Index   int
 	Lang    string
