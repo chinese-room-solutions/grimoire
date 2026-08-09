@@ -310,13 +310,73 @@ func SetLastVault(vault string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return fmt.Errorf("creating data root: %w", err)
-	}
-	if err := fsutil.WriteFileAtomic(filepath.Join(root, lastVaultFile), []byte(vault), 0o600); err != nil {
+	if err := writeLastVault(root, vault); err != nil {
 		return err
 	}
 	return recordKnownVault(root, vault)
+}
+
+// Forget drops vault from the known-vaults registry, and repoints the last-vault
+// pointer at the most recently recorded remaining vault (clearing it when none
+// remain) if it named the forgotten one. Forgetting is not deleting: the vault
+// folder, its data dir (For) and its cache dir (CacheFor) are left untouched, so
+// reopening the vault restores everything. A vault that isn't known is a no-op.
+func Forget(vault string) error {
+	key, err := canonical(vault)
+	if err != nil {
+		return err
+	}
+	root, err := Root()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(root, knownVaultsFile)
+	existing, err := readLines(path)
+	if err != nil {
+		return err
+	}
+	remaining := make([]string, 0, len(existing))
+	for _, v := range existing {
+		if k, err := canonical(v); err == nil && k == key {
+			continue
+		}
+		remaining = append(remaining, v)
+	}
+	if len(remaining) == len(existing) {
+		return nil // not known: nothing to forget, and the pointer stays put.
+	}
+	if err := writeKnownVaults(path, remaining); err != nil {
+		return err
+	}
+	last, err := LastVault()
+	if err != nil {
+		return err
+	}
+	if k, err := canonical(last); err != nil || k != key {
+		return nil // the pointer names another vault (or none).
+	}
+	var next string
+	if len(remaining) > 0 {
+		next = remaining[len(remaining)-1] // the most recently recorded survivor.
+	}
+	return writeLastVault(root, next)
+}
+
+// writeLastVault records vault in the pointer file, atomically so a crash can't
+// leave a truncated path behind. An empty vault removes the pointer instead —
+// that's "no vault to reopen", which LastVault also reports for a missing file.
+func writeLastVault(root, vault string) error {
+	path := filepath.Join(root, lastVaultFile)
+	if vault == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing last-vault: %w", err)
+		}
+		return nil
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return fmt.Errorf("creating data root: %w", err)
+	}
+	return fsutil.WriteFileAtomic(path, []byte(vault), 0o600)
 }
 
 // KnownVaults returns the vaults Grimoire has opened, in recorded order, keeping
@@ -359,7 +419,17 @@ func recordKnownVault(root, vault string) error {
 		}
 	}
 	existing = append(existing, strings.TrimSpace(vault))
-	return fsutil.WriteFileAtomic(path, []byte(strings.Join(existing, "\n")+"\n"), 0o600)
+	return writeKnownVaults(path, existing)
+}
+
+// writeKnownVaults replaces the registry with vaults, one per line. An empty list
+// truncates the file, which readLines reads back as no known vaults.
+func writeKnownVaults(path string, vaults []string) error {
+	var data []byte
+	if len(vaults) > 0 {
+		data = []byte(strings.Join(vaults, "\n") + "\n")
+	}
+	return fsutil.WriteFileAtomic(path, data, 0o600)
 }
 
 // readLines returns the non-empty, trimmed lines of a file, or nil if it doesn't

@@ -1,6 +1,7 @@
 package vaultdir
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -121,6 +122,106 @@ func TestKnownVaults(t *testing.T) {
 	known, err = KnownVaults()
 	require.NoError(t, err)
 	require.Equal(t, []string{a, b}, known, "non-existent vault folder is filtered out")
+}
+
+func TestForget(t *testing.T) {
+	tests := []struct {
+		name      string
+		vaults    int                                  // vault folders to create and record, in order.
+		last      int                                  // index the last-vault pointer is left on; -1 for none.
+		forget    func(base string, v []string) string // the path handed to Forget.
+		wantKnown []int                                // indexes still registered, in order.
+		wantLast  int                                  // index the pointer must end on; -1 for cleared.
+	}{
+		{
+			name:   "unknown vault is a no-op",
+			vaults: 2, last: 1,
+			forget:    func(base string, _ []string) string { return filepath.Join(base, "ghost") },
+			wantKnown: []int{0, 1}, wantLast: 1,
+		},
+		{
+			name:   "no registry yet is a no-op",
+			vaults: 0, last: -1,
+			forget:    func(base string, _ []string) string { return filepath.Join(base, "ghost") },
+			wantKnown: nil, wantLast: -1,
+		},
+		{
+			name:   "a middle vault goes, the others keep their order",
+			vaults: 3, last: 2,
+			forget:    func(_ string, v []string) string { return v[1] },
+			wantKnown: []int{0, 2}, wantLast: 2,
+		},
+		{
+			name:   "forgetting the pointed-at vault repoints to the most recent survivor",
+			vaults: 3, last: 1,
+			forget:    func(_ string, v []string) string { return v[1] },
+			wantKnown: []int{0, 2}, wantLast: 2,
+		},
+		{
+			name:   "forgetting the only vault clears the pointer",
+			vaults: 1, last: 0,
+			forget:    func(_ string, v []string) string { return v[0] },
+			wantKnown: nil, wantLast: -1,
+		},
+		{
+			name:   "an equivalent spelling matches the same vault",
+			vaults: 2, last: 1,
+			forget:    func(_ string, v []string) string { return filepath.Join(v[1], "..", filepath.Base(v[1])) },
+			wantKnown: []int{0}, wantLast: 0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			useTempDirs(t)
+			base := t.TempDir()
+			vaults := make([]string, tc.vaults)
+			for i := range vaults {
+				vaults[i] = filepath.Join(base, fmt.Sprintf("vault-%d", i))
+				require.NoError(t, os.MkdirAll(vaults[i], 0o755))
+				require.NoError(t, SetLastVault(vaults[i]))
+			}
+			if tc.last >= 0 {
+				require.NoError(t, SetLastVault(vaults[tc.last]))
+			}
+
+			require.NoError(t, Forget(tc.forget(base, vaults)))
+
+			wantKnown := make([]string, 0, len(tc.wantKnown))
+			for _, i := range tc.wantKnown {
+				wantKnown = append(wantKnown, vaults[i])
+			}
+			known, err := KnownVaults()
+			require.NoError(t, err)
+			require.Equal(t, wantKnown, known)
+
+			wantLast := ""
+			if tc.wantLast >= 0 {
+				wantLast = vaults[tc.wantLast]
+			}
+			last, err := LastVault()
+			require.NoError(t, err)
+			require.Equal(t, wantLast, last)
+		})
+	}
+}
+
+// Forgetting a vault only drops it from the registry: the folder and both of its
+// Grimoire dirs survive, so reopening it restores the sessions and the index.
+func TestForgetKeepsVaultDataOnDisk(t *testing.T) {
+	useTempDirs(t)
+	vault := t.TempDir()
+	require.NoError(t, SetLastVault(vault))
+	dataDir, err := For(vault)
+	require.NoError(t, err)
+	cacheDir, err := CacheFor(vault)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "sessions.db"), []byte("sessions"), 0o600))
+
+	require.NoError(t, Forget(vault))
+
+	require.DirExists(t, vault)
+	require.FileExists(t, filepath.Join(dataDir, "sessions.db"))
+	require.DirExists(t, cacheDir)
 }
 
 // legacyLayout populates the pre-migration cache-root layout: root-level
