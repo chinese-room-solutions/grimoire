@@ -108,13 +108,14 @@ func (s *Structurizer) Structurize(ctx context.Context, input PageInput) (string
 	callCtx, cancel := context.WithTimeout(ctx, s.pageTimeout)
 	defer cancel()
 
-	body, err := s.awaitChat(callCtx, jobID)
+	body, settled, err := s.awaitChat(callCtx, jobID)
 	if err != nil {
-		// The await is a durable read: dropping it (a cancelled import or the
-		// per-page timeout) leaves the job running on the gateway, burning the
-		// worker while the next page queues behind it. Tell the gateway to
-		// stop the work rather than leak a running job.
-		if callCtx.Err() != nil {
+		// The await is a durable read: losing it — to a cancelled import, the
+		// per-page timeout, a dropped connection, a 5xx, an unreadable body —
+		// leaves the job running on the gateway, burning the worker while the
+		// next page queues behind it. Nobody will collect the result now, so
+		// stop the work, unless the gateway already settled the job itself.
+		if !settled {
 			s.cancelJob(jobID)
 		}
 		return "", ctxerr.With(
@@ -134,9 +135,10 @@ func (s *Structurizer) Structurize(ctx context.Context, input PageInput) (string
 // cancelTimeout bounds the best-effort job-cancel request.
 const cancelTimeout = 10 * time.Second
 
-// cancelJob sends DELETE /.v1/Jobs/{id} so the gateway stops an abandoned job
-// after a cancelled conversion. Best effort: it uses its own short-lived context
-// (the conversion's is already cancelled) and only logs on failure.
+// cancelJob sends DELETE /.v1/Jobs/{id} so the gateway stops a job nobody will
+// collect. Best effort and safe to call for any abandoned job: it holds no
+// state, uses its own short-lived context (the conversion's may already be
+// cancelled), and only logs on failure.
 func (s *Structurizer) cancelJob(jobID string) {
 	if jobID == "" {
 		return
@@ -271,44 +273,46 @@ const awaitPollJitter = 0.25
 
 // awaitChat fetches a job's result, blocking until terminal via ?wait=1. The
 // returned content is the assistant message; a terminal error status surfaces
-// as an error.
+// as an error. settled reports whether the gateway reached a terminal status for
+// the job — when it's false the job may still be running and the caller owns
+// cancelling it.
 //
 // A wait-GET can return with the status still "pending"/"processing": the
 // gateway's wait unblocks on the job's terminal stream frame, which older
 // gateways published before storing the durable result. Such a response means
 // "not finished materializing", not "empty" — re-poll until terminal (the
 // caller's per-page timeout bounds the loop).
-func (s *Structurizer) awaitChat(ctx context.Context, jobID string) (string, error) {
+func (s *Structurizer) awaitChat(ctx context.Context, jobID string) (body string, settled bool, err error) {
 	url := s.gatewayURL + "/.v1/Jobs/" + jobID + "?wait=1"
 	delay := awaitPollBase
 	for {
 		respBody, err := s.do(ctx, http.MethodGet, url, nil)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		var res jobResultResponse
 		if err := json.Unmarshal(respBody, &res); err != nil {
-			return "", fmt.Errorf("unmarshal job result: %w", err)
+			return "", false, fmt.Errorf("unmarshal job result: %w", err)
 		}
 		switch res.Status {
 		case "error":
-			return "", fmt.Errorf("%w: %s", ErrLLMCall, res.Error)
+			return "", true, fmt.Errorf("%w: %s", ErrLLMCall, res.Error)
 		case "done":
 			if len(res.Result) == 0 {
-				return "", nil
+				return "", true, nil
 			}
 			var chat chatResponse
 			if err := json.Unmarshal(res.Result, &chat); err != nil {
-				return "", fmt.Errorf("unmarshal chat result: %w", err)
+				return "", true, fmt.Errorf("unmarshal chat result: %w", err)
 			}
 			if chat.Message == nil {
-				return "", nil
+				return "", true, nil
 			}
-			return chat.Message.Content, nil
+			return chat.Message.Content, true, nil
 		default:
 			select {
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return "", false, ctx.Err()
 			case <-time.After(jitter(delay)):
 			}
 			delay = min(delay*2, awaitPollMax)

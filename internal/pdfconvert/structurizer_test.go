@@ -170,72 +170,104 @@ func TestStructurizer_ErrorStatus(t *testing.T) {
 	require.ErrorIs(t, err, ErrLLMCall)
 }
 
-// On a cancelled context mid-await, Structurize tells the gateway to cancel the
-// job (DELETE /.v1/Jobs/{id}) so the abandoned work doesn't keep running.
-func TestStructurizer_CancelsJobOnContextCancel(t *testing.T) {
-	var deletedPath string
-	deleted := make(chan struct{}, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPost: // submit returns a job id
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"job_id": "job-9"})
-		case http.MethodGet: // the durable wait blocks until the request ctx is cancelled
-			<-r.Context().Done()
-		case http.MethodDelete: // the cancel we expect
-			deletedPath = r.URL.Path
-			deleted <- struct{}{}
-			w.WriteHeader(http.StatusNoContent)
-		}
-	}))
-	defer server.Close()
+// Whatever ends the await, Structurize must not leave the gateway grinding a
+// result nobody will read — the next page queues behind it on the same worker.
+// So every failed await cancels the job (DELETE /.v1/Jobs/{id}), except one the
+// gateway already settled, which has nothing left to stop.
+func TestStructurizer_CancelsAbandonedJob(t *testing.T) {
+	blockUntilDropped := func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }
 
-	s := newTestStructurizer(server.URL)
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
-
-	_, err := s.Structurize(ctx, PageInput{PageNum: 1, RawText: "x"})
-	require.Error(t, err)
-
-	select {
-	case <-deleted:
-		require.Equal(t, "/.v1/Jobs/job-9", deletedPath)
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected a DELETE to cancel the job")
+	tests := []struct {
+		name        string
+		jobID       string
+		awaitGET    http.HandlerFunc
+		cancelAfter time.Duration // > 0: cancel the caller's context after this
+		pageTimeout time.Duration // > 0: override the per-page timeout
+		wantCancel  bool
+	}{
+		{
+			name:        "caller cancels mid-await",
+			jobID:       "job-9",
+			awaitGET:    blockUntilDropped,
+			cancelAfter: 50 * time.Millisecond,
+			wantCancel:  true,
+		},
+		{
+			name:        "per-page timeout mid-await",
+			jobID:       "job-42",
+			awaitGET:    blockUntilDropped,
+			pageTimeout: 50 * time.Millisecond,
+			wantCancel:  true,
+		},
+		{
+			name:  "gateway fails the await request",
+			jobID: "job-502",
+			awaitGET: func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "bad gateway", http.StatusBadGateway)
+			},
+			wantCancel: true,
+		},
+		{
+			name:  "await answers with an unparseable body",
+			jobID: "job-junk",
+			awaitGET: func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte("<html>not json</html>"))
+			},
+			wantCancel: true,
+		},
+		{
+			name:  "gateway already failed the job",
+			jobID: "job-settled",
+			awaitGET: func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": "error", "error": "model not loaded"})
+			},
+			wantCancel: false,
+		},
 	}
-}
 
-// On a per-page timeout mid-await, Structurize must also cancel the gateway
-// job — otherwise the worker keeps grinding the timed-out page while the next
-// page queues behind it.
-func TestStructurizer_CancelsJobOnPerPageTimeout(t *testing.T) {
-	var deletedPath string
-	deleted := make(chan struct{}, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPost:
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"job_id": "job-42"})
-		case http.MethodGet: // the durable wait outlives the per-page timeout
-			<-r.Context().Done()
-		case http.MethodDelete:
-			deletedPath = r.URL.Path
-			deleted <- struct{}{}
-			w.WriteHeader(http.StatusNoContent)
-		}
-	}))
-	defer server.Close()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deleted := make(chan string, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodPost: // submit returns a job id
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{"job_id": tt.jobID})
+				case http.MethodGet:
+					tt.awaitGET(w, r)
+				case http.MethodDelete:
+					deleted <- r.URL.Path
+					w.WriteHeader(http.StatusNoContent)
+				}
+			}))
+			defer server.Close()
 
-	s := newTestStructurizer(server.URL)
-	s.pageTimeout = 50 * time.Millisecond
-	_, err := s.Structurize(context.Background(), PageInput{PageNum: 1, RawText: "x"})
-	require.Error(t, err)
+			s := newTestStructurizer(server.URL)
+			if tt.pageTimeout > 0 {
+				s.pageTimeout = tt.pageTimeout
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.cancelAfter > 0 {
+				go func() { time.Sleep(tt.cancelAfter); cancel() }()
+			}
 
-	select {
-	case <-deleted:
-		require.Equal(t, "/.v1/Jobs/job-42", deletedPath)
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected a DELETE to cancel the timed-out job")
+			_, err := s.Structurize(ctx, PageInput{PageNum: 1, RawText: "x"})
+			require.Error(t, err)
+
+			if !tt.wantCancel {
+				// cancelJob runs before Structurize returns, so an empty channel
+				// here means it was never called.
+				require.Empty(t, deleted, "a settled job must not be cancelled")
+				return
+			}
+			select {
+			case path := <-deleted:
+				require.Equal(t, "/.v1/Jobs/"+tt.jobID, path)
+			case <-time.After(2 * time.Second):
+				t.Fatal("expected a DELETE to cancel the job")
+			}
+		})
 	}
 }
 
