@@ -176,9 +176,9 @@ type Property = frontmatter.Property
 // properties (for the panel), the raw Markdown body (for the editor), and the
 // body rendered to HTML (for reading). notePath, when set, lets each runnable
 // block re-hydrate its last run from the cache (pass "" when the path is unknown).
-func RenderNote(source, notePath string) (props []Property, rawBody, bodyHTML string) {
+func RenderNote(nr NoteRenderer, source, notePath string) (props []Property, rawBody, bodyHTML string) {
 	props, body := frontmatter.Split(source)
-	return props, body, RenderNoteBody(body, notePath)
+	return props, body, RenderNoteBody(nr, body, notePath)
 }
 
 // propIcon picks a Shoelace icon for a frontmatter property by its key, mirroring
@@ -198,23 +198,17 @@ func propIcon(key string) string {
 	}
 }
 
-// RenderMarkdown converts a note's Markdown source to HTML for preview. Code
-// blocks render empty output panels (no run history). Use RenderNoteBody when the
-// note's path is known so cached run output can be re-hydrated.
-func RenderMarkdown(source string) string {
-	return renderBody(source, "")
-}
-
-// RenderNoteBody is RenderMarkdown for a note at a known vault path, so each
-// runnable block whose last run is cached re-hydrates its output panel.
-func RenderNoteBody(source, notePath string) string {
-	return renderBody(source, notePath)
+// RenderNoteBody converts a note's Markdown source to HTML for preview. With a
+// notePath set, each runnable block whose last run is cached re-hydrates its
+// output panel; pass "" when the path is unknown.
+func RenderNoteBody(nr NoteRenderer, source, notePath string) string {
+	return renderBody(nr, source, notePath)
 }
 
 // renderBody renders a note's Markdown to preview HTML, turning [[wikilinks]]
 // into in-vault links first, and wraps code blocks (run buttons, kernel badges,
 // and — when notePath is set — cached run output).
-func renderBody(source, notePath string) string {
+func renderBody(nr NoteRenderer, source, notePath string) string {
 	// Per-block data recovered from the source (chroma drops it from the rendered
 	// HTML): the {kernel=FAMILY}{version=VER} override and the block's raw source.
 	// Overrides are only needed when one is actually present; sources only when a
@@ -225,7 +219,7 @@ func renderBody(source, notePath string) string {
 	if strings.Contains(source, "{kernel=") || strings.Contains(source, "{version=") {
 		overrides = blockKernels(source)
 	}
-	if notePath != "" && RunResultLoader != nil {
+	if notePath != "" && nr.RunResult != nil {
 		sources = blockSources(source)
 	}
 
@@ -234,7 +228,7 @@ func renderBody(source, notePath string) string {
 		// Fall back to the raw text rather than failing the preview.
 		return "<pre>" + strings.ReplaceAll(source, "<", "&lt;") + "</pre>"
 	}
-	return wrapCodeBlocksWithRuns(resolveImageSrcs(renderCallouts(buf.String())), overrides, sources, notePath)
+	return wrapCodeBlocksWithRuns(nr, resolveImageSrcs(renderCallouts(buf.String())), overrides, sources, notePath)
 }
 
 // blockFence is a block's per-block kernel override, recovered from its fence
@@ -315,19 +309,24 @@ var preFenced = regexp.MustCompile(`^<pre[^>]*\bclass="chroma"`)
 // initRun). The <pre> scrolls horizontally, so the buttons can't live inside it —
 // the non-scrolling wrapper holds them instead. Each fenced block gets a
 // positional id so run output can be streamed into its own panel.
-// KernelResolver, when set, returns the label and version of the kernel that will
-// run a block of the given language with the given per-block family/version
-// override. ok is false when the language isn't runnable. The app wires this at
-// startup so the render layer can show which kernel a block uses without
-// depending on the kernel registry directly.
-var KernelResolver func(lang, family, version string) (label, version2 string, ok bool)
-
-// RunResultLoader, when set, returns a block's last run for the note at notePath,
-// looked up by the block's source (the app hashes it to the stored key). ok is
-// false when the block was never run or its code changed since. The app wires
-// this at startup so a reopened note re-hydrates each block's saved output
-// without the render layer depending on the run-result store.
-var RunResultLoader func(notePath, code string) (RunResult, bool)
+// NoteRenderer carries the vault-specific lookups a note render needs. The
+// daemon serves many vaults at once, so these ride with each render rather than
+// living in package state: the caller builds one from the vault's service and
+// passes it down. The zero value renders plain Markdown — no run buttons, no
+// re-hydrated output.
+type NoteRenderer struct {
+	// Kernel, when set, returns the label and version of the kernel that will run
+	// a block of the given language with the given per-block family/version
+	// override. ok is false when the language isn't runnable — the render layer
+	// asks rather than depending on the kernel registry directly.
+	Kernel func(lang, family, version string) (label, version2 string, ok bool)
+	// RunResult, when set, returns a block's last run for the note at notePath,
+	// looked up by the block's source (the app hashes it to the stored key). ok is
+	// false when the block was never run or its code changed since, so a reopened
+	// note re-hydrates its saved output without the render layer depending on the
+	// run-result store.
+	RunResult func(notePath, code string) (RunResult, bool)
+}
 
 // RunResult is a block's persisted last run, mirrored from the app/runs layer so
 // the render layer can paint it without importing the store. Items are output
@@ -356,8 +355,8 @@ const (
 	MIMEHTML = "text/html"
 )
 
-func wrapCodeBlocks(rendered string, overrides []blockFence) string {
-	return wrapCodeBlocksWithRuns(rendered, overrides, nil, "")
+func wrapCodeBlocks(nr NoteRenderer, rendered string, overrides []blockFence) string {
+	return wrapCodeBlocksWithRuns(nr, rendered, overrides, nil, "")
 }
 
 // wrapCodeBlocksWithRuns is wrapCodeBlocks with each block's raw source and the
@@ -365,7 +364,9 @@ func wrapCodeBlocks(rendered string, overrides []blockFence) string {
 // (saved output + footer + time) instead of starting empty. sources is indexed
 // the same as overrides (document order); an empty notePath or nil loader leaves
 // every panel empty, as before.
-func wrapCodeBlocksWithRuns(rendered string, overrides []blockFence, sources []string, notePath string) string {
+func wrapCodeBlocksWithRuns(
+	nr NoteRenderer, rendered string, overrides []blockFence, sources []string, notePath string,
+) string {
 	i := -1
 	return preBlock.ReplaceAllStringFunc(rendered, func(block string) string {
 		copyBtn := `<sl-icon-button class="g-code-copy" name="copy" label="Copy code"></sl-icon-button>`
@@ -391,8 +392,8 @@ func wrapCodeBlocksWithRuns(rendered string, overrides []blockFence, sources []s
 		// copy button (no Run, no badge), like a plain no-language block.
 		var label string
 		runnable := false
-		if lang != "" && KernelResolver != nil {
-			label, _, runnable = KernelResolver(lang, ov.Family, ov.Version)
+		if lang != "" && nr.Kernel != nil {
+			label, _, runnable = nr.Kernel(lang, ov.Family, ov.Version)
 		}
 		id := strconv.Itoa(i)
 		if !runnable {
@@ -428,8 +429,8 @@ func wrapCodeBlocksWithRuns(rendered string, overrides []blockFence, sources []s
 		// reopening the note shows the previous output. A miss (never run, or edited
 		// since) leaves the panel empty and hidden.
 		panel := `<div class="g-code-output" id="g-code-output-` + id + `" hidden></div>`
-		if RunResultLoader != nil && notePath != "" && i < len(sources) {
-			if res, ok := RunResultLoader(notePath, sources[i]); ok {
+		if nr.RunResult != nil && notePath != "" && i < len(sources) {
+			if res, ok := nr.RunResult(notePath, sources[i]); ok {
 				panel = runResultPanelHTML(id, res)
 			}
 		}
@@ -670,6 +671,10 @@ type ConnState struct {
 // saved values so the model selects and vault input show the current choice.
 func initialSignals(st State) string {
 	sig := map[string]any{
+		// The vault this page is for, as an absolute path. Datastar sends the whole
+		// signal store with every request, so every action the page fires carries it
+		// and the daemon resolves the right vault without a per-URL parameter.
+		"gVault":      st.Vault,
 		"gBusy":       false,
 		"gSearchBusy": false,
 		// When the restored focused tab is the graph, mark content present so the

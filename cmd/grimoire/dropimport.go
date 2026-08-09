@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/chinese-room-solutions/grimoire/internal/app"
+	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
 	"github.com/chinese-room-solutions/mass-sdk/webview"
 	"github.com/rs/zerolog"
 )
@@ -27,13 +28,15 @@ var importableName = regexp.MustCompile(`(?i)\.(md|markdown|txt|html?|docx|odt|p
 // first import to finish rather than interleaving status updates. Unlike the
 // in-page dropzone, a native import has no cancel — dismissing the status
 // line only hides it.
-func nativeDropHandler(wv webview.WindowInterface, holder *serviceHolder, logger zerolog.Logger) func([]string) {
+func nativeDropHandler(wv webview.WindowInterface, reg *vaultRegistry, logger zerolog.Logger) func([]string) {
 	var mu sync.Mutex
 	return func(paths []string) {
 		mu.Lock()
 		defer mu.Unlock()
 
-		svc := holder.current()
+		// A drop lands on the window, which shows the last-used vault — the same
+		// vault the page's own dropzone would import into.
+		svc := droppedIntoVault(reg, logger)
 		if svc == nil {
 			evalCall(wv, logger, "gNativeImportNotice", "Open a vault before importing files.")
 			return
@@ -95,6 +98,23 @@ func nativeDropHandler(wv webview.WindowInterface, holder *serviceHolder, logger
 		}
 		evalCall(wv, logger, "gNativeImportDone", total, failed, skipped, reasons)
 	}
+}
+
+// droppedIntoVault resolves the vault a native file drop imports into: the
+// last-used one, which is what the window is showing. nil when there is none, or
+// its folder is gone.
+func droppedIntoVault(reg *vaultRegistry, logger zerolog.Logger) *app.Service {
+	vault, err := vaultdir.LastVault()
+	if err != nil {
+		logger.Warn().Err(err).Msg("reading the last-used vault for a native drop")
+		return nil
+	}
+	svc, err := reg.runtime(context.Background(), vault)
+	if err != nil {
+		logger.Info().Err(err).Str("vault", vault).Msg("no vault to import a native drop into")
+		return nil
+	}
+	return svc
 }
 
 // evalCall invokes a page-global JS function with JSON-encoded arguments,

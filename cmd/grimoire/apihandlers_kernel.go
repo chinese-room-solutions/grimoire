@@ -21,7 +21,7 @@ func mountAPIKernel(mux *http.ServeMux, api *grimoireapi.API, logger zerolog.Log
 // work offline.
 func apiKernelListHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		res, err := api.KernelList(r.Context())
+		res, err := api.KernelList(r.Context(), requestVault(r))
 		if err != nil {
 			writeServiceError(w, err, logger, "list kernels")
 			return
@@ -43,7 +43,7 @@ func apiKernelInstallHandler(api *grimoireapi.API, logger zerolog.Logger) http.H
 		if !decodeBody(w, r, &in, logger) || !requireField(w, in.Name, "name", logger) {
 			return
 		}
-		res, err := api.KernelInstall(r.Context(), in.Name, in.Version)
+		res, err := api.KernelInstall(r.Context(), requestVault(r), in.Name, in.Version)
 		if err != nil {
 			writeServiceError(w, err, logger, "install kernel")
 			return
@@ -65,7 +65,7 @@ func apiKernelRemoveHandler(api *grimoireapi.API, logger zerolog.Logger) http.Ha
 			!requireField(w, in.Family, "family", logger) || !requireField(w, in.Version, "version", logger) {
 			return
 		}
-		res, err := api.KernelRemove(r.Context(), in.Family, in.Version)
+		res, err := api.KernelRemove(r.Context(), requestVault(r), in.Family, in.Version)
 		if err != nil {
 			writeServiceError(w, err, logger, "remove kernel")
 			return

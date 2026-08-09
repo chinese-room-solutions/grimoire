@@ -51,8 +51,7 @@ func main() {
 	args := os.Args[1:]
 	if i := firstNonFlagIndex(args); i >= 0 {
 		if args[i] == "serve" {
-			vault, idle := parseServeFlags(args, i)
-			runServe(logger, vault, idle)
+			runServe(logger, parseServeFlags(args, i))
 			return
 		}
 		os.Exit(runCLI(args))
@@ -85,17 +84,17 @@ func main() {
 
 // parseServeFlags parses `serve`'s arguments, with verb at index verb in args.
 // The verb token is dropped so the flags around it parse in one pass, whichever
-// side they were written on: serve's own --vault/--idle-timeout after it, or the
-// global --vault before it. --json is accepted and ignored — the grammar lets it
-// lead any command, and serve has no output of its own to format.
-func parseServeFlags(args []string, verb int) (vault string, idle time.Duration) {
+// side they were written on. --vault and --json are accepted and ignored: the
+// daemon serves every vault (each request names its own) and serve has no output
+// of its own to format; both are still parsed so existing scripts don't break.
+func parseServeFlags(args []string, verb int) (idle time.Duration) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	v := fs.String("vault", "", "absolute path to the vault to serve (defaults to the last-used vault)")
+	fs.String("vault", "", "deprecated: ignored — serve runs one daemon for every vault")
 	d := fs.Duration("idle-timeout", 0,
 		"shut down after this long with no requests (0 = never; used by the CLI for on-demand backends)")
 	fs.Bool("json", false, "no effect on serve (accepted so the global flag may precede any command)")
 	_ = fs.Parse(slices.Concat(args[:verb], args[verb+1:]))
-	return *v, *d
+	return *d
 }
 
 // resolveVault decides which vault to open: the --vault flag if given, else the
@@ -119,13 +118,13 @@ func themeBase(name string) string {
 	return string(uikit.ThemeDark)
 }
 
-// runGUI starts the backend and attaches a native webview window to it. With no
-// vault (empty or unresolvable) it opens into the empty state; the user binds a
-// vault in-process from there. Many windows may run for the same vault — there is
-// no singleton.
+// runGUI starts the daemon and attaches a native webview window to it. The window
+// opens on vault, or — with none (empty or unresolvable) — into the empty state,
+// where the user picks one. Many windows may run for the same vault; the daemon
+// they share serves them all.
 func runGUI(logger zerolog.Logger, vault string) {
 	// A GUI instance never idles out — the user keeps it open.
-	b, err := startBackend(logger, vault, 0)
+	b, err := startBackend(logger, 0)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("starting backend")
 	}
@@ -133,7 +132,7 @@ func runGUI(logger zerolog.Logger, vault string) {
 
 	wv := webview.Open(webview.Options{
 		Title:   appTitle,
-		URL:     b.url,
+		URL:     b.pageURL(vault),
 		Width:   defaultWindow,
 		Height:  defaultHeight,
 		IconPNG: ui.IconPNG,
@@ -149,10 +148,10 @@ func runGUI(logger zerolog.Logger, vault string) {
 	// base (dark|light) — otherwise a light-based pluggable theme gets dark chrome.
 	b.settings.SetOnThemeChange(func(t string) { wv.SetTheme(themeBase(t)) })
 	// Let the vault picker use the native folder dialog, and the API surface
-	// capture the rendered window — wired on the holder so they survive a vault
-	// switch (each freshly bound service inherits them).
-	b.holder.SetFolderPicker(wv.PickFolder)
-	b.holder.SetScreenshotter(wv.Screenshot)
+	// capture the rendered window — wired on the registry, which owns the
+	// process-wide state every vault runtime shares.
+	b.reg.SetFolderPicker(wv.PickFolder)
+	b.reg.SetScreenshotter(wv.Screenshot)
 
 	// Fold to the system tray: minimizing hides the window (the backend keeps
 	// running); the tray icon / "Show" restores it; "Quit" or closing the
@@ -171,7 +170,7 @@ func runGUI(logger zerolog.Logger, vault string) {
 	// would otherwise navigate to the dropped file, replacing the UI with its
 	// document viewer); the handler imports them like the in-page dropzone.
 	// A no-op on Windows/macOS, whose engines deliver drops to the DOM.
-	wv.SetOnFileDrop(nativeDropHandler(wv, b.holder, logger))
+	wv.SetOnFileDrop(nativeDropHandler(wv, b.reg, logger))
 	trayStart()
 	defer trayEnd()
 
@@ -179,18 +178,13 @@ func runGUI(logger zerolog.Logger, vault string) {
 	wv.Destroy()
 }
 
-// runServe starts the backend headless (no window) and blocks until the process
+// runServe starts the daemon headless (no window) and blocks until the process
 // is signalled (Ctrl-C / SIGTERM), the server exits, or — when idle is positive —
-// the backend has gone idle that long. This is how the CLI runs a vault on
-// demand: an agent gets a warm index and the full JSON API with no GUI, and the
-// backend self-retires once unused. An empty vault starts in the empty state,
-// ready to be bound over the JSON API.
-func runServe(logger zerolog.Logger, vaultFlag string, idle time.Duration) {
-	vault, err := resolveVault(vaultFlag)
-	if err != nil {
-		logger.Fatal().Err(err).Msg("resolving vault")
-	}
-	b, err := startBackend(logger, vault, idle)
+// it has gone idle that long. This is how the CLI runs Grimoire on demand: an
+// agent gets warm indexes and the full JSON API with no GUI, over every vault the
+// user has, and the daemon self-retires once unused.
+func runServe(logger zerolog.Logger, idle time.Duration) {
+	b, err := startBackend(logger, idle)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("starting backend")
 	}

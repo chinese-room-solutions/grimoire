@@ -155,9 +155,11 @@ with the verbs. Needs no vault, so it works on a fresh install.`},
 Capture the app window to a PNG. Needs a running GUI window — it fails under a
 headless backend.`},
 
-	{"serve", "serve [--vault PATH] [--idle-timeout D]", "run a vault backend headless", `
-Run a vault backend headless, without the GUI. The CLI starts one on demand, so
-this is for running it yourself (a container, a remote box).`},
+	{"serve", "serve [--idle-timeout D]", "run the backend headless", `
+Run the Grimoire backend headless, without the GUI. One daemon serves every
+vault — each command names the vault it acts on — so there is nothing to bind:
+--vault is accepted and ignored. The CLI starts a daemon on demand, so this is
+for running one yourself (a container, a remote box).`},
 }
 
 // helpRequested reports whether a command's own arguments ask for help: a bare

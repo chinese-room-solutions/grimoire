@@ -389,7 +389,7 @@ func TestErrorDecoding(t *testing.T) {
 // surfaces as a plain transport error, not an *APIError — the signal the CLI's
 // stale-port retry keys on.
 func TestTransportErrorIsNotAPIError(t *testing.T) {
-	c := New(1) // nothing listens on port 1.
+	c := New(1, "/vaults/A") // nothing listens on port 1.
 	_, err := c.GetNote(context.Background(), "x.md")
 	require.Error(t, err)
 	var apiErr *APIError
@@ -398,6 +398,30 @@ func TestTransportErrorIsNotAPIError(t *testing.T) {
 
 // TestNewBaseURL confirms New wires the loopback base URL from the port.
 func TestNewBaseURL(t *testing.T) {
-	c := New(45123)
+	c := New(45123, "")
 	require.Equal(t, "http://127.0.0.1:"+strconv.Itoa(45123)+"/api/v1", c.baseURL)
+}
+
+// TestRequestURLCarriesTheVault confirms every request names the vault it acts
+// on, so one daemon can serve several vaults at once.
+func TestRequestURLCarriesTheVault(t *testing.T) {
+	tests := []struct {
+		name, vault, path, want string
+	}{
+		{"no vault leaves the path alone", "", "/search?q=x", "http://127.0.0.1:1/api/v1/search?q=x"},
+		{"a bare path gets a query", "/vaults/A", "/note", "http://127.0.0.1:1/api/v1/note?vault=%2Fvaults%2FA"},
+		{
+			"an existing query is extended", "/vaults/A", "/search?q=x",
+			"http://127.0.0.1:1/api/v1/search?q=x&vault=%2Fvaults%2FA",
+		},
+		{
+			"a vault with spaces is escaped", "/my vaults/A", "/note",
+			"http://127.0.0.1:1/api/v1/note?vault=%2Fmy+vaults%2FA",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, New(1, tc.vault).requestURL(tc.path))
+		})
+	}
 }

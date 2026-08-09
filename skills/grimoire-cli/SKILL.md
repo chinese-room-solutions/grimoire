@@ -6,9 +6,10 @@ description: Read, search, and edit Grimoire/Obsidian vaults via the grimoire CL
 # grimoire CLI
 
 A knowledge base over a folder of Markdown notes (a fresh vault or an existing
-Obsidian one). Every command goes through the vault's backend, which owns
-path-safety, atomic writes, and indexing. **Never touch vault files directly** —
-a filesystem write skips all three.
+Obsidian one). Every command goes through the Grimoire backend — one daemon
+serving every vault, started on demand — which owns path-safety, atomic writes,
+and indexing. **Never touch vault files directly** — a filesystem write skips all
+three.
 
 ```sh
 grimoire [--vault PATH] [--json] <command> [args]
@@ -43,7 +44,9 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
   with or without `.md`) to a real path. Use it before assuming a path; exit 3
   if nothing matches.
 - `vault tree` — the folder/note tree. `vault list` / `vault current` — which
-  vaults exist and which one you're acting on.
+  vaults exist and which one a command without `--vault` acts on. `--vault`
+  targets another vault for that one command and leaves that default alone, so
+  reading around other vaults never moves what the app reopens.
 
 ## Editing
 

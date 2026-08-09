@@ -16,16 +16,16 @@ import (
 func TestCreateNote(t *testing.T) {
 	api := newAPI(t, t.TempDir())
 
-	note, err := api.CreateNote(context.Background(), "Folder/New.md", "# Hello\n\nbody\n", false)
+	note, err := api.CreateNote(context.Background(), "", "Folder/New.md", "# Hello\n\nbody\n", false)
 	require.NoError(t, err)
 	require.Equal(t, "Folder/New.md", note.Path)
 	require.Equal(t, "# Hello\n\nbody\n", note.Content)
 
 	// A second create without overwrite fails; with overwrite it replaces the body.
-	_, err = api.CreateNote(context.Background(), "Folder/New.md", "# Other", false)
+	_, err = api.CreateNote(context.Background(), "", "Folder/New.md", "# Other", false)
 	require.ErrorIs(t, err, app.ErrNoteExists)
 
-	note, err = api.CreateNote(context.Background(), "Folder/New.md", "# Replaced\n", true)
+	note, err = api.CreateNote(context.Background(), "", "Folder/New.md", "# Replaced\n", true)
 	require.NoError(t, err)
 	require.Contains(t, note.Content, "# Replaced")
 }
@@ -49,7 +49,7 @@ func TestImportNote(t *testing.T) {
 	api := newAPI(t, vault)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ref, err := api.ImportNote(context.Background(), tt.file, []byte(tt.content))
+			ref, err := api.ImportNote(context.Background(), "", tt.file, []byte(tt.content))
 			require.NoError(t, err)
 			require.Equal(t, tt.wantPath, ref.Path)
 			require.Equal(t, tt.wantName, ref.Name)
@@ -61,7 +61,7 @@ func TestImportNote(t *testing.T) {
 
 	// An unsupported extension surfaces the service sentinel for the transport
 	// layer to render per-file.
-	_, err := api.ImportNote(context.Background(), "archive.zip", []byte("x"))
+	_, err := api.ImportNote(context.Background(), "", "archive.zip", []byte("x"))
 	require.ErrorIs(t, err, app.ErrUnsupportedImport)
 }
 
@@ -111,7 +111,7 @@ func TestToReindexResult(t *testing.T) {
 // configuration gap as a total failure for the transport's error mapping.
 func TestReindexNoModel(t *testing.T) {
 	api := newAPI(t, t.TempDir())
-	_, err := api.Reindex(context.Background(), nil, false)
+	_, err := api.Reindex(context.Background(), "", nil, false)
 	require.ErrorIs(t, err, app.ErrNoModel)
 }
 
@@ -122,7 +122,7 @@ func TestCreateNoteWithFrontmatter(t *testing.T) {
 	api := newAPI(t, vault)
 	content := "---\ntitle: Mine\ntags:\n    - a\n---\n# Body\n"
 
-	note, err := api.CreateNote(context.Background(), "n.md", content, false)
+	note, err := api.CreateNote(context.Background(), "", "n.md", content, false)
 	require.NoError(t, err)
 	require.Equal(t, content, note.Content)
 	require.Equal(t, 2, strings.Count(note.Content, "---"), "exactly one frontmatter block")
@@ -138,7 +138,7 @@ func TestCreateNoteOverwriteWithFrontmatter(t *testing.T) {
 	api := newAPI(t, vault)
 	content := "---\ntitle: new\n---\n# new body\n"
 
-	note, err := api.CreateNote(context.Background(), "n.md", content, true)
+	note, err := api.CreateNote(context.Background(), "", "n.md", content, true)
 	require.NoError(t, err)
 	require.Equal(t, content, note.Content)
 	require.NotContains(t, note.Content, "title: old", "the old frontmatter is replaced")
@@ -153,7 +153,7 @@ func TestUpdateNoteWithFrontmatter(t *testing.T) {
 	api := newAPI(t, vault)
 	content := "---\ntitle: new\n---\n# new body\n"
 
-	note, err := api.UpdateNote(context.Background(), "n.md", content)
+	note, err := api.UpdateNote(context.Background(), "", "n.md", content)
 	require.NoError(t, err)
 	require.Equal(t, content, note.Content)
 	require.Equal(t, 2, strings.Count(note.Content, "---"), "no double frontmatter")
@@ -161,7 +161,7 @@ func TestUpdateNoteWithFrontmatter(t *testing.T) {
 
 func TestCreateNoteRejectsEscape(t *testing.T) {
 	api := newAPI(t, t.TempDir())
-	_, err := api.CreateNote(context.Background(), "../evil.md", "x", false)
+	_, err := api.CreateNote(context.Background(), "", "../evil.md", "x", false)
 	require.ErrorIs(t, err, app.ErrOutsideVault)
 }
 
@@ -171,7 +171,7 @@ func TestUpdateNote(t *testing.T) {
 		[]byte("---\ntitle: keep\n---\n# old\n"), 0o644))
 	api := newAPI(t, vault)
 
-	note, err := api.UpdateNote(context.Background(), "n.md", "# new body\n")
+	note, err := api.UpdateNote(context.Background(), "", "n.md", "# new body\n")
 	require.NoError(t, err)
 	require.Contains(t, note.Content, "# new body")
 	require.Contains(t, note.Content, "title: keep", "frontmatter is preserved on a body update")
@@ -183,7 +183,7 @@ func TestEditNote(t *testing.T) {
 		[]byte("---\ntitle: keep\n---\n# Heading\n\nalpha bravo charlie\n"), 0o644))
 	api := newAPI(t, vault)
 
-	note, err := api.EditNote(context.Background(), "n.md", "bravo", "DELTA")
+	note, err := api.EditNote(context.Background(), "", "n.md", "bravo", "DELTA")
 	require.NoError(t, err)
 	require.Contains(t, note.Content, "alpha DELTA charlie", "the unique anchor was replaced")
 	require.Contains(t, note.Content, "title: keep", "frontmatter is preserved on an edit")
@@ -195,7 +195,7 @@ func TestEditNoteNotFound(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "n.md"), []byte("# body\n"), 0o644))
 	api := newAPI(t, vault)
 
-	_, err := api.EditNote(context.Background(), "n.md", "missing", "x")
+	_, err := api.EditNote(context.Background(), "", "n.md", "missing", "x")
 	require.ErrorIs(t, err, ErrEditNotFound)
 }
 
@@ -204,7 +204,7 @@ func TestEditNoteAmbiguous(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "n.md"), []byte("dup and dup\n"), 0o644))
 	api := newAPI(t, vault)
 
-	_, err := api.EditNote(context.Background(), "n.md", "dup", "x")
+	_, err := api.EditNote(context.Background(), "", "n.md", "dup", "x")
 	require.ErrorIs(t, err, ErrEditAmbiguous)
 	// The note is untouched after a rejected edit.
 	got, err := os.ReadFile(filepath.Join(vault, "n.md"))
@@ -217,7 +217,7 @@ func TestSetNoteProperties(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "n.md"), []byte("# body only\n"), 0o644))
 	api := newAPI(t, vault)
 
-	note, err := api.SetNoteProperties(context.Background(), "n.md", map[string][]string{
+	note, err := api.SetNoteProperties(context.Background(), "", "n.md", map[string][]string{
 		"title": {"My Note"},
 		"tags":  {"a", "b"},
 	})
@@ -232,17 +232,17 @@ func TestRenameNote(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "old.md"), []byte("# x"), 0o644))
 	api := newAPI(t, vault)
 
-	note, err := api.RenameNote(context.Background(), "old.md", "new.md", false)
+	note, err := api.RenameNote(context.Background(), "", "old.md", "new.md", false)
 	require.NoError(t, err)
 	require.Equal(t, "new.md", note.Path)
 	require.NoFileExists(t, filepath.Join(vault, "old.md"))
 
 	// Renaming onto an existing note needs overwrite.
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "old.md"), []byte("# y"), 0o644))
-	_, err = api.RenameNote(context.Background(), "old.md", "new.md", false)
+	_, err = api.RenameNote(context.Background(), "", "old.md", "new.md", false)
 	require.ErrorIs(t, err, app.ErrNoteExists)
 
-	res, err := api.RenameNote(context.Background(), "old.md", "new.md", true)
+	res, err := api.RenameNote(context.Background(), "", "old.md", "new.md", true)
 	require.NoError(t, err)
 	require.Equal(t, "new.md", res.Path)
 	require.Contains(t, res.Content, "# y", "overwrite replaced the target")
@@ -251,7 +251,7 @@ func TestRenameNote(t *testing.T) {
 	// it's recoverable, and the result carries its trash id.
 	require.True(t, res.ReplacedTrashed, "the overwritten note went to the trash")
 	require.NotEmpty(t, res.ReplacedTrashID)
-	items, err := api.ListTrash(context.Background())
+	items, err := api.ListTrash(context.Background(), "")
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	require.Equal(t, res.ReplacedTrashID, items[0].TrashID)
@@ -263,19 +263,19 @@ func TestDeleteNoteTrashedThenRestore(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "n.md"), []byte("# keep me"), 0o644))
 	api := newAPI(t, vault) // trash defaults to enabled.
 
-	res, err := api.DeleteNote(context.Background(), "n.md")
+	res, err := api.DeleteNote(context.Background(), "", "n.md")
 	require.NoError(t, err)
 	require.True(t, res.Trashed)
 	require.NotEmpty(t, res.TrashID)
 	require.NoFileExists(t, filepath.Join(vault, "n.md"))
 
-	items, err := api.ListTrash(context.Background())
+	items, err := api.ListTrash(context.Background(), "")
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	require.Equal(t, res.TrashID, items[0].TrashID)
 	require.Equal(t, "n.md", items[0].OriginalPath)
 
-	note, err := api.RestoreTrash(context.Background(), res.TrashID)
+	note, err := api.RestoreTrash(context.Background(), "", res.TrashID)
 	require.NoError(t, err)
 	require.Equal(t, "n.md", note.Path)
 	require.Contains(t, note.Content, "# keep me")
@@ -285,11 +285,11 @@ func TestEmptyTrash(t *testing.T) {
 	vault := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "a.md"), []byte("a"), 0o644))
 	api := newAPI(t, vault)
-	_, err := api.DeleteNote(context.Background(), "a.md")
+	_, err := api.DeleteNote(context.Background(), "", "a.md")
 	require.NoError(t, err)
 
-	require.NoError(t, api.EmptyTrash(context.Background()))
-	items, err := api.ListTrash(context.Background())
+	require.NoError(t, api.EmptyTrash(context.Background(), ""))
+	items, err := api.ListTrash(context.Background(), "")
 	require.NoError(t, err)
 	require.Empty(t, items)
 }
@@ -297,18 +297,18 @@ func TestEmptyTrash(t *testing.T) {
 func TestFolderCreateRenameDelete(t *testing.T) {
 	api := newAPI(t, t.TempDir())
 
-	folder, err := api.CreateFolder(context.Background(), "Projects")
+	folder, err := api.CreateFolder(context.Background(), "", "Projects")
 	require.NoError(t, err)
 	require.Equal(t, "Projects", folder.Path)
 
-	_, err = api.CreateFolder(context.Background(), "Projects")
+	_, err = api.CreateFolder(context.Background(), "", "Projects")
 	require.ErrorIs(t, err, app.ErrNoteExists, "creating an existing folder fails")
 
-	folder, err = api.RenameFolder(context.Background(), "Projects", "Work")
+	folder, err = api.RenameFolder(context.Background(), "", "Projects", "Work")
 	require.NoError(t, err)
 	require.Equal(t, "Work", folder.Path)
 
-	res, err := api.DeleteFolder(context.Background(), "Work")
+	res, err := api.DeleteFolder(context.Background(), "", "Work")
 	require.NoError(t, err)
 	require.True(t, res.Trashed, "the folder went to the trash")
 }
@@ -316,24 +316,24 @@ func TestFolderCreateRenameDelete(t *testing.T) {
 func TestDeleteFolderTrashedThenRestore(t *testing.T) {
 	vault := t.TempDir()
 	api := newAPI(t, vault) // trash defaults to enabled.
-	_, err := api.CreateNote(context.Background(), "Projects/A.md", "# A", false)
+	_, err := api.CreateNote(context.Background(), "", "Projects/A.md", "# A", false)
 	require.NoError(t, err)
-	_, err = api.CreateNote(context.Background(), "Projects/Sub/B.md", "# B", false)
+	_, err = api.CreateNote(context.Background(), "", "Projects/Sub/B.md", "# B", false)
 	require.NoError(t, err)
 
-	res, err := api.DeleteFolder(context.Background(), "Projects")
+	res, err := api.DeleteFolder(context.Background(), "", "Projects")
 	require.NoError(t, err)
 	require.True(t, res.Trashed, "a folder delete honours the trash setting")
 	require.NotEmpty(t, res.TrashID)
 	require.NoDirExists(t, filepath.Join(vault, "Projects"))
 
-	items, err := api.ListTrash(context.Background())
+	items, err := api.ListTrash(context.Background(), "")
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	require.Equal(t, "Projects", items[0].OriginalPath)
 	require.True(t, items[0].IsDir)
 
-	note, err := api.RestoreTrash(context.Background(), res.TrashID)
+	note, err := api.RestoreTrash(context.Background(), "", res.TrashID)
 	require.NoError(t, err)
 	require.Equal(t, "Projects", note.Path, "a folder restore reports its path")
 	require.FileExists(t, filepath.Join(vault, "Projects", "A.md"), "the whole tree is back")

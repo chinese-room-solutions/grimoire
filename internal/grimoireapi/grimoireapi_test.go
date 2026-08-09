@@ -38,7 +38,7 @@ func TestGetNote(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "note.md"), []byte("# Title\n\nbody"), 0o644))
 	api := newAPI(t, vault)
 
-	note, err := api.GetNote(context.Background(), "note.md")
+	note, err := api.GetNote(context.Background(), "", "note.md")
 	require.NoError(t, err)
 	require.Equal(t, "note.md", note.Path)
 	require.Equal(t, "# Title\n\nbody", note.Content)
@@ -79,13 +79,13 @@ func TestListVaults(t *testing.T) {
 
 func TestGetNoteRejectsEscape(t *testing.T) {
 	api := newAPI(t, t.TempDir())
-	_, err := api.GetNote(context.Background(), "../escape.md")
+	_, err := api.GetNote(context.Background(), "", "../escape.md")
 	require.ErrorIs(t, err, app.ErrOutsideVault)
 }
 
 func TestGetNoteMissing(t *testing.T) {
 	api := newAPI(t, t.TempDir())
-	_, err := api.GetNote(context.Background(), "nope.md")
+	_, err := api.GetNote(context.Background(), "", "nope.md")
 	require.Error(t, err)
 }
 
@@ -98,7 +98,7 @@ func TestListVaultOnlyNotes(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "data.bin"), []byte("x"), 0o644))
 	api := newAPI(t, vault)
 
-	tree, err := api.ListVault(context.Background())
+	tree, err := api.ListVault(context.Background(), "")
 	require.NoError(t, err)
 
 	// Folders sort before files: [sub/, a.md].
@@ -121,20 +121,20 @@ func TestResolveLink(t *testing.T) {
 	api := newAPI(t, vault)
 
 	t.Run("by bare name", func(t *testing.T) {
-		res := api.ResolveLink(context.Background(), "My Note")
+		res := api.ResolveLink(context.Background(), "", "My Note")
 		require.True(t, res.Found)
 		require.Equal(t, "folder/My Note.md", res.Path)
 		require.Equal(t, "My Note", res.Target)
 	})
 
 	t.Run("with alias stripped", func(t *testing.T) {
-		res := api.ResolveLink(context.Background(), "My Note|shown")
+		res := api.ResolveLink(context.Background(), "", "My Note|shown")
 		require.True(t, res.Found)
 		require.Equal(t, "folder/My Note.md", res.Path)
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		res := api.ResolveLink(context.Background(), "Nonexistent")
+		res := api.ResolveLink(context.Background(), "", "Nonexistent")
 		require.False(t, res.Found)
 		require.Empty(t, res.Path)
 	})

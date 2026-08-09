@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/chinese-room-solutions/grimoire/internal/app"
+	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
 	openai "github.com/chinese-room-solutions/llama-cpp-openai-client-go"
 	"github.com/chinese-room-solutions/mass-sdk/connstore"
 	"github.com/rs/zerolog"
@@ -63,16 +65,89 @@ func TestPageHandlerSeedsConnection(t *testing.T) {
 	require.NoError(t, store.SetConn(endpoint, connstore.Conn{Token: "secret", CACert: "/etc/ca.pem"}))
 
 	client := app.NewGatewayClient(openai.New(openai.Options{BaseURL: endpoint}))
-	h := &serviceHolder{logger: zerolog.Nop()} // no vault bound → empty state.
+	reg := newTestRegistry(t) // no vault known → empty state.
 
 	rec := httptest.NewRecorder()
-	pageHandler(h, t.TempDir(), store, client, zerolog.Nop())(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	pageHandler(reg, t.TempDir(), store, client, zerolog.Nop())(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 
 	body := rec.Body.String()
 	require.Contains(t, body, "https://gw.example.com")
 	require.Contains(t, body, "/etc/ca.pem")
 	require.Contains(t, body, "api/connection")
 	require.NotContains(t, body, "secret", "the token value is never rendered into the page")
+}
+
+// TestPageHandlerResolvesTheVault covers the daemon's page routing: an explicit
+// ?vault= renders that vault's workspace and becomes the last-used vault, so a
+// later bare load lands on it again — and a page for a vault whose folder is gone
+// falls back to the picker rather than failing.
+func TestPageHandlerResolvesTheVault(t *testing.T) {
+	reg := newTestRegistry(t)
+	store, err := connstore.LoadFrom(filepath.Join(t.TempDir(), "auth.json"))
+	require.NoError(t, err)
+	client := app.NewGatewayClient(openai.New(openai.Options{BaseURL: "http://127.0.0.1:9"}))
+	page := pageHandler(reg, t.TempDir(), store, client, zerolog.Nop())
+
+	render := func(target string) string {
+		rec := httptest.NewRecorder()
+		page(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+		return rec.Body.String()
+	}
+
+	vault := tempVault(t)
+	body := render("/?vault=" + url.QueryEscape(vault))
+	require.Contains(t, body, vault, "the workspace is rendered for the named vault")
+	require.Contains(t, body, "gVault", "the page seeds gVault so every action carries the vault")
+
+	last, err := vaultdir.LastVault()
+	require.NoError(t, err)
+	require.Equal(t, vault, last, "an explicit ?vault= becomes the last-used vault")
+	require.Contains(t, render("/"), vault, "a bare load reopens the last-used vault")
+
+	gone := filepath.Join(t.TempDir(), "gone")
+	require.NotContains(t, render("/?vault="+url.QueryEscape(gone)), gone,
+		"a vault that isn't there falls back to the picker")
+}
+
+// TestOpenVaultHandler covers the Vault menu's "Switch vault…" and the
+// empty-state recent rows: the vault is opened in the daemon and becomes the
+// default, and the page is told to reload only when it isn't already showing it.
+func TestOpenVaultHandler(t *testing.T) {
+	reg := newTestRegistry(t)
+	open := openVaultHandler(reg, zerolog.Nop())
+
+	post := func(path, pageVault string) *httptest.ResponseRecorder {
+		target := "/api/open-vault"
+		if pageVault != "" {
+			target += "?vault=" + url.QueryEscape(pageVault)
+		}
+		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader("path="+url.QueryEscape(path)))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		open(rec, req)
+		return rec
+	}
+
+	vault := tempVault(t)
+	rec := post(vault, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{"ok":true,"reload":true}`, rec.Body.String())
+	last, err := vaultdir.LastVault()
+	require.NoError(t, err)
+	require.Equal(t, vault, last, "opening a vault makes it the default")
+
+	// Re-opening the vault the page already shows changes nothing, so no reload.
+	rec = post(vault, vault)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{"ok":true}`, rec.Body.String())
+
+	// A folder that isn't there is 503, and must not move the default.
+	rec = post(filepath.Join(t.TempDir(), "gone"), vault)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	last, err = vaultdir.LastVault()
+	require.NoError(t, err)
+	require.Equal(t, vault, last)
 }
 
 // TestTrashRestoreHandlerReadsQueryID guards the fix for the first-click restore

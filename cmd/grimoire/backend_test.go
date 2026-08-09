@@ -11,34 +11,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestStartBackendBindsBeforeServing guards the ordering that a restored note tab
-// depends on: when a vault is requested, startBackend must bind it before the HTTP
-// server starts serving, so the first page load can't race the bind and observe an
-// empty state (which made a restored tab fail to read its note). By the time
-// startBackend returns, the vault is bound and its notes are readable.
-func TestStartBackendBindsBeforeServing(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("LocalAppData", cache)
-	t.Setenv("XDG_CACHE_HOME", cache)
-	t.Setenv("HOME", cache)
-	t.Setenv("AppData", cache)
-	t.Setenv("XDG_CONFIG_HOME", cache)
+// TestStartBackendServesAnyVault covers the daemon contract: one process, one
+// port advertisement, and a vault resolved per request rather than bound at
+// startup. A page load naming a vault gets that vault's workspace with its notes
+// readable straight away, and stopping the daemon drops the advertisement.
+func TestStartBackendServesAnyVault(t *testing.T) {
+	isolateVaultDirs(t)
+	t.Setenv("GRIMOIRE_GATEWAY_URL", "http://127.0.0.1:9") // nothing listens: no gateway calls succeed.
 
 	vault := filepath.Join(t.TempDir(), "vault")
 	require.NoError(t, os.MkdirAll(vault, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "note.md"), []byte("# hi\n\nbody"), 0o644))
 
-	b, err := startBackend(zerolog.Nop(), vault, 0)
+	b, err := startBackend(zerolog.Nop(), 0)
 	require.NoError(t, err)
 	t.Cleanup(b.stop)
 
-	svc := b.holder.current()
-	require.NotNil(t, svc, "the vault is bound before startBackend returns")
+	portFile, err := daemonPortFile()
+	require.NoError(t, err)
+	require.NotZero(t, readPort(portFile), "the daemon advertises its port app-wide")
+
+	// A request naming the vault opens it on demand.
+	svc, err := b.reg.runtime(t.Context(), vault)
+	require.NoError(t, err)
 	require.Equal(t, vault, svc.Vault())
-	// The note a restored tab would request is readable immediately — no race.
 	content, err := svc.ReadNote("note.md")
 	require.NoError(t, err)
 	require.Equal(t, "# hi\n\nbody", content)
+
+	b.stop()
+	require.Zero(t, readPort(portFile), "shutdown drops the advertisement")
 }
 
 // TestLoopbackGuard covers the DNS-rebinding and cross-site defenses on the

@@ -3,6 +3,21 @@
 
   var getEl = function (id) { return document.getElementById(id); };
 
+  // One daemon serves every vault, so every request has to say which one it is
+  // for. Datastar actions carry the gVault signal automatically; a plain fetch()
+  // doesn't, so it goes through apiURL, which appends the page's vault (read from
+  // the gVault signal input the page seeds).
+  function pageVault() {
+    var el = document.querySelector('[data-bind="gVault"]');
+    return el ? el.value || "" : "";
+  }
+
+  function apiURL(path) {
+    var vault = pageVault();
+    if (!vault) return path;
+    return path + (path.indexOf("?") === -1 ? "?" : "&") + "vault=" + encodeURIComponent(vault);
+  }
+
   // matchesFilter reports whether haystack contains every whitespace-separated
   // word of query, in any order and case-insensitively — so "devops kernel"
   // matches "DevOps QA - Kernel". An empty query matches everything. Shared by the
@@ -41,16 +56,15 @@
     });
   }
 
-  // Vault open/switch/close happen in-process: the backend binds the chosen vault
-  // to this running instance and reports {reload:true} on a real change, so we
-  // reload the page into the new (or empty) state. The dialog's "Switch vault…"
-  // and the empty-state "Open a vault folder…" both open the native folder picker
-  // (path omitted); the empty-state recent rows post their own path. "Close vault"
-  // returns to the empty state. The model selects, concurrency, and Reindex are
-  // wired in the templ.
+  // Vault open/switch happens in-process: the daemon opens the chosen vault (it
+  // keeps every vault it serves resident) and reports {reload:true} when it isn't
+  // the one this page is showing, so we reload onto it. The dialog's "Switch
+  // vault…" and the empty-state "Open a vault folder…" both open the native folder
+  // picker (path omitted); the empty-state recent rows post their own path. The
+  // model selects, concurrency, and Reindex are wired in the templ.
   function openVault(body, btn) {
     if (btn) btn.loading = true;
-    fetch("api/open-vault", { method: "POST", body: body })
+    fetch(apiURL("api/open-vault"), { method: "POST", body: body })
       .then(function (r) { return r.json(); })
       .then(function (res) {
         if (res && res.reload) { location.reload(); return; }
@@ -67,17 +81,6 @@
     // Pick a folder (no path) → bind it to this instance.
     var switchBtn = getEl("g-vault-switch");
     if (switchBtn) switchBtn.addEventListener("click", function () { openVault(null, switchBtn); });
-
-    // Close the current vault → return to the empty state.
-    var closeBtn = getEl("g-vault-close");
-    if (closeBtn) closeBtn.addEventListener("click", function () {
-      closeBtn.loading = true;
-      fetch("api/close-vault", { method: "POST" })
-        .then(function (r) { return r.json(); })
-        .then(function (res) { if (res && res.reload) location.reload(); })
-        .catch(function () {})
-        .finally(function () { closeBtn.loading = false; });
-    });
 
     // Empty state: pick a new folder, or open a known vault by its path.
     var emptyOpen = getEl("g-vault-empty-open");
@@ -317,7 +320,7 @@
     // failure — a failure always toasts, so the button never dead-ends silently
     // (an unpublished registry artifact, say, 503s here).
     function call(kind, action, body) {
-      return fetch("api/v1/" + kind + "/" + action, {
+      return fetch(apiURL("api/v1/" + kind + "/" + action), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -368,7 +371,7 @@
 
     function kernelOffers() {
       if (offers) return offers;
-      offers = fetch("api/v1/kernel/list")
+      offers = fetch(apiURL("api/v1/kernel/list"))
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (res) {
           var byFamily = {};
@@ -505,7 +508,7 @@
     var sw = getEl("g-trash-switch");
     if (!sw) return;
     sw.addEventListener("sl-change", function () {
-      fetch("api/trash-enabled", {
+      fetch(apiURL("api/trash-enabled"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ gTrashEnabled: sw.checked }),
@@ -1355,7 +1358,7 @@
         if (next >= total || ctrl.signal.aborted) return;
         var file = files[next++];
         file.arrayBuffer().then(function (buf) {
-          return fetch("api/note/import", {
+          return fetch(apiURL("api/note/import"), {
             method: "POST",
             headers: { "X-Filename": encodeURIComponent(file.name), "X-Parent": "" },
             body: buf,
@@ -1497,7 +1500,7 @@
     if (statusClose) statusClose.addEventListener("click", function () {
       if (importAbort) {
         importAbort.abort();
-        fetch("api/note/import/cancel", { method: "POST" }).catch(function () {});
+        fetch(apiURL("api/note/import/cancel"), { method: "POST" }).catch(function () {});
       } else {
         clearStatus();
       }
@@ -2271,10 +2274,10 @@
       // Prefer sendBeacon on unload (fetch may be cancelled as the page tears
       // down); fall back to a keepalive fetch otherwise.
       if (navigator.sendBeacon) {
-        navigator.sendBeacon(TABS_URL, new Blob([body], { type: "application/json" }));
+        navigator.sendBeacon(apiURL(TABS_URL), new Blob([body], { type: "application/json" }));
         return;
       }
-      fetch(TABS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: body, keepalive: true })
+      fetch(apiURL(TABS_URL), { method: "POST", headers: { "Content-Type": "application/json" }, body: body, keepalive: true })
         .catch(function () { /* best-effort. */ });
     }
 
@@ -2282,7 +2285,7 @@
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(function () {
         saveTimer = null;
-        fetch(TABS_URL, {
+        fetch(apiURL(TABS_URL), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(buildTabsPayload()),
@@ -2293,7 +2296,7 @@
     window.addEventListener("beforeunload", flushTabs);
 
     function restoreTabs() {
-      return fetch(TABS_URL).then(function (r) { return r.json(); }).then(function (s) {
+      return fetch(apiURL(TABS_URL)).then(function (r) { return r.json(); }).then(function (s) {
         if (s && Array.isArray(s.tabs) && s.tabs.length) {
           tabs = s.tabs;
           tabSeq = typeof s.seq === "number" ? s.seq : tabs.reduce(function (m, t) { return Math.max(m, t.id); }, 0);
@@ -2529,7 +2532,7 @@
     function openVaultLink(href) {
       var path = href.split(/[?#]/)[0]; // drop any fragment/query.
       if (isNoteHref(path)) { nav.openNote(path, ""); return; }
-      fetch("api/open-file", {
+      fetch(apiURL("api/open-file"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: path }),
@@ -3255,7 +3258,7 @@
     // always map to the same key.
     function graphURL() {
       var p = params();
-      return "api/graph?k=" + encodeURIComponent(p.k) + "&minSim=" + encodeURIComponent(p.minSim);
+      return apiURL("api/graph?k=" + encodeURIComponent(p.k) + "&minSim=" + encodeURIComponent(p.minSim));
     }
 
     // Built layouts are cached by URL so returning to the graph is instant — the

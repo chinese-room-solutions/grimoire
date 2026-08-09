@@ -49,8 +49,8 @@ func TestSnippet(t *testing.T) {
 	}
 }
 
-func TestRenderMarkdown(t *testing.T) {
-	stubKernelResolver(t) // make go/bash blocks runnable so run buttons render.
+func TestRenderNoteBody(t *testing.T) {
+	nr := kernelStub() // make go/bash blocks runnable so run buttons render.
 	tests := []struct {
 		name, in string
 		contains []string
@@ -106,7 +106,7 @@ func TestRenderMarkdown(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			out := RenderMarkdown(tc.in)
+			out := RenderNoteBody(nr, tc.in, "")
 			for _, want := range tc.contains {
 				require.Contains(t, out, want)
 			}
@@ -118,6 +118,7 @@ func TestRenderMarkdown(t *testing.T) {
 }
 
 func TestRenderCalloutsNestedQuotes(t *testing.T) {
+	nr := kernelStub()
 	tests := []struct {
 		name, in string
 		contains []string
@@ -149,7 +150,7 @@ func TestRenderCalloutsNestedQuotes(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			out := RenderMarkdown(tc.in)
+			out := RenderNoteBody(nr, tc.in, "")
 			for _, want := range tc.contains {
 				require.Contains(t, out, want)
 			}
@@ -168,6 +169,7 @@ func TestWikilinksSkipCode(t *testing.T) {
 	// shows — and runs, and hashes — text the author never wrote.
 	// Prose links either side of a fenced block whose code looks like a wikilink.
 	const mixed = "see [[A]]\n\n```bash\n[[ -f x ]]\n```\n\nand [[B]]\n"
+	nr := kernelStub()
 	tests := []struct {
 		name, in string
 		contains []string
@@ -208,7 +210,7 @@ func TestWikilinksSkipCode(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			out := RenderMarkdown(tc.in)
+			out := RenderNoteBody(nr, tc.in, "")
 			for _, want := range tc.contains {
 				require.Contains(t, out, want)
 			}
@@ -217,7 +219,7 @@ func TestWikilinksSkipCode(t *testing.T) {
 			}
 		})
 	}
-	require.Equal(t, 2, strings.Count(RenderMarkdown(mixed), NoteLinkScheme),
+	require.Equal(t, 2, strings.Count(RenderNoteBody(nr, mixed, ""), NoteLinkScheme),
 		"only the two prose wikilinks become links")
 }
 
@@ -225,16 +227,14 @@ func TestBlockSourcesKeepRawCode(t *testing.T) {
 	// The re-hydration key is the block's raw source: the loader must be asked for
 	// the code as written, not a wikilink-rewritten copy of it, or the key never
 	// matches what the app stored.
-	stubKernelResolver(t)
+	nr := kernelStub()
 	var asked []string
-	prev := RunResultLoader
-	t.Cleanup(func() { RunResultLoader = prev })
-	RunResultLoader = func(_, code string) (RunResult, bool) {
+	nr.RunResult = func(_, code string) (RunResult, bool) {
 		asked = append(asked, code)
 		return RunResult{}, false
 	}
 
-	RenderNoteBody("```bash\nif [[ -f x ]]; then echo hi; fi\n```\n", "n.md")
+	RenderNoteBody(nr, "```bash\nif [[ -f x ]]; then echo hi; fi\n```\n", "n.md")
 	require.Equal(t, []string{"if [[ -f x ]]; then echo hi; fi\n"}, asked)
 }
 
@@ -302,10 +302,10 @@ func TestWrapCodeBlocks(t *testing.T) {
 	}
 	// A block is only runnable when a kernel claims its language, which the
 	// resolver reports. Treat the languages used above as runnable.
-	stubKernelResolver(t)
+	nr := kernelStub()
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			out := wrapCodeBlocks(tc.in, nil)
+			out := wrapCodeBlocks(nr, tc.in, nil)
 			for _, want := range tc.contains {
 				require.Contains(t, out, want)
 			}
@@ -317,11 +317,11 @@ func TestWrapCodeBlocks(t *testing.T) {
 }
 
 func TestIndentedBlockDoesNotShiftFencedIndexes(t *testing.T) {
-	stubKernelResolver(t)
+	nr := kernelStub()
 	// The app indexes fenced blocks only (extractCodeBlocks), so an indented block
 	// before a fence must not consume an id — otherwise a run targets the wrong
 	// panel and the stored result never re-attaches.
-	out := RenderMarkdown("    indented\n\n```bash\necho hi\n```\n")
+	out := RenderNoteBody(nr, "    indented\n\n```bash\necho hi\n```\n", "")
 
 	require.Contains(t, out, `<div class="g-code-block"><pre><code>indented`, "the indented block is wrapped without a block id")
 	require.Contains(t, out, `data-g-block="0"`, "the fenced block is block 0")
@@ -330,15 +330,11 @@ func TestIndentedBlockDoesNotShiftFencedIndexes(t *testing.T) {
 	require.Equal(t, 1, strings.Count(out, "g-code-run\""), "only the fenced block is runnable")
 }
 
-// stubKernelResolver installs a resolver that treats common code languages as
-// runnable (returning a label/version) and everything else as not, restoring the
-// previous value when the test ends.
-func stubKernelResolver(t *testing.T) {
-	t.Helper()
-	prev := KernelResolver
-	t.Cleanup(func() { KernelResolver = prev })
+// kernelStub is a renderer whose kernel lookup treats common code languages as
+// runnable (returning a label/version) and everything else as not.
+func kernelStub() NoteRenderer {
 	runnable := map[string]bool{"go": true, "golang": true, "bash": true, "sh": true, "shell": true}
-	KernelResolver = func(lang, family, version string) (string, string, bool) {
+	return NoteRenderer{Kernel: func(lang, family, version string) (string, string, bool) {
 		if !runnable[lang] {
 			return "", "", false
 		}
@@ -346,14 +342,14 @@ func stubKernelResolver(t *testing.T) {
 			return family, version, true
 		}
 		return lang, version, true
-	}
+	}}
 }
 
 func TestWrapCodeBlocksKernelOverride(t *testing.T) {
-	stubKernelResolver(t)
+	nr := kernelStub()
 	in := `<pre class="chroma" data-lang="go">a</pre><pre class="chroma" data-lang="go">b</pre>`
 	// Only the first block has an override; the second must not get the attributes.
-	out := wrapCodeBlocks(in, []blockFence{{Family: "go", Version: "1.21"}, {}})
+	out := wrapCodeBlocks(nr, in, []blockFence{{Family: "go", Version: "1.21"}, {}})
 	require.Contains(t, out, `data-g-block="0" data-g-kernel="go" data-g-version="1.21"`)
 	require.Contains(t, out, `data-g-block="1">`)
 	require.NotContains(t, out, `data-g-block="1" data-g-kernel`)
@@ -373,22 +369,20 @@ func TestBlockSources(t *testing.T) {
 	require.Equal(t, []string{"fmt.Println(1)\n", "echo hi\n"}, blockSources(src))
 }
 
-// stubRunResultLoader installs a loader returning res for blocks whose source is
-// in want, and a miss otherwise; restores the previous loader when the test ends.
-func stubRunResultLoader(t *testing.T, want map[string]RunResult) {
-	t.Helper()
-	prev := RunResultLoader
-	t.Cleanup(func() { RunResultLoader = prev })
-	RunResultLoader = func(_, code string) (RunResult, bool) {
+// withRunResults returns nr with a run-result lookup that hits for blocks whose
+// source is in want and misses otherwise.
+func withRunResults(nr NoteRenderer, want map[string]RunResult) NoteRenderer {
+	nr.RunResult = func(_, code string) (RunResult, bool) {
 		r, ok := want[code]
 		return r, ok
 	}
+	return nr
 }
 
 func TestRenderNoteBodyRehydratesStoredOutput(t *testing.T) {
-	stubKernelResolver(t)
+	nr := kernelStub()
 	// Block one has a stored result; block two doesn't.
-	stubRunResultLoader(t, map[string]RunResult{
+	nr = withRunResults(nr, map[string]RunResult{
 		"fmt.Println(1)\n": {
 			Items:    []RunItem{{MIME: MIMEText, Data: "1\n"}},
 			ExitCode: 0,
@@ -399,7 +393,7 @@ func TestRenderNoteBodyRehydratesStoredOutput(t *testing.T) {
 	})
 
 	src := "```go\nfmt.Println(1)\n```\n\n```go\nfmt.Println(2)\n```\n"
-	out := RenderNoteBody(src, "n.md")
+	out := RenderNoteBody(nr, src, "n.md")
 
 	// Block 0 re-hydrates: a visible panel carrying the saved output, exit status,
 	// duration, and kernel — not the empty hidden placeholder.
@@ -415,13 +409,13 @@ func TestRenderNoteBodyRehydratesStoredOutput(t *testing.T) {
 }
 
 func TestRenderNoteBodyWithoutPathDoesNotRehydrate(t *testing.T) {
-	stubKernelResolver(t)
+	nr := kernelStub()
 	// Even with a loader installed, an empty note path means no re-hydration (the
 	// caller didn't know which note it was), so every panel is the empty placeholder.
-	stubRunResultLoader(t, map[string]RunResult{
+	nr = withRunResults(nr, map[string]RunResult{
 		"fmt.Println(1)\n": {Items: []RunItem{{MIME: MIMEText, Data: "1\n"}}},
 	})
-	out := RenderNoteBody("```go\nfmt.Println(1)\n```\n", "")
+	out := RenderNoteBody(nr, "```go\nfmt.Println(1)\n```\n", "")
 	require.Contains(t, out, `id="g-code-output-0" hidden`)
 	require.NotContains(t, out, ">1\n<")
 }
@@ -469,7 +463,7 @@ func TestTrashBrowserRendersNoteRows(t *testing.T) {
 func TestWrapCodeBlocksKernelBadge(t *testing.T) {
 	// The resolver receives (lang, family, version) and returns the label + version
 	// shown on the block. ok=false omits the badge (an unrunnable language).
-	KernelResolver = func(lang, family, version string) (string, string, bool) {
+	nr := NoteRenderer{Kernel: func(lang, family, version string) (string, string, bool) {
 		if lang != "go" {
 			return "", "", false
 		}
@@ -477,13 +471,12 @@ func TestWrapCodeBlocksKernelBadge(t *testing.T) {
 			return "Go (yaegi) 0.16.1", "0.16.1", true
 		}
 		return "Go 1.26.3", "1.26.3", true
-	}
-	t.Cleanup(func() { KernelResolver = nil })
+	}}
 
 	in := `<pre class="chroma" data-lang="go">a</pre>` +
 		`<pre class="chroma" data-lang="go">b</pre>` +
 		`<pre class="chroma" data-lang="text">c</pre>`
-	out := wrapCodeBlocks(in, []blockFence{{}, {Family: "yaegi"}, {}})
+	out := wrapCodeBlocks(nr, in, []blockFence{{}, {Family: "yaegi"}, {}})
 
 	// The badge text is the label (which already carries the version); no tooltip.
 	require.Contains(t, out, `<span class="g-code-kernel">Go 1.26.3</span>`)
@@ -493,8 +486,7 @@ func TestWrapCodeBlocksKernelBadge(t *testing.T) {
 }
 
 func TestWrapCodeBlocksNoBadgeWithoutResolver(t *testing.T) {
-	KernelResolver = nil
-	out := wrapCodeBlocks(`<pre class="chroma" data-lang="go">a</pre>`, nil)
+	out := wrapCodeBlocks(NoteRenderer{}, `<pre class="chroma" data-lang="go">a</pre>`, nil)
 	require.NotContains(t, out, "g-code-kernel")
 }
 
@@ -543,7 +535,7 @@ func TestResolveImageSrcs(t *testing.T) {
 
 func TestRenderNote(t *testing.T) {
 	t.Run("splits frontmatter from body", func(t *testing.T) {
-		props, raw, html := RenderNote("---\ntitle: Hello\ntags: [a, b]\n---\n# Body\n", "")
+		props, raw, html := RenderNote(NoteRenderer{}, "---\ntitle: Hello\ntags: [a, b]\n---\n# Body\n", "")
 		require.NotEmpty(t, props)
 		var keys []string
 		for _, p := range props {
@@ -557,7 +549,7 @@ func TestRenderNote(t *testing.T) {
 	})
 
 	t.Run("no frontmatter yields no props and the full body", func(t *testing.T) {
-		props, raw, html := RenderNote("# Just a body\n", "")
+		props, raw, html := RenderNote(NoteRenderer{}, "# Just a body\n", "")
 		require.Empty(t, props)
 		require.Contains(t, raw, "# Just a body")
 		require.Contains(t, html, "Just a body</h1>")

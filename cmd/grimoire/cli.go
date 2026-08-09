@@ -14,9 +14,9 @@ import (
 )
 
 // The CLI is a scripting front door over the same loopback /api/v1 surface the
-// GUI uses. Each verb resolves the target vault, connects to its backend
-// (launching a headless one on demand), and runs one request. Output is
-// human-readable by default; --json emits the raw API shape for piping.
+// GUI uses. Each verb resolves the target vault, connects to the daemon
+// (launching a headless one on demand), and runs one request against that vault.
+// Output is human-readable by default; --json emits the raw API shape for piping.
 
 // Exit codes the CLI returns, so scripts can branch on the outcome kind rather
 // than parsing messages.
@@ -29,16 +29,16 @@ const (
 )
 
 // cliEnv carries a CLI invocation's resolved context: the output/error writers,
-// the JSON-mode flag, and how to reach the vault's backend. connect and respawn
-// are fields so tests can supply a stub client without spawning a real backend;
-// runCLI wires them to the real launch machinery.
+// the JSON-mode flag, and how to reach the daemon. connect and respawn are fields
+// so tests can supply a stub client without spawning a real daemon; runCLI wires
+// them to the real launch machinery.
 type cliEnv struct {
 	out     io.Writer
 	err     io.Writer
 	json    bool
 	vault   string
-	connect func(context.Context) (*apiclient.Client, error) // reuse a running backend, launch on demand.
-	respawn func(context.Context) (*apiclient.Client, error) // force a fresh backend (stale-port retry).
+	connect func(context.Context) (*apiclient.Client, error) // reuse a running daemon, launch on demand.
+	respawn func(context.Context) (*apiclient.Client, error) // force a fresh daemon (stale-port retry).
 }
 
 // runCLI is the entry point for the CLI subcommands, dispatched from main on the
@@ -83,9 +83,12 @@ func runCLIWith(args []string, out, errW io.Writer) int {
 		return exitUsage
 	}
 
+	// The vault rides on each request rather than binding the daemon to it: a CLI
+	// verb never moves the last-vault pointer, so an agent probing another vault
+	// can't change which vault the user's GUI reopens.
 	env.vault = vault
-	env.connect = func(ctx context.Context) (*apiclient.Client, error) { return connectVault(ctx, vault) }
-	env.respawn = func(ctx context.Context) (*apiclient.Client, error) { return respawnVault(ctx, vault) }
+	env.connect = func(ctx context.Context) (*apiclient.Client, error) { return connectDaemon(ctx, vault) }
+	env.respawn = func(ctx context.Context) (*apiclient.Client, error) { return respawnDaemon(ctx, vault) }
 	return env.dispatch(rest)
 }
 
@@ -180,7 +183,7 @@ func verbChain(args []string) []string {
 // A fresh backend was spawned so the next invocation works, but the command was
 // deliberately not re-sent.
 var errBackendRestarted = errors.New(
-	"the vault's backend stopped responding and has been restarted, but this command was NOT re-run " +
+	"the grimoire daemon stopped responding and has been restarted, but this command was NOT re-run " +
 		"(it may already have been applied) — check the vault and run it again if needed")
 
 // doRead runs one read-only request against the vault's backend, with a single

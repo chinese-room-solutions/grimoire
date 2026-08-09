@@ -23,51 +23,52 @@ import (
 // one, matching the GUI's search default so the API and the UI agree.
 const defaultSearchK = 10
 
-// API is the read surface over the service. It holds no state of its own; it
-// adapts service results into stable DTOs.
+// API is the operation surface over the vault services. It holds no state of its
+// own; it adapts service results into stable DTOs.
 //
-// The service is resolved per call through svcFn rather than captured, so the
-// backend can swap which vault is bound (or none) under a stable API: every
-// operation sees the live service, and svcFn returns app.ErrNoVault when no vault
-// is open. open/switch/close drive that swap through the bind/unbind hooks; both
-// are nil in a single-vault backend, where the vault is fixed and these are
-// unsupported.
+// Every operation names the vault it acts on and resolves it per call through
+// resolve, so one API serves however many vaults the daemon has open. resolve
+// reports app.ErrNoVault when the caller named none and there is no fallback, and
+// its own error when the named vault can't be served.
 type API struct {
-	svcFn  func() (*app.Service, error)
-	bind   func(ctx context.Context, vault string) error
-	unbind func() error
+	resolve func(ctx context.Context, vault string) (*app.Service, error)
+	// open makes a vault the one a bare invocation acts on (the last-used vault),
+	// warming its runtime; nil where opening isn't supported (a fixed-vault API).
+	open func(ctx context.Context, vault string) error
 }
 
-// New returns an API that resolves its service through svcFn. bind/unbind are the
-// open/close hooks for runtime vault switching; pass nil for a backend whose vault
-// is fixed for its lifetime.
-func New(svcFn func() (*app.Service, error), bind func(context.Context, string) error, unbind func() error) *API {
-	return &API{svcFn: svcFn, bind: bind, unbind: unbind}
+// New returns an API that resolves each call's vault through resolve. open is the
+// hook OpenVault drives; pass nil for a context where the vault is fixed.
+func New(
+	resolve func(ctx context.Context, vault string) (*app.Service, error),
+	open func(ctx context.Context, vault string) error,
+) *API {
+	return &API{resolve: resolve, open: open}
 }
 
-// NewStatic returns an API bound to a single fixed service, with no runtime vault
-// switching (OpenVault/CloseVault report ErrSwitchUnsupported). It's the simple
-// construction for a one-vault context.
+// NewStatic returns an API over a single fixed service, ignoring the vault every
+// operation names (OpenVault reports ErrSwitchUnsupported). It's the simple
+// construction for a one-vault context, such as a test.
 func NewStatic(svc *app.Service) *API {
-	return New(func() (*app.Service, error) { return svc, nil }, nil, nil)
+	return New(func(context.Context, string) (*app.Service, error) { return svc, nil }, nil)
 }
 
-// service resolves the currently bound service, or app.ErrNoVault when none is
-// open. Every operation calls it first, so a no-vault backend reports the same
-// error the GUI and transport layers already handle.
-func (a *API) service() (*app.Service, error) {
-	return a.svcFn()
+// service resolves the service for the vault an operation names. Every operation
+// calls it first, so an unknown or unavailable vault reports the same error the
+// GUI and transport layers already handle.
+func (a *API) service(ctx context.Context, vault string) (*app.Service, error) {
+	return a.resolve(ctx, vault)
 }
 
-// currentVault is the path of the bound vault, or "" when none is open. Unlike
-// service it never errors — it's for operations (vault listing, current-vault
-// reporting) that are meaningful in the empty state.
+// currentVault is the vault a caller that names none acts on: the last-used one,
+// or "" on a first run. Unlike service it never errors — it's for the operations
+// (vault listing, current-vault reporting) that are meaningful with nothing open.
 func (a *API) currentVault() string {
-	svc, err := a.service()
+	current, err := vaultdir.LastVault()
 	if err != nil {
 		return ""
 	}
-	return svc.Vault()
+	return current
 }
 
 // Hit is one search result: the source note, the heading breadcrumb, the
@@ -91,11 +92,11 @@ type SearchResult struct {
 // Search runs a hybrid (vector + keyword) search over the vault and returns
 // the relevant chunks, already filtered to those about the query. k ≤ 0 uses
 // the default.
-func (a *API) Search(ctx context.Context, query string, k int) (SearchResult, error) {
+func (a *API) Search(ctx context.Context, vault, query string, k int) (SearchResult, error) {
 	if k <= 0 {
 		k = defaultSearchK
 	}
-	svc, err := a.service()
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -129,8 +130,8 @@ type Note struct {
 
 // GetNote returns a note's raw Markdown by vault-relative path. The path is
 // resolved against the vault and rejected if it escapes it.
-func (a *API) GetNote(ctx context.Context, path string) (Note, error) {
-	svc, err := a.service()
+func (a *API) GetNote(ctx context.Context, vault, path string) (Note, error) {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return Note{}, err
 	}
@@ -153,8 +154,8 @@ type TreeNode struct {
 // ListVault returns the vault's folders and notes as a tree. Unlike the GUI's
 // file browser it omits non-note files (an agent can't read them through the
 // API), and it drops the per-note tags/aliases the browser uses for filtering.
-func (a *API) ListVault(ctx context.Context) ([]TreeNode, error) {
-	svc, err := a.service()
+func (a *API) ListVault(ctx context.Context, vault string) ([]TreeNode, error) {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return nil, err
 	}
@@ -201,8 +202,8 @@ type Resolution struct {
 // ResolveLink maps a wikilink target or bare note name to a vault-relative note
 // path, matching Obsidian's resolution (path or basename, case-insensitive,
 // optional .md, "|alias" stripped). Found is false when nothing matches.
-func (a *API) ResolveLink(ctx context.Context, target string) Resolution {
-	svc, err := a.service()
+func (a *API) ResolveLink(ctx context.Context, vault, target string) Resolution {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return Resolution{Target: target, Found: false}
 	}
@@ -213,8 +214,8 @@ func (a *API) ResolveLink(ctx context.Context, target string) Resolution {
 // Screenshot captures the app window's rendered UI and returns it as PNG bytes,
 // so an external agent can see what the user sees. It returns app.ErrNoScreenshot
 // when no capture backend is available (headless, or the browser fallback).
-func (a *API) Screenshot(ctx context.Context) ([]byte, error) {
-	svc, err := a.service()
+func (a *API) Screenshot(ctx context.Context, vault string) ([]byte, error) {
+	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return nil, err
 	}
@@ -231,11 +232,10 @@ type Vault struct {
 }
 
 // ListVaults returns the vaults Grimoire knows about (every one it has opened
-// whose folder still exists), flagging the one this instance currently has open
-// (none, when no vault is bound). An agent uses this to discover which vaults
-// exist, then opens one with OpenVault (or targets it through the bridge's vault
-// argument). It works with no vault bound, so it's the entry point from an empty
-// backend.
+// whose folder still exists), flagging the one a caller that names no vault acts
+// on. An agent uses this to discover which vaults exist, then names one on each
+// call (or makes it the default with OpenVault). It works before any vault has
+// been opened, so it's the entry point from a fresh install.
 func (a *API) ListVaults(ctx context.Context) ([]Vault, error) {
 	paths, err := vaultdir.KnownVaults()
 	if err != nil {

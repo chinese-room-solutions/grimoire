@@ -25,6 +25,10 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 		     their own signals via data-on:sl-change in the templ; the signals JS still
 		     drives directly (query, paths, session edits, concurrency-for-importLimit)
 		     remain hidden data-bind inputs below. -->
+		<!-- The vault this page is for. Datastar sends it with every action, so the
+		     daemon knows which of the vaults it serves the request is about; the JS
+		     reads it here to stamp its own fetch() URLs (apiURL). -->
+		<input type="hidden" data-bind="gVault" value={ st.Vault }/>
 		<input type="hidden" data-bind="gQuery" value=""/>
 		<input type="hidden" data-bind="gSeq" value="0"/>
 		<input type="hidden" data-bind="gPreviewPath" value=""/>
@@ -633,8 +637,8 @@ templ previewLink(path, heading, label string) {
 // panel (like Obsidian's Properties — no edit mode, changes auto-save), then the
 // Markdown body as HTML. Always renders, even with no properties, so a note
 // without frontmatter can still have some added.
-templ Preview(source, notePath string) {
-	{{ props, rawBody, bodyHTML := RenderNote(source, notePath) }}
+templ Preview(nr NoteRenderer, source, notePath string) {
+	{{ props, rawBody, bodyHTML := RenderNote(nr, source, notePath) }}
 	<div id="g-props" class="g-props">
 		<div class="g-props-list">
 			for _, p := range props {
@@ -973,12 +977,10 @@ templ vaultMenu(st State) {
 		<div class="g-menu-panel">
 			<div>
 				<span class="g-label">Vault</span>
-				<!-- The bound vault is swapped in-process: switching picks a folder and
-				     binds it to this running instance (the page reloads into it); closing
-				     returns to the empty state. -->
+				<!-- The page's vault. Switching picks a folder, opens it in the daemon
+				     (which keeps every vault it serves resident) and reloads onto it. -->
 				<div id="g-vault-current" class="g-vault-current">{ st.Vault }</div>
 				<sl-button id="g-vault-switch" size="small" variant="default" style="width:100%;margin-top:0.35rem">Switch vault…</sl-button>
-				<sl-button id="g-vault-close" size="small" variant="default" style="width:100%;margin-top:0.35rem">Close vault</sl-button>
 			</div>
 			<!-- Each model select loads its option list on init (so the saved value's
 			     label shows) and on open; sl-change writes the signal and posts. No

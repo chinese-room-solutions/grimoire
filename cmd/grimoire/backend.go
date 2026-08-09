@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/KernelPryanic/golog"
@@ -24,31 +24,28 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// backend is a running Grimoire server: the local HTTP server exposing the UI and
-// the agent-facing JSON /api surface, plus the holder that owns which vault (if
-// any) is currently bound. It is independent of any window — runGUI attaches a
-// webview to it, runServe runs it headless. The server itself is vault-independent;
-// the holder swaps the per-vault service underneath it. Build one with
-// startBackend; release it with stop.
+// backend is the running Grimoire daemon: one local HTTP server exposing the UI
+// and the agent-facing JSON /api surface, over a registry of resident vault
+// runtimes. It is independent of any window — runGUI attaches a webview to it,
+// runServe runs it headless. The routes are vault-independent; each request names
+// the vault it acts on. Build one with startBackend; release it with stop.
 type backend struct {
 	logger   zerolog.Logger
 	cfg      masgui.AppConfig // app-level config (theme for the native window).
 	settings *masgui.Settings // app-level settings (theme + log level), shared across vaults.
-	holder   *serviceHolder
+	reg      *vaultRegistry
 	server   *http.Server
 	done     <-chan struct{} // closed when the HTTP server stops (any cause).
 	url      string
 	stop     func() // tears down everything startBackend set up; idempotent.
 }
 
-// startBackend builds the server and starts serving on a loopback port. App-level
+// startBackend builds the daemon and starts serving on a loopback port. App-level
 // state (the gateway client, log file, shared theme/log-level config, the HTTP
-// listener) is set up once here; per-vault state (the indexed service, its watcher,
-// its advertised port) is owned by the holder and (re)created on each bind. When
-// vault is non-empty it is bound before returning; an empty vault (or one that
-// fails to open) lands in the empty state, where the UI offers a vault picker. It
-// does NOT open a window.
-func startBackend(logger zerolog.Logger, vault string, idleTimeout time.Duration) (*backend, error) {
+// listener, the daemon's port advertisement) is set up here; per-vault state is
+// owned by the registry, which opens a runtime on the first request for a vault
+// and warms the known ones in the background. It does NOT open a window.
+func startBackend(logger zerolog.Logger, idleTimeout time.Duration) (*backend, error) {
 	appDir, err := vaultdir.AppDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolving app data dir: %w", err)
@@ -124,14 +121,16 @@ func startBackend(logger zerolog.Logger, vault string, idleTimeout time.Duration
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 
-	holder := &serviceHolder{logger: logger, shared: shared, port: port}
+	reg := newVaultRegistry(shared, logger)
+	// A kernel install writes the shared kernels dir, which every vault resolves
+	// against — refresh the runtimes that didn't do the install.
+	shared.SetOnKernelsChanged(reg.reloadKernels)
 	settings := masgui.NewSettings(appDir, logger)
 
-	// The GUI routes depend on the bound vault, so they are rebuilt on every swap;
-	// a stable outer handler reads the current routes per request. The agent API is
-	// built once over the holder (it reports ErrNoVault when empty), so the JSON
-	// surface is steady across vault switches.
-	api := grimoireapi.New(holder.serviceOrErr, holder.bind, func() error { holder.unbind(); return nil })
+	// The agent API runs over the registry: each call names its vault (falling back
+	// to the last-used one), and opening a vault warms its runtime and makes it
+	// that fallback.
+	api := grimoireapi.New(reg.runtimeOrLast, reg.open)
 
 	// The connection settings (endpoint/token/CA) the gear menu's Connect button
 	// drives — global, present whether or not a vault is bound. The probe uses
@@ -145,16 +144,9 @@ func startBackend(logger zerolog.Logger, vault string, idleTimeout time.Duration
 		Logger: logger,
 	}
 
-	var routes atomic.Pointer[http.Handler]
-	holder.rebuild = func() {
-		h := grimoireRoutes(holder, api, appDir, settings, connCfg, store, client, logger)
-		routes.Store(&h)
-	}
-	holder.rebuild() // initial (empty-state) routes.
-
-	mux := buildMux(func(w http.ResponseWriter, r *http.Request) {
-		(*routes.Load()).ServeHTTP(w, r)
-	}, port)
+	// Routes are static: the daemon serves every vault, and each request names the
+	// one it acts on, so there is nothing to rebuild.
+	mux := buildMux(grimoireRoutes(reg, api, appDir, settings, connCfg, store, client, logger).ServeHTTP, port)
 
 	server := &http.Server{
 		Handler:           mux,
@@ -162,28 +154,19 @@ func startBackend(logger zerolog.Logger, vault string, idleTimeout time.Duration
 		IdleTimeout:       120 * time.Second,
 	}
 	// When an idle timeout is set (the CLI's on-demand `serve` path), shut the
-	// backend down after a quiet spell so a headless instance doesn't linger once
+	// daemon down after a quiet spell so an on-demand instance doesn't linger once
 	// the agent stops calling it. A request holds the countdown for as long as it
 	// runs (a reindex can outlive the window), and it restarts when the last
 	// in-flight request ends.
 	var idle *idleTracker
 	if idleTimeout > 0 {
-		idle = newIdleTracker(idleTimeout, func() {
+		idle = newIdleTracker(idleTimeout, reg.busyKernels, func() {
 			logger.Info().Dur("idle", idleTimeout).Msg("idle timeout reached; shutting down headless backend")
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			_ = server.Shutdown(shutdownCtx)
 		})
 		server.Handler = idle.wrap(mux)
-	}
-	// Bind the requested vault BEFORE serving, so the first page load never races
-	// the bind and observes an empty state (which would make a restored note tab
-	// fail to read its note). Binding is fast — app.New is synchronous and the slow
-	// index-open runs in the watcher goroutine — so this doesn't delay the window.
-	if vault != "" {
-		if err := holder.bind(context.Background(), vault); err != nil {
-			logger.Warn().Err(err).Str("vault", vault).Msg("opening vault; starting in the empty state")
-		}
 	}
 
 	done := make(chan struct{})
@@ -195,14 +178,29 @@ func startBackend(logger zerolog.Logger, vault string, idleTimeout time.Duration
 		close(done) // closed channel: every waiter (callers + stop) is released.
 	}()
 
+	// Advertise the port for the CLI. One daemon per user, so one file: any verb,
+	// for any vault, reaches this process.
+	portFile, err := daemonPortFile()
+	if err != nil {
+		logger.Warn().Err(err).Msg("resolving the daemon port file; the CLI will spawn its own backend")
+	} else if err := writePortFile(portFile, port); err != nil {
+		logger.Warn().Err(err).Msg("advertising the daemon port")
+	}
+
+	// Open the vaults the user already works in, so the first request finds a warm
+	// index instead of paying the cold open. Staggered, on its own goroutine — the
+	// listener is already up, and nothing here blocks the window.
+	warmCtx, stopWarm := context.WithCancel(context.Background())
+	go reg.warmup(warmCtx, warmupStagger)
+
 	url := fmt.Sprintf("http://127.0.0.1:%d/", port)
-	logger.Info().Str("url", url).Str("gateway", endpoint).Msg("started grimoire backend")
+	logger.Info().Str("url", url).Str("gateway", endpoint).Msg("started grimoire daemon")
 
 	b := &backend{
 		logger:   logger,
 		cfg:      cfg,
 		settings: settings,
-		holder:   holder,
+		reg:      reg,
 		server:   server,
 		done:     done,
 		url:      url,
@@ -213,11 +211,15 @@ func startBackend(logger zerolog.Logger, vault string, idleTimeout time.Duration
 			if idle != nil {
 				idle.stop()
 			}
+			stopWarm()
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			_ = server.Shutdown(shutdownCtx)
 			<-done // wait for Serve to return.
-			holder.close()
+			if portFile != "" {
+				removePortFile(portFile)
+			}
+			reg.closeAll()
 			if err := shared.Close(); err != nil {
 				logger.Warn().Err(err).Msg("closing shared state")
 			}
@@ -227,6 +229,16 @@ func startBackend(logger zerolog.Logger, vault string, idleTimeout time.Duration
 		})
 	}
 	return b, nil
+}
+
+// pageURL is the daemon's page for a vault: the window opens straight on it, so
+// a `--vault` launch lands there whatever the last-used vault was (and records it
+// as the new one). An empty vault leaves the page to resolve the last-used one.
+func (b *backend) pageURL(vault string) string {
+	if vault == "" {
+		return b.url
+	}
+	return b.url + "?vault=" + url.QueryEscape(vault)
 }
 
 // gatewayEndpoint resolves the MASS gateway URL: the app's own env var, then the

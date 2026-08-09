@@ -238,6 +238,23 @@ func (s *Service) kernelManager() *kernel.Manager {
 	return s.kernels
 }
 
+// ActiveKernelRuns reports how many code blocks this vault's kernels are
+// executing right now, so the daemon can tell a quiet backend from one that is
+// merely between HTTP requests.
+func (s *Service) ActiveKernelRuns() int {
+	m := s.kernelManager()
+	if m == nil {
+		return 0
+	}
+	return m.ActiveRuns()
+}
+
+// ReloadKernels rebuilds this vault's kernel registry from the shared and vault
+// kernels dirs. The daemon calls it on every resident runtime after an install
+// or remove made through another one, so a kernel installed from one vault
+// resolves in all of them.
+func (s *Service) ReloadKernels() { s.reloadKernels() }
+
 // reloadKernels rebuilds the kernel registry from both kernels dirs and swaps
 // it into the live manager, so an install or remove takes effect without a
 // backend restart — the invalidation counterpart of the resolve cache. Caller

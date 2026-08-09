@@ -49,7 +49,7 @@ func newImportStub(t *testing.T, respond []map[string]string) *importStub {
 
 func (s *importStub) env(t *testing.T, jsonOut bool) (*cliEnv, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
-	client := apiclient.NewForTest(s.srv.URL)
+	client := apiclient.NewForTest(s.srv.URL, "/test/vault")
 	var out, errBuf bytes.Buffer
 	return &cliEnv{
 		out:     &out,

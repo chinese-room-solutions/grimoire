@@ -59,7 +59,7 @@ func newCLIBackend(t *testing.T, routes map[string]http.HandlerFunc) *cliBackend
 // reconnects to the same server.
 func (b *cliBackend) env(t *testing.T, jsonOut bool) (*cliEnv, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
-	client := apiclient.NewForTest(b.srv.URL)
+	client := apiclient.NewForTest(b.srv.URL, "/test/vault")
 	var out, errBuf bytes.Buffer
 	e := &cliEnv{
 		out:     &out,
@@ -320,14 +320,14 @@ func TestCLINoteDeleteSendsQueryAndReportsTrash(t *testing.T) {
 		{
 			name:      "soft delete sends only path and reports the restore id",
 			args:      []string{"note", "delete", "a.md"},
-			wantQuery: "path=a.md",
+			wantQuery: "path=a.md&vault=%2Ftest%2Fvault",
 			trashed:   true,
 			wantOut:   "trashed a.md (restore id: t9)\n",
 		},
 		{
 			name:      "a delete with the trash off reports a plain removal",
 			args:      []string{"note", "delete", "a.md"},
-			wantQuery: "path=a.md",
+			wantQuery: "path=a.md&vault=%2Ftest%2Fvault",
 			trashed:   false,
 			wantOut:   "deleted a.md\n",
 		},
@@ -393,8 +393,8 @@ func TestCLIStalePortRetry(t *testing.T) {
 			stubJSON(t, w, map[string]string{"path": "a.md", "content": "recovered"})
 		},
 	})
-	dead := apiclient.NewForTest("http://127.0.0.1:1") // nothing listens.
-	live := apiclient.NewForTest(b.srv.URL)
+	dead := apiclient.NewForTest("http://127.0.0.1:1", "/test/vault") // nothing listens.
+	live := apiclient.NewForTest(b.srv.URL, "/test/vault")
 	var out bytes.Buffer
 	respawned := false
 	e := &cliEnv{
@@ -418,7 +418,7 @@ func TestCLIAPIErrorNoRetry(t *testing.T) {
 			stubErr(w, http.StatusNotFound, "note not found")
 		},
 	})
-	live := apiclient.NewForTest(b.srv.URL)
+	live := apiclient.NewForTest(b.srv.URL, "/test/vault")
 	respawned := false
 	e := &cliEnv{
 		out:     &bytes.Buffer{},
@@ -455,28 +455,26 @@ func TestFirstNonFlag(t *testing.T) {
 	}
 }
 
-// serve takes its flags on either side of the verb: its own after it, and the
-// global --vault (which the usage grammar puts before any command) ahead of it.
+// serve takes its flags on either side of the verb. --vault is accepted and
+// ignored — the daemon serves every vault — but must still parse, so scripts
+// written against the old one-backend-per-vault CLI keep running.
 func TestParseServeFlags(t *testing.T) {
 	tests := []struct {
-		name      string
-		args      []string
-		wantVault string
-		wantIdle  time.Duration
+		name     string
+		args     []string
+		wantIdle time.Duration
 	}{
-		{"bare serve", []string{"serve"}, "", 0},
-		{"own flags after the verb", []string{"serve", "--vault", "/v", "--idle-timeout", "2m"}, "/v", 2 * time.Minute},
-		{"global vault before the verb", []string{"--vault", "/v", "serve"}, "/v", 0},
-		{"json before the verb is ignored", []string{"--json", "--vault", "/v", "serve"}, "/v", 0},
-		{"flags on both sides", []string{"--vault", "/v", "serve", "--idle-timeout", "30s"}, "/v", 30 * time.Second},
+		{"bare serve", []string{"serve"}, 0},
+		{"own flags after the verb", []string{"serve", "--vault", "/v", "--idle-timeout", "2m"}, 2 * time.Minute},
+		{"global vault before the verb is ignored", []string{"--vault", "/v", "serve"}, 0},
+		{"json before the verb is ignored", []string{"--json", "--vault", "/v", "serve"}, 0},
+		{"flags on both sides", []string{"--vault", "/v", "serve", "--idle-timeout", "30s"}, 30 * time.Second},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			i := firstNonFlagIndex(tt.args)
 			require.Equal(t, "serve", tt.args[i])
-			vault, idle := parseServeFlags(tt.args, i)
-			require.Equal(t, tt.wantVault, vault)
-			require.Equal(t, tt.wantIdle, idle)
+			require.Equal(t, tt.wantIdle, parseServeFlags(tt.args, i))
 		})
 	}
 }
@@ -675,11 +673,11 @@ func TestCLIRespawnRetriesOnlyReadOnlyVerbs(t *testing.T) {
 				err:   &errBuf,
 				vault: "/test/vault",
 				connect: func(context.Context) (*apiclient.Client, error) {
-					return apiclient.NewForTest("http://127.0.0.1:1"), nil
+					return apiclient.NewForTest("http://127.0.0.1:1", "/test/vault"), nil
 				},
 				respawn: func(context.Context) (*apiclient.Client, error) {
 					respawned = true
-					return apiclient.NewForTest(srv.URL), nil
+					return apiclient.NewForTest(srv.URL, "/test/vault"), nil
 				},
 			}
 			code := e.dispatch(tc.args)

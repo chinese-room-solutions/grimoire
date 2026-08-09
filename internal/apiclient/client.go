@@ -3,11 +3,12 @@
 // one method per route, decoding into the shared grimoireapi DTOs so callers
 // (the CLI, tests, scripts) speak the same types the server does.
 //
-// The backend binds to loopback only and advertises its port in the vault's
-// singleton.port file; a caller resolves that port and constructs a Client with
-// New. Errors from the server (a JSON {"error":...} body with a non-2xx status)
-// surface as *APIError, carrying the HTTP status so callers can branch on
-// not-found vs. conflict without string-matching.
+// The daemon binds to loopback only and advertises its port in the app-level
+// daemon.port file; a caller resolves that port and constructs a Client with New.
+// One daemon serves every vault, so a Client carries the vault its requests act
+// on and sends it with each one. Errors from the server (a JSON {"error":...}
+// body with a non-2xx status) surface as *APIError, carrying the HTTP status so
+// callers can branch on not-found vs. conflict without string-matching.
 package apiclient
 
 import (
@@ -25,21 +26,25 @@ import (
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
 )
 
-// Client talks to one backend over its loopback /api/v1 surface. It is safe for
-// concurrent use (an *http.Client is), and holds no per-request state.
+// Client talks to one daemon over its loopback /api/v1 surface, for one vault.
+// It is safe for concurrent use (an *http.Client is), and holds no per-request
+// state.
 type Client struct {
 	baseURL string
+	vault   string // sent as ?vault= on every request; "" lets the daemon pick the last-used one.
 	http    *http.Client
 }
 
-// New returns a Client for the backend serving on the given loopback port. The
-// caller resolves the port from the vault's singleton.port file (see the CLI's
-// connectVault). No timeout is set on the shared http.Client: per-call deadlines
+// New returns a Client for the daemon serving on the given loopback port, acting
+// on vault (pass "" to let the daemon fall back to the last-used vault). The
+// caller resolves the port from the app-level daemon.port file (see the CLI's
+// connectDaemon). No timeout is set on the shared http.Client: per-call deadlines
 // ride on the context each method takes, since a cold search or reindex can be
 // slow while other calls should stay snappy.
-func New(port int) *Client {
+func New(port int, vault string) *Client {
 	return &Client{
 		baseURL: fmt.Sprintf("http://127.0.0.1:%d/api/v1", port),
+		vault:   vault,
 		http:    &http.Client{},
 	}
 }
@@ -48,8 +53,8 @@ func New(port int) *Client {
 // server's), for callers in other packages that exercise the CLI or client
 // against a stub backend. The base URL is used verbatim, so pass it including
 // the /api/v1 prefix's host — the client appends the route paths.
-func NewForTest(baseURL string) *Client {
-	return &Client{baseURL: strings.TrimRight(baseURL, "/") + "/api/v1", http: &http.Client{}}
+func NewForTest(baseURL, vault string) *Client {
+	return &Client{baseURL: strings.TrimRight(baseURL, "/") + "/api/v1", vault: vault, http: &http.Client{}}
 }
 
 // APIError is a non-2xx response from the backend, parsed from its JSON error
@@ -426,7 +431,7 @@ func jsonBodyHeader(body io.Reader) http.Header {
 // failures (a refused connection to a stale port) surface as the raw error, so a
 // caller can tell them apart from an *APIError and retry with a fresh backend.
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, header http.Header) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, c.requestURL(path), body)
 	if err != nil {
 		return nil, fmt.Errorf("building request: %w", err)
 	}
@@ -438,6 +443,21 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, he
 		return nil, fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	return resp, nil
+}
+
+// requestURL is the absolute URL for a route path, carrying the client's vault
+// so the daemon resolves which vault the request acts on. path may already have
+// a query (getJSON appends one).
+func (c *Client) requestURL(path string) string {
+	full := c.baseURL + path
+	if c.vault == "" {
+		return full
+	}
+	sep := "?"
+	if strings.Contains(full, "?") {
+		sep = "&"
+	}
+	return full + sep + "vault=" + url.QueryEscape(c.vault)
 }
 
 // errorFor returns an *APIError for a non-2xx response, parsing the "error"
