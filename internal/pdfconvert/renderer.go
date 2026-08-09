@@ -3,6 +3,7 @@ package pdfconvert
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -48,7 +49,9 @@ func NewRenderer() (*Renderer, error) {
 
 	instance, err := pool.GetInstance(30 * time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("getting PDFium instance: %w", err)
+		// The pool owns a live wazero runtime; without this the caller's retry
+		// strands one per attempt.
+		return nil, errors.Join(fmt.Errorf("getting PDFium instance: %w", err), pool.Close())
 	}
 
 	return &Renderer{pool: pool, instance: instance}, nil
