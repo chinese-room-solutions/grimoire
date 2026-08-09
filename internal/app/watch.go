@@ -69,8 +69,8 @@ func (s *Service) Watch(ctx context.Context) {
 			}
 			s.logger.Warn().Err(err).Msg("filesystem watcher")
 		case <-tick.C:
-			// Re-assert the watch in case the vault directory was (re)created
-			// after startup; a no-op once it's already watched.
+			// Re-assert the watch: a no-op while the vault root is watched, a
+			// retry once it isn't (it was deleted, or hasn't been created yet).
 			watched = s.rewatch(w, watched)
 			s.flushPending(ctx, pending)
 		}
@@ -125,12 +125,18 @@ func (s *Service) flushPending(ctx context.Context, pending map[string]time.Time
 
 // rewatch points the watcher at the current vault when it differs from prev,
 // removing the old tree's watches and adding the new one's (fsnotify isn't
-// recursive, so every directory is added). Returns the now-watched vault.
+// recursive, so every directory is added). It returns the vault it is actually
+// watching, or "" when the root couldn't be added — a vault that doesn't exist
+// (yet) walks without error, so "watched" has to mean the root is in the watch
+// list, not that the walk returned. Returning "" makes the next tick try again,
+// which is how a vault deleted and recreated after startup gets picked up.
 func (s *Service) rewatch(w *fsnotify.Watcher, prev string) string {
 	s.mu.Lock()
 	vault := s.cfg.Vault
 	s.mu.Unlock()
-	if vault == prev {
+	// prev alone isn't proof: a vault removed after startup leaves prev set while
+	// nothing is watched any more.
+	if vault == prev && (vault == "" || watching(w, vault)) {
 		return prev
 	}
 	// The watch target changed (first bind, or a future in-place vault switch):
@@ -153,7 +159,24 @@ func (s *Service) rewatch(w *fsnotify.Watcher, prev string) string {
 	}); err != nil {
 		s.logger.Warn().Err(err).Msg("adding vault to watcher")
 	}
+	if !watching(w, vault) {
+		return "" // the vault root isn't there (yet) — retry on the next tick.
+	}
 	return vault
+}
+
+// watching reports whether dir is currently in the watcher's list. A nil watcher
+// watches nothing.
+func watching(w *fsnotify.Watcher, dir string) bool {
+	if w == nil {
+		return false
+	}
+	for _, p := range w.WatchList() {
+		if p == dir {
+			return true
+		}
+	}
+	return false
 }
 
 // vaultRel maps an absolute path under the vault to its vault-relative slash key,
