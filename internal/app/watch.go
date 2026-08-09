@@ -93,7 +93,10 @@ type watchPending struct {
 func (s *Service) onWatchEvent(w *fsnotify.Watcher, e fsnotify.Event, pending *watchPending) {
 	if e.Op&(fsnotify.Create) != 0 {
 		if fi, err := os.Stat(e.Name); err == nil && fi.IsDir() && !hidden(e.Name) {
-			_ = w.Add(e.Name)
+			if err := w.Add(e.Name); err != nil {
+				s.logger.Warn().Err(err).Str("folder", e.Name).
+					Msg("watching a new folder; notes added under it won't auto-index")
+			}
 		}
 	}
 	if s.dirEvent(w, e) {
@@ -197,7 +200,11 @@ func (s *Service) rewatch(w *fsnotify.Watcher, prev string) string {
 	// whatever walk the resolver cached belongs to the old target.
 	s.invalidateResolveCache()
 	for _, p := range w.WatchList() {
-		_ = w.Remove(p)
+		// A watch the kernel already dropped (its directory is gone) fails here;
+		// that is the expected case when the vault disappeared, hence debug.
+		if err := w.Remove(p); err != nil {
+			s.logger.Debug().Err(err).Str("folder", p).Msg("dropping a watch")
+		}
 	}
 	if vault == "" {
 		return ""
