@@ -32,7 +32,7 @@ func TestUISmoke(t *testing.T) {
 
 	// boot starts a server over a fresh vault and opens a browser session on it.
 	// appCfg, when given, seeds the app-level config (e.g. stub registry URLs).
-	boot := func(t *testing.T, notes map[string]string, appCfg ...map[string]string) (*server, *driver) {
+	boot := func(t *testing.T, notes map[string]string, appCfg ...map[string]string) (*daemon, *driver) {
 		t.Helper()
 		srv := startServer(t, notes, appCfg...)
 		d, err := newSession(cdURL, chrome, filepath.Join(t.TempDir(), "chrome-profile"))
@@ -362,17 +362,16 @@ func TestUISmoke(t *testing.T) {
 		// than fit one page, so only a page renders and a Show More row offers
 		// the rest. Clicking it widens that section's window; a fresh filter
 		// rewinds it.
-		const available = "#g-ext-themes .g-ext-section:nth-of-type(2)"
-		waitAvailableRows(t, d, available, 5)
-		waitVisible(t, d, available+" .g-ext-more sl-button")
-		clickReady(t, d, available+" .g-ext-more sl-button")
-		waitAvailableRows(t, d, available, 1+e2eThemePad)
-		waitNotVisible(t, d, available+" .g-ext-more")
+		waitAvailableRows(t, d, 5)
+		waitVisible(t, d, availableSection+" .g-ext-more sl-button")
+		clickReady(t, d, availableSection+" .g-ext-more sl-button")
+		waitAvailableRows(t, d, 1+e2eThemePad)
+		waitNotVisible(t, d, availableSection+" .g-ext-more")
 
 		setExtensionFilter(t, d, "pad")
-		waitAvailableRows(t, d, available, 5)
+		waitAvailableRows(t, d, 5)
 		setExtensionFilter(t, d, "")
-		waitAvailableRows(t, d, available, 5)
+		waitAvailableRows(t, d, 5)
 
 		// Install the registry's theme: the .css lands in the shared themes dir
 		// and it joins the palette dropdown — but it is NOT activated; the user
@@ -655,13 +654,17 @@ i.dispatchEvent(new CustomEvent('sl-input', { bubbles: true }));`, q)
 	})
 }
 
-// waitAvailableRows polls until a section shows exactly want rows — what the
-// dialog's per-section window renders, filter and paging combined.
-func waitAvailableRows(t *testing.T, d *driver, section string, want int) {
+// availableSection is the Extensions dialog's Available section — the windowed
+// one, whose paging and filtering the theme flow exercises.
+const availableSection = "#g-ext-themes .g-ext-section:nth-of-type(2)"
+
+// waitAvailableRows polls until that section shows exactly want rows — what its
+// window renders, filter and paging combined.
+func waitAvailableRows(t *testing.T, d *driver, want int) {
 	t.Helper()
-	poll(t, fmt.Sprintf("%s to show %d rows", section, want), func() (bool, string) {
+	poll(t, fmt.Sprintf("the Available section to show %d rows", want), func() (bool, string) {
 		out, err := d.exec(
-			"return document.querySelectorAll(arguments[0] + ' .g-ext-row:not([hidden])').length;", section)
+			"return document.querySelectorAll(arguments[0] + ' .g-ext-row:not([hidden])').length;", availableSection)
 		if err != nil {
 			return false, err.Error()
 		}
