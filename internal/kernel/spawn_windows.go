@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,18 +47,25 @@ func ensureToolchain(cmd *exec.Cmd, exe string) {
 // neither can run a Windows-path script, so a kernel started on them dies
 // immediately. We skip those and, if PATH yields nothing usable, probe the
 // standard Git for Windows locations (Git Bash isn't always on a GUI app's PATH).
+// When only a stub is on PATH and no Git Bash exists, it fails with that as the
+// reason rather than returning the stub.
 func lookExe(name string) (string, error) {
-	if p, err := exec.LookPath(name); err == nil && !isUnusableShell(p) {
+	p, lookErr := exec.LookPath(name)
+	stub := lookErr == nil && isUnusableShell(p)
+	if lookErr == nil && !stub {
 		return p, nil
 	}
 	if isBash(name) {
-		if p, ok := findGitBash(); ok {
-			return p, nil
+		if git, ok := findGitBash(); ok {
+			return git, nil
 		}
 	}
-	// Fall back to the raw lookup so the caller's ErrKernelUnavailable carries a
-	// real reason even when only an unusable stub exists.
-	return exec.LookPath(name)
+	if stub {
+		// Spawning on the stub dies cryptically, so report why nothing usable exists
+		// instead of handing it back.
+		return "", fmt.Errorf("only the WSL/Store bash stub was found (%s); install Git for Windows", p)
+	}
+	return "", lookErr
 }
 
 // isBash reports whether the configured executable is bash (with or without the

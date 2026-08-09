@@ -109,7 +109,7 @@ func (m *Manifest) spawnCommand() (exe string, args []string, err error) {
 	}
 	exe, err = lookExe(c.Exe)
 	if err != nil {
-		return "", nil, fmt.Errorf("%w: %s", ErrKernelUnavailable, c.Exe)
+		return "", nil, fmt.Errorf("%w: %s: %w", ErrKernelUnavailable, c.Exe, err)
 	}
 	runner := filepath.Join(m.dir, m.Runner)
 	args = make([]string, len(c.Args))
