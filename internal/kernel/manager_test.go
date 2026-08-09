@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"context"
 	"io"
 	"strings"
 	"sync"
@@ -64,6 +65,30 @@ func TestManagerDropAndCloseNoteCloseOnce(t *testing.T) {
 
 	require.Equal(t, int32(1), in.closes.Load(), "the session was torn down once")
 	require.NotContains(t, m.sessions, key)
+}
+
+// TestManagerRunEvictsSessionOnProtocolError covers the non-ErrKernelDied
+// failure: a malformed event ends the session's reader for good, so the Manager
+// must forget the session instead of handing the dead one to the next run.
+func TestManagerRunEvictsSessionOnProtocolError(t *testing.T) {
+	man := &Manifest{
+		Family: "bash", Version: "5", Match: []string{"bash"},
+		Command: map[string]command{"default": {Exe: "grimoire-no-such-kernel-exe"}},
+	}
+	m := NewManager(regOf(man), zerolog.Nop())
+	key := sessionKey("a.md", man.Name())
+	sess, _ := sessionFromScript("not json\n")
+	m.sessions[key] = sess
+
+	err := m.Run(context.Background(), "a.md", "bash", "", "", "echo hi", func(Event) {})
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrKernelDied, "a protocol violation is not a kernel death")
+	require.NotContains(t, m.sessions, key, "the unusable session was evicted")
+
+	// The next run spawns rather than reusing the dead session — here the spawn
+	// fails, which is the proof it was attempted at all.
+	err = m.Run(context.Background(), "a.md", "bash", "", "", "echo hi", func(Event) {})
+	require.ErrorIs(t, err, ErrKernelUnavailable)
 }
 
 func TestSessionCloseIsIdempotent(t *testing.T) {

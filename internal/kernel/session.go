@@ -275,8 +275,7 @@ func (m *Manager) ResolveInfo(lang, family, version string) (label, resolvedVers
 // first family claiming the language. The session is keyed by note AND kernel, so
 // one note can drive several kernels (or several versions) in parallel sessions.
 // ErrNoKernel if nothing resolves; ErrKernelUnavailable if the resolved command
-// isn't installed. If the kernel died, the dead session is dropped so a later run
-// respawns.
+// isn't installed. A failed run drops its session, so a later run respawns.
 func (m *Manager) Run(ctx context.Context, notePath, lang, family, version, code string, emit func(Event)) error {
 	man, ok := m.Registry().Resolve(lang, family, version)
 	if !ok {
@@ -300,11 +299,10 @@ func (m *Manager) Run(ctx context.Context, notePath, lang, family, version, code
 		emit(ev)
 	}
 	if err := sess.Run(ctx, code, stamp); err != nil {
-		// A dead kernel — or one Run just killed because the ctx was cancelled —
-		// is dropped so the next run respawns a fresh session.
-		if errors.Is(err, ErrKernelDied) || ctx.Err() != nil {
-			m.drop(key, sess)
-		}
+		// Any run error leaves the session unusable — the kernel died, a cancelled
+		// run killed it, or a protocol violation ended its reader — so it is dropped
+		// and the next run respawns a fresh one.
+		m.drop(key, sess)
 		return err
 	}
 	return nil
