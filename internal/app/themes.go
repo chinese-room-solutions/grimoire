@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/KernelPryanic/ctxerr"
 	"github.com/chinese-room-solutions/mass-sdk/registry"
@@ -91,7 +92,7 @@ func (s *Service) InstallTheme(ctx context.Context, name, version string) (uikit
 		return uikit.ThemeInfo{}, ctxerr.With(fmt.Errorf("%w: %s", ErrThemePackageUnknown, name),
 			map[string]any{"package": name})
 	}
-	artifact, err := themeArtifact(pkg, version)
+	artifact, _, err := pickArtifact(pkg, version, newestThemeVersion, ErrThemePackageUnknown)
 	if err != nil {
 		return uikit.ThemeInfo{}, err
 	}
@@ -122,34 +123,10 @@ func (s *Service) RemoveTheme(id string) error {
 	return uikit.RemoveTheme(id)
 }
 
-// themeArtifact picks the package version to install — the requested one, or
-// the newest listed with an "any" artifact when want is "".
-func themeArtifact(pkg *registry.Package, want string) (registry.Artifact, error) {
-	if want == "" {
-		newest, ok := newestThemeVersion(pkg)
-		if !ok {
-			return registry.Artifact{}, ctxerr.With(
-				fmt.Errorf("%w: %s has no installable version", ErrThemePackageUnknown, pkg.Name),
-				map[string]any{"package": pkg.Name})
-		}
-		want = newest
-	}
-	for _, v := range pkg.Versions {
-		if v.Version != want {
-			continue
-		}
-		if a, ok := v.Artifacts[artifactKeyAny]; ok {
-			return a, nil
-		}
-	}
-	return registry.Artifact{}, ctxerr.With(
-		fmt.Errorf("%w: %s@%s", ErrThemePackageUnknown, pkg.Name, want),
-		map[string]any{"package": pkg.Name, "version": want})
-}
-
 // newestThemeVersion returns the package's newest version with an "any"
 // artifact. Theme versions are plain semver maintained append-newest-last in
-// the hand-edited index, so "newest" is the last qualifying entry.
+// the hand-edited index, so "newest" is the last qualifying entry (unlike
+// kernels, which compare version numbers).
 func newestThemeVersion(pkg *registry.Package) (string, bool) {
 	for i := len(pkg.Versions) - 1; i >= 0; i-- {
 		if _, ok := pkg.Versions[i].Artifacts[artifactKeyAny]; ok {
@@ -163,8 +140,5 @@ func newestThemeVersion(pkg *registry.Package) (string, bool) {
 // neon). A name without the prefix maps to itself; uikit's name validation
 // then decides.
 func themePackageID(name string) string {
-	if len(name) > len(themePackagePrefix) && name[:len(themePackagePrefix)] == themePackagePrefix {
-		return name[len(themePackagePrefix):]
-	}
-	return name
+	return strings.TrimPrefix(name, themePackagePrefix)
 }

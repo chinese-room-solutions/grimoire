@@ -111,7 +111,7 @@ func (s *Service) InstallKernel(ctx context.Context, name, version string) (*ker
 	if pkg == nil || pkg.Kind != KindKernel {
 		return nil, ctxerr.With(fmt.Errorf("%w: %s", ErrKernelPackageUnknown, name), map[string]any{"package": name})
 	}
-	artifact, version, err := kernelArtifact(pkg, version)
+	artifact, version, err := pickArtifact(pkg, version, newestKernelVersion, ErrKernelPackageUnknown)
 	if err != nil {
 		return nil, err
 	}
@@ -177,17 +177,21 @@ func (s *Service) fetchIndex(ctx context.Context, url string) (idx *registry.Ind
 	return res.Index, res.Stale, nil
 }
 
-// kernelArtifact picks the package version to install — the requested one, or
-// the newest with an "any" artifact when want is "" — and returns its artifact.
-func kernelArtifact(pkg *registry.Package, want string) (registry.Artifact, string, error) {
+// pickArtifact resolves the package version to install — the requested one, or
+// newest(pkg) when want is "" — and returns its "any" artifact alongside the
+// version chosen. Shared by kernels and themes, which differ only in how they
+// order versions and in the sentinel (unknown) a miss reports.
+func pickArtifact(
+	pkg *registry.Package, want string, newest func(*registry.Package) (string, bool), unknown error,
+) (registry.Artifact, string, error) {
 	if want == "" {
-		newest, ok := newestKernelVersion(pkg)
+		v, ok := newest(pkg)
 		if !ok {
 			return registry.Artifact{}, "", ctxerr.With(
-				fmt.Errorf("%w: %s has no installable version", ErrKernelPackageUnknown, pkg.Name),
+				fmt.Errorf("%w: %s has no installable version", unknown, pkg.Name),
 				map[string]any{"package": pkg.Name})
 		}
-		want = newest
+		want = v
 	}
 	for _, v := range pkg.Versions {
 		if v.Version != want {
@@ -198,7 +202,7 @@ func kernelArtifact(pkg *registry.Package, want string) (registry.Artifact, stri
 		}
 	}
 	return registry.Artifact{}, "", ctxerr.With(
-		fmt.Errorf("%w: %s@%s", ErrKernelPackageUnknown, pkg.Name, want),
+		fmt.Errorf("%w: %s@%s", unknown, pkg.Name, want),
 		map[string]any{"package": pkg.Name, "version": want})
 }
 
