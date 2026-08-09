@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/chinese-room-solutions/grimoire/internal/app"
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
 	"github.com/rs/zerolog"
 )
@@ -188,10 +187,12 @@ func apiImportHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerF
 			writeAPIError(w, http.StatusBadRequest, "expected multipart/form-data with file parts", logger)
 			return
 		}
-		// One up-front vault check, so an unbound backend is a request-level 503
-		// rather than the same error repeated per file.
-		if _, open := api.CurrentVault(r.Context()); !open {
-			writeServiceError(w, app.ErrNoVault, logger, "import")
+		// One up-front probe of the vault this request targets, so an unservable
+		// vault is a request-level 503 rather than the same error repeated per
+		// file. Checking the request's vault, not the last-used one: an explicit
+		// ?vault= must work on a daemon that has no last-vault yet.
+		if err := api.Ready(r.Context(), requestVault(r)); err != nil {
+			writeServiceError(w, err, logger, "import")
 			return
 		}
 		var results []grimoireapi.ImportResult

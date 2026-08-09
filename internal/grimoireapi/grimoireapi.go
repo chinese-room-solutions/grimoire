@@ -94,6 +94,15 @@ func (a *API) service(ctx context.Context, vault string) (*app.Service, error) {
 	return a.resolve(ctx, vault)
 }
 
+// Ready reports whether the vault an operation names (or the last-used
+// fallback, when vault is empty) can be served. Batch endpoints probe it once
+// up front so an unservable vault is one request-level error, not the same
+// failure repeated per item.
+func (a *API) Ready(ctx context.Context, vault string) error {
+	_, err := a.service(ctx, vault)
+	return err
+}
+
 // currentVault is the vault a caller that names none acts on: the last-used one,
 // or "" on a first run. Unlike service it never errors — it's for the operations
 // (vault listing, current-vault reporting) that are meaningful with nothing open.
