@@ -497,7 +497,7 @@ func (s *Service) Search(ctx context.Context, query string, k int, minSim float6
 
 // GraphDefaults are the neighbour count and similarity floor used when the
 // caller doesn't specify them. Tuned on real vaults: ~6 neighbours keeps the map
-// readable, and a 0.35 cosine floor drops links too weak to mean anything.
+// readable, and a 0.5 cosine floor drops links too weak to mean anything.
 const (
 	graphDefaultK      = 6
 	graphDefaultMinSim = 0.5
