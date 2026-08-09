@@ -132,8 +132,12 @@ func odtBlocks(content []byte, emphByStyle map[string]odtStyle, orderedByListSty
 				linkHref = attr(t, "href")
 			case "tab":
 				para.WriteByte('\t')
+				plain.WriteByte('\t')
 			case "line-break":
-				para.WriteString("  \n")
+				para.WriteString("  \n") // a soft line break within a paragraph.
+				// The plain text mirrors the break so looksLikeHeading rejects a
+				// multi-line paragraph, as it does for a docx <w:br/>.
+				plain.WriteByte('\n')
 			}
 		case xml.CharData:
 			if inParagraph {

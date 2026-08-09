@@ -250,6 +250,25 @@ func TestConvertBuiltParity(t *testing.T) {
 			wantBytes:  map[string]string{"pic.png": string(pngA), "pic-2.png": string(pngB)},
 		},
 		{
+			// Both formats mirror a soft break into the plain text, so an all-bold
+			// two-line paragraph stays a paragraph instead of becoming a heading.
+			name: "soft break keeps a bold paragraph out of the heading heuristic",
+			docx: docxZip(t, docxP("", `<w:r><w:rPr><w:b/></w:rPr><w:t>Short bold</w:t></w:r>`+
+				`<w:br/><w:r><w:rPr><w:b/></w:rPr><w:t>second line</w:t></w:r>`), nil),
+			odt: odtZip(t,
+				`<text:p><text:span text:style-name="TB">Short bold</text:span>`+
+					`<text:line-break/><text:span text:style-name="TB">second line</text:span></text:p>`,
+				`<style:style style:name="TB" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style>`,
+				nil),
+			want: "**Short bold**  \n**second line**\n",
+		},
+		{
+			name: "a tab inside a run is kept",
+			docx: docxZip(t, docxP("", `<w:r><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r>`), nil),
+			odt:  odtZip(t, `<text:p>a<text:tab/>b</text:p>`, "", nil),
+			want: "a\tb\n",
+		},
+		{
 			// "*" is both a bullet glyph and Markdown syntax: the marker must be
 			// stripped even though escapeMarkdown wrote it as "\*".
 			name: "asterisk bullets keep no escaped marker",
