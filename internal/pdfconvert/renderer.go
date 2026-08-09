@@ -59,9 +59,22 @@ func NewRenderer() (*Renderer, error) {
 
 // RenderPage renders a 1-based page from pdfData as PNG bytes, downscaled to
 // at most maxPixels pixels (<= 0 means no cap).
-func (r *Renderer) RenderPage(_ context.Context, pdfData []byte, pageNum, dpi, maxPixels int) ([]byte, error) {
+//
+// ctx bounds the wait, not the render: go-pdfium's calls take no context and
+// can't be interrupted, and only one render runs at a time, so a cancelled
+// caller can be released while queueing for the single instance but not once
+// PDFium has the page.
+func (r *Renderer) RenderPage(ctx context.Context, pdfData []byte, pageNum, dpi, maxPixels int) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// The wait for the instance can be seconds long: don't start work the caller
+	// gave up on while queueing.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	doc, err := r.instance.OpenDocument(&requests.OpenDocument{
 		File: &pdfData,

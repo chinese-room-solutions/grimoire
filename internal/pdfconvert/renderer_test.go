@@ -89,6 +89,26 @@ func TestRenderer_RenderPage_InvalidPage(t *testing.T) {
 	require.ErrorIs(t, err, ErrPageRender)
 }
 
+// A caller that gave up while queueing for the single PDFium instance gets its
+// context error back instead of a page nobody wants.
+func TestRenderer_RenderPage_CancelledContext(t *testing.T) {
+	pdfData, err := os.ReadFile("../../testdata/simple.pdf")
+	if os.IsNotExist(err) {
+		t.Skip("testdata/simple.pdf not found — skipping")
+	}
+	require.NoError(t, err)
+
+	renderer, err := NewRenderer()
+	require.NoError(t, err)
+	defer func() { _ = renderer.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = renderer.RenderPage(ctx, pdfData, 1, 150, 0)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestCapPixels(t *testing.T) {
 	tests := []struct {
 		name      string
