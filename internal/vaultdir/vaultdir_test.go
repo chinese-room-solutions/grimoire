@@ -3,6 +3,7 @@ package vaultdir
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -178,6 +179,37 @@ func TestMigrationPrefersExistingConfigData(t *testing.T) {
 	last, err := LastVault()
 	require.NoError(t, err)
 	require.Equal(t, "/newer", last)
+}
+
+// A copy that dies midway must not leave a partial dest behind: dest existing is
+// what makes every later moveIfMissing skip the move, which would strand the
+// real data in the legacy dir forever.
+func TestMoveIfMissingDropsPartialDestOnCopyFailure(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX permission bits to fail the copy")
+	}
+	srcBase, destBase := t.TempDir(), t.TempDir()
+	src := filepath.Join(srcBase, appSubdir)
+	dest := filepath.Join(destBase, appSubdir)
+	require.NoError(t, os.MkdirAll(src, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "config.json"), []byte(`{"theme":"dark"}`), 0o600))
+	locked := filepath.Join(src, "locked.json")
+	require.NoError(t, os.WriteFile(locked, []byte("{}"), 0o000))
+
+	// A read-only src parent makes os.Rename fail, forcing the copy fallback;
+	// the unreadable file then fails that copy after config.json is through.
+	require.NoError(t, os.Chmod(srcBase, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(srcBase, 0o700) })
+	moveIfMissing(src, dest)
+	require.NoDirExists(t, dest, "partial dest must be removed so the next run retries")
+
+	// With the obstacle gone, the retry migrates the whole tree.
+	require.NoError(t, os.Chmod(srcBase, 0o700))
+	require.NoError(t, os.Chmod(locked, 0o600))
+	moveIfMissing(src, dest)
+	require.FileExists(t, filepath.Join(dest, "config.json"))
+	require.FileExists(t, filepath.Join(dest, "locked.json"))
+	require.NoDirExists(t, src)
 }
 
 func TestMigrationNoLegacyIsNoOp(t *testing.T) {

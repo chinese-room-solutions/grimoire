@@ -84,7 +84,9 @@ func migrateRoot(root string) {
 // moveIfMissing moves src to dest when dest doesn't exist yet and src does.
 // os.Rename is tried first; across filesystems (config and cache on different
 // mounts) it falls back to copy+delete. Best-effort by design — the caller
-// treats a leftover src as harmless.
+// treats a leftover src as harmless, and a failed copy takes the partial dest
+// with it, so the next run retries instead of reading a half-copied tree
+// forever.
 func moveIfMissing(src, dest string) {
 	if _, err := os.Stat(dest); err == nil {
 		return
@@ -99,9 +101,11 @@ func moveIfMissing(src, dest string) {
 	if err := os.Rename(src, dest); err == nil {
 		return
 	}
-	if copyTree(src, dest, info) == nil {
-		_ = os.RemoveAll(src)
+	if err := copyTree(src, dest, info); err != nil {
+		_ = os.RemoveAll(dest)
+		return
 	}
+	_ = os.RemoveAll(src)
 }
 
 // copyTree copies a file or directory tree from src to dest (the cross-device
