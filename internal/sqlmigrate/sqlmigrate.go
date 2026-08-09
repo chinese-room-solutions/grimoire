@@ -41,14 +41,32 @@ func Run(db *sql.DB, fsys fs.FS, dir string) error {
 		if err != nil {
 			return fmt.Errorf("reading migration %d: %w", version, err)
 		}
-		if _, err := db.Exec(string(ddl)); err != nil {
+		if err := apply(db, version, string(ddl)); err != nil {
 			return fmt.Errorf("applying migration %d (%s): %w", version, file, err)
-		}
-		if _, err := db.Exec(`INSERT INTO _migrations (version) VALUES (?)`, version); err != nil {
-			return fmt.Errorf("recording migration %d: %w", version, err)
 		}
 	}
 	return nil
+}
+
+// apply runs one migration's DDL and records its version in a single
+// transaction — SQLite DDL is transactional, so the schema change and the
+// bookkeeping either both land or neither does. Applied-but-unrecorded is the
+// state that bricks a database: the next start re-runs DDL that no longer
+// applies (a bare CREATE TABLE then fails forever).
+func apply(db *sql.DB, version int, ddl string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful commit.
+
+	if _, err := tx.Exec(ddl); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO _migrations (version) VALUES (?)`, version); err != nil {
+		return fmt.Errorf("recording version: %w", err)
+	}
+	return tx.Commit()
 }
 
 // parseVersion extracts the numeric prefix from a migration filename, e.g.
