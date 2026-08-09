@@ -54,7 +54,8 @@ func runCLIWith(args []string, out, errW io.Writer) int {
 	fs := flag.NewFlagSet("grimoire", flag.ContinueOnError)
 	fs.SetOutput(errW)
 	fs.Usage = func() { usage(errW) }
-	vaultFlag := fs.String("vault", "", "absolute path to the vault to act on (defaults to the last-used vault)")
+	vaultFlag := fs.String("vault", "",
+		"absolute path to the vault to act on (defaults to the last-used vault; narrows a search to one vault)")
 	jsonOut := fs.Bool("json", false, "emit raw JSON instead of human-readable output")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -367,7 +368,8 @@ Usage:
   grimoire [--vault PATH] [--json] <command> [args]
 
 Global flags:
-  --vault PATH   vault to act on (default: the last-used vault)
+  --vault PATH   vault to act on (default: the last-used vault; for search,
+                 narrows to one vault instead of covering them all)
   --json         emit raw JSON instead of human-readable output
 
 Commands:

@@ -63,9 +63,9 @@ grimoire [--vault PATH] [--json] <command> [args]
 
 | Group | Commands |
 | --- | --- |
-| **search** | `search QUERY [-k N]` |
+| **search** | `search QUERY [-k N]` (across every vault at once) |
 | **note** | `note get PATH` · `note create PATH` · `note update PATH` · `note edit PATH --old S --new S` · `note delete PATH` · `note rename FROM TO` · `note props PATH --set key=v1,v2` |
-| **vault** | `vault tree` · `vault list` · `vault current` |
+| **vault** | `vault tree` · `vault list` · `vault current` · `vault forget PATH` |
 | **resolve** | `resolve TARGET` (a wikilink or bare name → a note path) |
 | **folder** | `folder create PATH` · `folder delete PATH` · `folder rename FROM TO` |
 | **trash** | `trash list` · `trash restore ID` · `trash delete ID` · `trash empty` |
@@ -134,17 +134,27 @@ come from the
 
 ### Vault targeting
 
-Without `--vault`, a command acts on the **last-used** vault (the one the app
-opened most recently). Pass `--vault /abs/path` to target another; `grimoire
-vault list` prints the vaults Grimoire knows about (a `*` marks the current one).
+`search` covers **every** vault Grimoire knows about, fusing the per-vault
+rankings and labelling each hit with the vault it lives in; `--vault /abs/path`
+narrows it to one. Every other command acts on a single vault: the one `--vault`
+names, else the **last-used** one (the vault the app opened most recently). A
+`--vault` on a read never moves that default, so an agent looking around other
+vaults can't change which one the app reopens.
 
-Each command reaches its vault's backend on a loopback port. If none is running,
-the CLI **spawns a headless backend on demand** (no window), serves the call, and
-leaves it warm for follow-ups; that backend **self-retires after ~2 minutes of
-inactivity** (a request in flight counts as activity for its whole duration, so
-a minutes-long `reindex --force` isn't cut off). A vault already open in the GUI is reused, so the CLI never blocks
-you from opening it yourself — but `screenshot` needs a GUI window and fails
-against a headless backend.
+`grimoire vault list` prints the vaults Grimoire knows about with their state —
+whether the folder is still on disk, how much of it is indexed, and which model
+indexed it — with a `*` on the current one. `grimoire vault forget PATH` drops
+one from that list and stops serving it; nothing on disk is touched, so opening
+the path again brings it back.
+
+**One daemon serves every vault**, and each request names the vault it acts on.
+If none is running, the CLI **spawns a headless daemon on demand** (no window),
+serves the call, and leaves it warm for follow-ups; that daemon **self-retires
+after ~2 minutes of inactivity** (a request in flight counts as activity for its
+whole duration, so a minutes-long `reindex --force` isn't cut off, and an open
+app window holds it up for as long as it lives). A daemon the GUI already
+started is reused, so the CLI never blocks you from opening the app yourself —
+but `screenshot` needs a GUI window and fails against a headless daemon.
 
 ### Output and exit codes
 
@@ -166,11 +176,12 @@ Exit codes let a script branch on the outcome kind:
 | `3` | not found (a missing note, or a resolve that found nothing) |
 | `4` | conflict (a create/rename that would clobber, or an ambiguous edit) |
 
-### Long-lived backend
+### Long-lived daemon
 
-`grimoire serve [--vault <path>]` runs a backend without a window and keeps it up
-until you stop it (Ctrl-C / SIGTERM) — use it to hold a vault's API open without
-the desktop app, or to avoid the on-demand spawn latency on the first call. Pass
+`grimoire serve` runs the backend without a window and keeps it up until you stop
+it (Ctrl-C / SIGTERM) — use it to hold the API open without the desktop app, or
+to avoid the on-demand spawn latency on the first call. It serves every vault, so
+there is nothing to bind: `--vault` is accepted and ignored. Pass
 `--idle-timeout <dur>` to have it self-retire after a quiet spell (the on-demand
 spawn uses `2m`).
 
@@ -195,10 +206,13 @@ after upgrading Grimoire: an old copy describes verbs that may have moved.
 
 ### JSON HTTP API
 
-The CLI is built on a plain JSON API under `/api/v1/` on each running instance,
-reachable directly (for scripts and curl) on the loopback port the backend
-publishes to `singleton.port` in its per-vault data directory. The
-vault-navigation operations are at `/api/v1/vault/{open,switch,close,current}`.
+The CLI is built on a plain JSON API under `/api/v1/`, reachable directly (for
+scripts and curl) on the loopback port the daemon publishes to
+`<user-config>/grimoire/app/daemon.port` — one file, since one daemon serves
+every vault. Pass `?vault=/abs/path` on a request to choose the vault it acts on;
+without it a request falls back to the last-used vault, and a `/api/v1/search`
+without it covers them all. The vault-management operations are at
+`/api/v1/vault/{current,open,switch,forget}` and `/api/v1/vaults`.
 
 ## License
 

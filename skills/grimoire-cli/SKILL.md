@@ -41,12 +41,14 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
 
 - `search QUERY [-k N]` — hybrid keyword + vector retrieval across **every**
   vault, best matches first whichever vault they live in. Each hit is printed as
-  `vault/path` (`--json`: a `vault` field with the absolute path — pass it as
-  `--vault` to read the note). `--vault PATH` narrows the search to one vault,
-  and its hits print bare. A vault that can't answer is named in a warning line
-  on stderr (`warnings` in `--json`) and skipped. Needs the MASS gateway
-  (`GRIMOIRE_GATEWAY_URL`, default `http://localhost:3455/mass.llama-cpp`);
-  without it, exit 1. Reading and editing need no gateway.
+  `<vault-folder-name>/path` (`--json`: a `vault` field with the vault's absolute
+  path — pass it as `--vault` to read the note). `--vault PATH` narrows the
+  search to one vault, and its hits print bare. A vault that can't answer is
+  named on stderr (`warnings` in `--json`) and skipped — the search still exits
+  0, so judge it by the exit code, not by stderr being non-empty. Needs the MASS
+  gateway (`GRIMOIRE_GATEWAY_URL`, default
+  `http://localhost:3455/mass.llama-cpp`); without it, exit 1. Reading and
+  editing need no gateway.
 - `resolve TARGET` — a wikilink or bare name (`"My Note"`, `"My Note|alias"`,
   with or without `.md`) to a real path. Use it before assuming a path; exit 3
   if nothing matches.
@@ -60,9 +62,11 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
   forgotten, but nothing can be read from it. `CHUNKS -` means the daemon hasn't
   opened that vault, not that its index is empty. `--json` returns the same rows
   under a `vaults` key.
-- `vault forget PATH` — drops a vault from that list and stops serving it.
-  **Not a delete**: the folder, its notes, and its index all stay on disk, and
-  opening the path again restores everything. Use it to tidy the list, never to
+- `vault forget PATH` — drops a vault from that list, stops serving it, and
+  takes it out of cross-vault search. **Not a delete**: the folder, its notes,
+  and its index all stay on disk, and opening the path again restores
+  everything. Forgetting the current vault repoints the default at another known
+  one; a path Grimoire doesn't know is a no-op. Use it to tidy the list, never to
   remove notes.
 
 ## Editing

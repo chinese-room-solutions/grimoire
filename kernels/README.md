@@ -20,13 +20,13 @@ On startup Grimoire scans two roots for `<family>/<version>/*.kernel.yaml`
 manifests and indexes each kernel by the fenced-code languages it claims. A
 kernel's identity — its family and version — comes from that path, not the YAML.
 
-1. The **per-vault** kernels dir, `{vault-config-dir}/kernels/`:
-   - **Windows:** `%LOCALAPPDATA%\grimoire\vaults\<vault-hash>\kernels\`
-   - **Linux:** `~/.local/share/grimoire/vaults/<vault-hash>/kernels/` (XDG)
+1. The **per-vault** kernels dir, `{user-config-dir}/grimoire/vaults/<vault-hash>/kernels/`:
+   - **Windows:** `%AppData%\grimoire\vaults\<vault-hash>\kernels\`
+   - **Linux:** `~/.config/grimoire/vaults/<vault-hash>/kernels/` (XDG)
    - **macOS:** `~/Library/Application Support/grimoire/vaults/<vault-hash>/kernels/`
 2. The **shared** app-level kernels dir every vault sees,
-   `{user-config-dir}/grimoire/kernels/` (e.g. `~/.local/share/grimoire/kernels/`
-   on Linux).
+   `{user-config-dir}/grimoire/kernels/` (e.g. `~/.config/grimoire/kernels/` on
+   Linux).
 
 When both hold the same `<family>/<version>`, the per-vault copy wins — so a
 vault can pin or patch a kernel without touching the shared install.
@@ -56,7 +56,7 @@ mkdir -p "<user-config-dir>/grimoire/kernels/go"
 cp -r grimoire-kernel-go/1.26 "<user-config-dir>/grimoire/kernels/go/"
 ```
 
-Restart Grimoire (or reopen the vault) and `go`/`golang` blocks become runnable.
+Restart the Grimoire daemon and `go`/`golang` blocks become runnable.
 Delete the folder to uninstall — no other change to Grimoire. To add another
 version of a family, drop in a new `<family>/<version>/` sibling.
 
