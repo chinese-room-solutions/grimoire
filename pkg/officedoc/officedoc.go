@@ -114,6 +114,10 @@ func render(blocks []block) string {
 		// marker (bullet↔ordered) at the same or a shallower level starts a new list,
 		// so blank-separate it too — otherwise Markdown reads them as one list.
 		newList := !prevList || (blk.listLvl <= prevLvl && blk.ordered != prevOrdered)
+		// A marker switch against a block at this level or shallower ends the list
+		// running here, so the next one at this level starts over. (A switch only
+		// deeper — a bullet sub-list under item 1 — leaves this level's list intact.)
+		restart := prevList && prevLvl <= blk.listLvl && blk.ordered != prevOrdered
 		if i > 0 {
 			if newList {
 				b.WriteString("\n\n")
@@ -123,17 +127,19 @@ func render(blocks []block) string {
 		}
 		prevList = true
 		prevLvl, prevOrdered = blk.listLvl, blk.ordered
+		if restart {
+			delete(counters, blk.listLvl)
+		}
+		// Any list deeper than this block is closed by it; re-entering one restarts
+		// its numbering.
+		for lvl := range counters {
+			if lvl > blk.listLvl {
+				delete(counters, lvl)
+			}
+		}
 		b.WriteString(strings.Repeat("  ", blk.listLvl-1))
 		if blk.ordered {
 			counters[blk.listLvl]++
-			// A deeper level starting resets nothing; a shallower one is handled by
-			// the non-list reset above. Reset any deeper counters so re-entering a
-			// nested list restarts its numbering.
-			for lvl := range counters {
-				if lvl > blk.listLvl {
-					delete(counters, lvl)
-				}
-			}
 			if blk.alpha {
 				// A lettered list (a. b. c.) is preserved as written. Markdown has no
 				// alpha-ordered marker, so it's emitted as a literal "a. " prefix
