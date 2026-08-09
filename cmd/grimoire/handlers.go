@@ -1482,7 +1482,7 @@ func importNoteHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc
 			case errors.Is(err, app.ErrUnsupportedImport):
 				http.Error(w, "unsupported file type", http.StatusUnsupportedMediaType)
 			case errors.Is(err, app.ErrNoConvertModel):
-				http.Error(w, "select a PDF model in the Vault tab to import PDFs", http.StatusBadRequest)
+				http.Error(w, noConvertModelHint, http.StatusBadRequest)
 			default:
 				logger.Warn().Err(err).Str("file", name).Msg("importing note")
 				http.Error(w, "could not convert "+name, http.StatusInternalServerError)

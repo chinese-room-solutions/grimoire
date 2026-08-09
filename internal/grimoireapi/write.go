@@ -148,6 +148,34 @@ type ImportResult struct {
 	Name  string `json:"name"`            // the submitted file name.
 	Path  string `json:"path,omitempty"`  // created note's vault-relative path; empty on failure.
 	Error string `json:"error,omitempty"` // what kept the file out; empty on success.
+	// Code identifies the failures a client can do something about, so it can
+	// offer the fix rather than relay prose. Empty for everything else — a
+	// client matching on it must still fall back to Error.
+	Code string `json:"code,omitempty"`
+}
+
+// The stable ImportResult.Code values. New codes may be added; a client treats
+// one it doesn't know like an empty code.
+const (
+	// ImportNoConvertModel: the file is a PDF and no conversion model is
+	// configured. The fix is to pick one, which only the user can do.
+	ImportNoConvertModel = "no-convert-model"
+	// ImportUnsupported: nothing in Grimoire converts this file type.
+	ImportUnsupported = "unsupported"
+)
+
+// ImportFailure is the result for a file that didn't make it in, tagged with a
+// code when the failure is one a client can act on. Every import surface builds
+// its failures here, so a caller sees the same code whichever one it used.
+func ImportFailure(name string, err error) ImportResult {
+	res := ImportResult{Name: name, Error: err.Error()}
+	switch {
+	case errors.Is(err, app.ErrNoConvertModel):
+		res.Code = ImportNoConvertModel
+	case errors.Is(err, app.ErrUnsupportedImport):
+		res.Code = ImportUnsupported
+	}
+	return res
 }
 
 // ImportNote converts one foreign file into a Markdown note at the vault root.

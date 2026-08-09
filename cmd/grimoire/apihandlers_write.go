@@ -233,7 +233,7 @@ func importPart(r *http.Request, api *grimoireapi.API, name string, part io.Read
 	ref, err := api.ImportNote(r.Context(), requestVault(r), name, data)
 	if err != nil {
 		logger.Warn().Err(err).Str("file", name).Msg("importing file")
-		return grimoireapi.ImportResult{Name: name, Error: err.Error()}
+		return grimoireapi.ImportFailure(name, err)
 	}
 	return grimoireapi.ImportResult{Name: name, Path: ref.Path}
 }

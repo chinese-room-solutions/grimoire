@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/chinese-room-solutions/grimoire/internal/apiclient"
+	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
 	"github.com/chinese-room-solutions/mass-sdk/webview"
 	"github.com/rs/zerolog"
 )
@@ -97,14 +98,25 @@ func importDroppedFile(ctx context.Context, client *apiclient.Client, path, name
 		return "could not import " + name
 	}
 	// Per-file failures ride in the result rather than the error, in the server's
-	// own words ("unsupported file type", "no PDF conversion model selected").
+	// own words ("unsupported file type"). A failure the user can fix comes back
+	// with a code instead, so the notice says what to do about it — the raw "no
+	// PDF conversion model selected" leaves a drop looking broken.
 	for _, res := range results {
-		if res.Error != "" {
-			return res.Error
+		if res.Error == "" {
+			continue
 		}
+		if res.Code == grimoireapi.ImportNoConvertModel {
+			return noConvertModelHint
+		}
+		return res.Error
 	}
 	return ""
 }
+
+// noConvertModelHint is what a PDF import says when no conversion model is
+// configured: the actionable form of app.ErrNoConvertModel, shared by the native
+// drop path and the in-page one so the two never drift.
+const noConvertModelHint = "select a PDF model in the Vault settings to import PDFs"
 
 // droppedIntoVault resolves the vault a native file drop imports into and
 // returns a client bound to it. A drop lands on the window, which shows the

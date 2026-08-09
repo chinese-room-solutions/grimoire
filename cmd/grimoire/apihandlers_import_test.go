@@ -84,7 +84,24 @@ func TestAPIImportBatchPartialFailure(t *testing.T) {
 	require.Equal(t, "c.zip", results[2].Name)
 	require.Empty(t, results[2].Path)
 	require.Contains(t, results[2].Error, "unsupported file type")
+	require.Equal(t, grimoireapi.ImportUnsupported, results[2].Code)
 	require.NoFileExists(t, filepath.Join(vault, "c.zip"))
+}
+
+// A PDF dropped with no conversion model configured comes back tagged, not just
+// worded: the GUI matches the code to show "select a PDF model…" instead of
+// relaying the server's prose, which reads as a broken drop.
+func TestAPIImportPDFWithoutConvertModelIsCoded(t *testing.T) {
+	svc := app.New(testShared(t), t.TempDir(), t.TempDir(), t.TempDir(), zerolog.Nop())
+	t.Cleanup(func() { _ = svc.Close() })
+	mux := http.NewServeMux()
+	mountAPI(mux, grimoireapi.NewStatic(svc), testControl(), zerolog.Nop())
+
+	rec := doImport(t, mux, []importFile{{"paper.pdf", "%PDF-1.4\n"}})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	results := decodeImport(t, rec)
+	require.Len(t, results, 1)
+	require.Equal(t, grimoireapi.ImportNoConvertModel, results[0].Code)
 }
 
 // TestAPIImportCollisionSuffixes verifies a re-imported name is suffixed, not
