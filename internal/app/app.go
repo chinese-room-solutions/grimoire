@@ -138,7 +138,6 @@ type Service struct {
 	store         *store.Store
 	embedder      *embed.Embedder
 	storeGen      uint64 // bumped each time store/embedder are replaced.
-	pickFolder    func(title string) (string, bool, error)
 	screenshot    func() ([]byte, error)
 	sessions      *session.Store
 	ui            *uistate.Store
@@ -250,27 +249,6 @@ func (s *Service) Config() appconfig.Config {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cfg
-}
-
-// SetFolderPicker installs the native folder-selection dialog (wired from the
-// webview window after it opens). Without it, PickFolder reports unsupported.
-func (s *Service) SetFolderPicker(fn func(title string) (string, bool, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pickFolder = fn
-}
-
-// PickFolder opens the native folder dialog and returns the chosen path. ok is
-// false when the user cancels or no picker is available (e.g. running in a
-// browser instead of the webview).
-func (s *Service) PickFolder(title string) (path string, ok bool, err error) {
-	s.mu.Lock()
-	fn := s.pickFolder
-	s.mu.Unlock()
-	if fn == nil {
-		return "", false, nil
-	}
-	return fn(title)
 }
 
 // SetScreenshotter installs the native window-capture function (wired from the

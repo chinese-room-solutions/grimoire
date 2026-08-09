@@ -66,17 +66,12 @@ func (h *serviceHolder) currentVault() string {
 	return h.curVault
 }
 
-// SetFolderPicker records the native folder dialog so the holder can pick a vault
-// in the empty state (when there's no service to delegate to) and so a freshly
-// bound service can offer it too.
+// SetFolderPicker records the native folder dialog the handlers use to pick a
+// vault.
 func (h *serviceHolder) SetFolderPicker(fn func(title string) (string, bool, error)) {
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.folderPicker = fn
-	svc := h.cur
-	h.mu.Unlock()
-	if svc != nil {
-		svc.SetFolderPicker(fn)
-	}
 }
 
 // SetScreenshotter records the window screenshotter, applying it to the current
@@ -123,9 +118,6 @@ func (h *serviceHolder) bind(ctx context.Context, vault string) error {
 	svc := grimoireapp.New(h.client, dir, cacheDir, vault, h.sharedKernels, h.registryURL, h.logger)
 	svc.SetThemeRegistryURL(h.themeRegistryURL)
 	h.mu.Lock()
-	if h.folderPicker != nil {
-		svc.SetFolderPicker(h.folderPicker)
-	}
 	if h.screenshotter != nil {
 		svc.SetScreenshotter(h.screenshotter)
 	}
