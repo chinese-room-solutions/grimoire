@@ -17,5 +17,3 @@ CREATE TABLE IF NOT EXISTS run_results (
 	ran_at     INTEGER NOT NULL,
 	PRIMARY KEY (note_path, block_hash)
 );
-
-CREATE INDEX IF NOT EXISTS idx_run_results_note ON run_results(note_path);
