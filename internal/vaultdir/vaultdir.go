@@ -275,7 +275,6 @@ func canonical(vault string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolving vault path: %w", err)
 	}
-	abs = filepath.Clean(abs)
 	if isCaseInsensitiveFS {
 		abs = strings.ToLower(abs)
 	}
