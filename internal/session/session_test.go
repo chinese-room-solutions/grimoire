@@ -80,6 +80,62 @@ func TestAddTurnAndRead(t *testing.T) {
 	require.Empty(t, got[1].Hits)
 }
 
+// Hits are persisted as an opaque JSON blob, so the vault a hit came from
+// round-trips without any schema change — and blobs written before the field
+// existed still decode, with an empty vault.
+func TestTurnHitsCarryVault(t *testing.T) {
+	tests := []struct {
+		name string
+		// write persists one turn's hits and returns the session it landed in.
+		write func(t *testing.T, s *Store) int64
+		want  []Hit
+	}{
+		{
+			name: "vault round-trips",
+			write: func(t *testing.T, s *Store) int64 {
+				t.Helper()
+				id, err := s.Create("multi", time.Unix(8000, 0))
+				require.NoError(t, err)
+				_, err = s.AddTurn(id, Turn{Kind: KindSearch, Query: "maps", Hits: []Hit{
+					{Path: "a.md", Heading: "Maps", Text: "maps double when full", Vault: "work"},
+					{Path: "a.md", Heading: "Maps", Text: "same path, other vault", Vault: "personal"},
+				}}, time.Unix(8001, 0))
+				require.NoError(t, err)
+				return id
+			},
+			want: []Hit{
+				{Path: "a.md", Heading: "Maps", Text: "maps double when full", Vault: "work"},
+				{Path: "a.md", Heading: "Maps", Text: "same path, other vault", Vault: "personal"},
+			},
+		},
+		{
+			name: "legacy blob decodes with no vault",
+			write: func(t *testing.T, s *Store) int64 {
+				t.Helper()
+				id, err := s.Create("legacy", time.Unix(8000, 0))
+				require.NoError(t, err)
+				_, err = s.db.Exec(
+					"INSERT INTO turns(session_id, kind, query, hits, created_at) VALUES(?, ?, ?, ?, ?)",
+					id, string(KindSearch), "maps",
+					`[{"path":"a.md","heading":"Maps","text":"written before vaults"}]`,
+					int64(8001))
+				require.NoError(t, err)
+				return id
+			},
+			want: []Hit{{Path: "a.md", Heading: "Maps", Text: "written before vaults"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := openTest(t)
+			turns, err := s.Turns(tt.write(t, s))
+			require.NoError(t, err)
+			require.Len(t, turns, 1)
+			require.Equal(t, tt.want, turns[0].Hits)
+		})
+	}
+}
+
 func TestAddTurnBumpsUpdatedAt(t *testing.T) {
 	s := openTest(t)
 	older, err := s.Create("older", time.Unix(3000, 0))

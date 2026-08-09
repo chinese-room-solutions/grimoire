@@ -44,6 +44,9 @@ type Hit struct {
 	Path    string `json:"path"`
 	Heading string `json:"heading"`
 	Text    string `json:"text"`
+	// Vault the hit came from, for sessions that search several at once. Turns
+	// written before the field existed decode with it empty: unknown vault.
+	Vault string `json:"vault,omitempty"`
 }
 
 // Turn is one search within a session: the user's query and the ranked results
