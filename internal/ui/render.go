@@ -746,6 +746,59 @@ func sourceLabel(h Hit) string {
 	return label
 }
 
+// hitGroup is one embedding model's block of search results: the vaults its
+// hits came from and the model that ranked them, as the labels a fold shows.
+type hitGroup struct {
+	Model  string // the model id, or "keyword only" when no model ranked these.
+	Vaults string // the vaults' folder names, joined.
+	Hits   []Hit
+}
+
+// hitGroups splits a result list into its model blocks. Hits arrive grouped by
+// the model that ranked them (a cross-vault search lists one model's ranking
+// after another's), so the split is over the runs of equal Model — which leaves
+// one group for the usual single-model search and for any turn recorded before
+// hits carried a model.
+func hitGroups(hits []Hit) []hitGroup {
+	var out []hitGroup
+	for start := 0; start < len(hits); {
+		end := start + 1
+		for end < len(hits) && hits[end].Model == hits[start].Model {
+			end++
+		}
+		out = append(out, hitGroup{
+			Model:  hitGroupModel(hits[start].Model),
+			Vaults: hitGroupVaults(hits[start:end]),
+			Hits:   hits[start:end],
+		})
+		start = end
+	}
+	return out
+}
+
+func hitGroupModel(model string) string {
+	if model == "" {
+		return "keyword only"
+	}
+	return model
+}
+
+// hitGroupVaults joins the distinct vault names a group's hits came from, in
+// the order they first appear.
+func hitGroupVaults(hits []Hit) string {
+	var names []string
+	seen := map[string]bool{}
+	for _, h := range hits {
+		name := vaultdir.Name(h.Vault)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	return strings.Join(names, ", ")
+}
+
 // snippet trims a chunk to a short preview for the search results list. The cut
 // is by rune, so a multibyte character can't be split into invalid UTF-8.
 func snippet(s string) string {
@@ -1189,6 +1242,10 @@ var styleBlock = `<style>
 #app-grimoire .g-hit-text{font-size:0.8rem;color:var(--mass-text);white-space:pre-wrap;word-break:break-word}
 /* A vault a cross-vault search couldn't reach, named under its results. */
 #app-grimoire .g-hit-warning{font-size:0.72rem;margin-top:0.5rem}
+/* One embedding model's block, when a search spanned two: folded by default,
+   because two rankings side by side are two answers, not a longer one. */
+#app-grimoire .g-hit-group{margin-top:0.5rem;font-size:0.8rem}
+#app-grimoire .g-hit-group-model{color:var(--mass-text-muted);font-size:0.72rem;margin-left:0.4rem}
 
 /* Input bar */
 #app-grimoire .g-input-row{display:flex;gap:0.5rem;align-items:flex-end;width:100%}

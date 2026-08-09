@@ -47,6 +47,10 @@ type Hit struct {
 	// Vault the hit came from, for sessions that search several at once. Turns
 	// written before the field existed decode with it empty: unknown vault.
 	Vault string `json:"vault,omitempty"`
+	// Model that ranked the hit, so a replayed turn folds into the same
+	// per-model blocks the live results did. Empty on turns written before the
+	// field existed, and on a vault with no model: one flat list.
+	Model string `json:"model,omitempty"`
 }
 
 // Turn is one search within a session: the user's query and the ranked results

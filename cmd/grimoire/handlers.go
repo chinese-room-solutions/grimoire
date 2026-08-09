@@ -1205,7 +1205,7 @@ func toUIRunResult(r app.RunResult) ui.RunResult {
 func toUIHits(hits []vaultHit) []ui.Hit {
 	out := make([]ui.Hit, len(hits))
 	for i, h := range hits {
-		out[i] = ui.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: h.Vault}
+		out[i] = ui.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: h.Vault, Model: h.Model}
 	}
 	return out
 }
@@ -1216,7 +1216,9 @@ func toUIHits(hits []vaultHit) []ui.Hit {
 func toSessionHits(hits []vaultHit) []app.SessionHit {
 	out := make([]app.SessionHit, len(hits))
 	for i, h := range hits {
-		out[i] = app.SessionHit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: h.Vault}
+		out[i] = app.SessionHit{
+			Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: h.Vault, Model: h.Model,
+		}
 	}
 	return out
 }
@@ -2055,7 +2057,7 @@ func toUISessionHits(hits []app.SessionHit, pageVault string) []ui.Hit {
 		if vault == "" {
 			vault = pageVault
 		}
-		out[i] = ui.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: vault}
+		out[i] = ui.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: vault, Model: h.Model}
 	}
 	return out
 }

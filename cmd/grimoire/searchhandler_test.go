@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/chinese-room-solutions/grimoire/internal/ui"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 )
@@ -64,6 +66,39 @@ func TestSearchHandler_SpansVaultsUnlessNarrowed(t *testing.T) {
 	narrowed := env.search(t, env.work, true)
 	require.Contains(t, narrowed, "specs/alpha.md")
 	require.NotContains(t, narrowed, "diary.md", "the other vault is out of scope")
+}
+
+// A search spanning two embedding models shows two folded blocks rather than
+// one list, records the model with every hit, and replays into the same blocks.
+func TestSearchHandler_FoldsAndReplaysModelGroups(t *testing.T) {
+	gw := newEmbedServer(t)
+	reg := newEmbedRegistry(t, gw)
+	work := openIndexedVault(t, reg, "model-x", map[string]string{"specs/alpha.md": "# Spec\n\nthe alpha protocol\n"})
+	old := openIndexedVault(t, reg, "model-y", map[string]string{"diary.md": "# Diary\n\nalpha again today\n"})
+	env := searchEnv{mux: http.NewServeMux(), reg: reg, work: work, home: old}
+	env.mux.HandleFunc("POST /action/search", searchHandler(reg, zerolog.Nop()))
+
+	body := env.search(t, work, false)
+	require.Contains(t, body, "sl-details", "two models, two blocks")
+	require.Contains(t, body, "model-x")
+	require.Contains(t, body, "model-y")
+
+	svc, err := reg.runtime(t.Context(), work)
+	require.NoError(t, err)
+	turns, err := svc.SessionTurns(svc.ActiveSession())
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+
+	models := map[string]string{}
+	for _, h := range turns[0].Hits {
+		models[h.Vault] = h.Model
+	}
+	require.Equal(t, map[string]string{work: "model-x", old: "model-y"}, models)
+
+	var buf strings.Builder
+	require.NoError(t, ui.Conversation(toUITurns(turns, work)).Render(t.Context(), &buf))
+	require.Contains(t, buf.String(), "sl-details", "a replayed turn folds like the live one")
+	require.Contains(t, buf.String(), "model-y")
 }
 
 // A cross-vault turn goes into the history with each hit's own vault, so

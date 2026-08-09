@@ -503,6 +503,11 @@ type Hit struct {
 	// every vault, so a result says which one it came from, and a hit from
 	// another vault opens by navigating there.
 	Vault string
+	// Model is the embedding model that ranked the hit. Rankings from different
+	// models are not comparable, so results spanning two of them are shown as
+	// one block per model instead of one list. Empty on hits recorded before
+	// the field existed, and on a vault with no model.
+	Model string
 }
 
 // SearchTurn is the shell appended when a search runs: a query bubble and a
@@ -521,18 +526,40 @@ templ SearchTurn(seq string, query string) {
 // warnings name the vaults that couldn't answer, so a partial cross-vault
 // search never passes for a complete one; nil when every vault answered (and
 // when replaying a stored turn, which kept only the hits).
+//
+// Hits ranked by two different embedding models are two rankings, not one, so
+// they fold into a collapsed block per model rather than pretending to be a
+// single list — one model (the usual case, and every replayed turn recorded
+// before models were tracked) renders flat, exactly as before.
 templ SearchResults(hits []Hit, warnings []string) {
 	if len(hits) == 0 {
 		<div class="g-muted">No matches.</div>
 	}
+	if groups := hitGroups(hits); len(groups) > 1 {
+		for _, g := range groups {
+			<sl-details class="g-hit-group">
+				<span slot="summary">
+					{ g.Vaults }
+					<span class="g-hit-group-model">{ g.Model }</span>
+				</span>
+				@hitCards(g.Hits)
+			</sl-details>
+		}
+	} else {
+		@hitCards(hits)
+	}
+	for _, w := range warnings {
+		<div class="g-muted g-hit-warning">{ w }</div>
+	}
+}
+
+// hitCards renders one ranking's result cards (label + snippet).
+templ hitCards(hits []Hit) {
 	for _, h := range hits {
 		<div class="g-hit">
 			@previewLink(h.Path, h.Heading, h.Vault, sourceLabel(h))
 			<div class="g-hit-text">{ snippet(h.Text) }</div>
 		</div>
-	}
-	for _, w := range warnings {
-		<div class="g-muted g-hit-warning">{ w }</div>
 	}
 }
 

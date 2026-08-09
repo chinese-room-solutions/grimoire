@@ -440,6 +440,77 @@ func TestRunResultPanelRendersItemsByMIME(t *testing.T) {
 	require.Contains(t, out, `src="data:`+MIMEPNG+`;base64,QUJD"`, "image items render as a data URI")
 }
 
+// Two embedding models rank on two scales, so their results are two blocks —
+// folded, because a second ranking is a second answer, not more of the first.
+// One model (the usual case, and every turn recorded before models were tracked)
+// stays the flat list it has always been.
+func TestSearchResultsFoldsOnlyMultiModelResults(t *testing.T) {
+	work := Hit{Path: "a.md", Text: "one", Vault: "/vaults/work", Model: "model-x"}
+	home := Hit{Path: "b.md", Text: "two", Vault: "/vaults/home", Model: "model-x"}
+	old := Hit{Path: "c.md", Text: "three", Vault: "/vaults/old", Model: "model-y"}
+	plain := Hit{Path: "d.md", Text: "four", Vault: "/vaults/plain"}
+
+	tests := []struct {
+		name     string
+		hits     []Hit
+		contains []string
+		missing  []string
+	}{
+		{
+			name:     "one model renders flat",
+			hits:     []Hit{work, home},
+			contains: []string{"a.md", "b.md"},
+			missing:  []string{"sl-details"},
+		},
+		{
+			name:     "hits with no model at all render flat",
+			hits:     []Hit{plain, {Path: "e.md", Vault: "/vaults/plain"}},
+			contains: []string{"d.md", "e.md"},
+			missing:  []string{"sl-details"},
+		},
+		{
+			name: "two models fold into a block each",
+			hits: []Hit{work, home, old},
+			contains: []string{
+				`<sl-details class="g-hit-group">`,
+				`<span slot="summary">work, home`,
+				`<span class="g-hit-group-model">model-x</span>`,
+				`<span slot="summary">old`,
+				`<span class="g-hit-group-model">model-y</span>`,
+				"a.md", "b.md", "c.md",
+			},
+			// sl-details is closed unless told otherwise: never say open.
+			missing: []string{"open"},
+		},
+		{
+			name:     "a keyword-only block says so",
+			hits:     []Hit{work, plain},
+			contains: []string{`<span class="g-hit-group-model">keyword only</span>`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf strings.Builder
+			require.NoError(t, SearchResults(tt.hits, nil).Render(context.Background(), &buf))
+			out := buf.String()
+			for _, want := range tt.contains {
+				require.Contains(t, out, want)
+			}
+			for _, miss := range tt.missing {
+				require.NotContains(t, out, miss)
+			}
+		})
+	}
+
+	// The warnings line stays below the blocks, not inside one.
+	var buf strings.Builder
+	require.NoError(t,
+		SearchResults([]Hit{work, old}, []string{"archive: not ready"}).Render(context.Background(), &buf))
+	out := buf.String()
+	require.Contains(t, out, "archive: not ready")
+	require.Greater(t, strings.Index(out, "archive: not ready"), strings.LastIndex(out, "</sl-details>"))
+}
+
 func TestTrashBrowserRendersNoteRows(t *testing.T) {
 	var buf strings.Builder
 	items := []TrashItem{

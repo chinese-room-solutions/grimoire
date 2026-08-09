@@ -80,9 +80,9 @@ func TestAddTurnAndRead(t *testing.T) {
 	require.Empty(t, got[1].Hits)
 }
 
-// Hits are persisted as an opaque JSON blob, so the vault a hit came from
-// round-trips without any schema change — and blobs written before the field
-// existed still decode, with an empty vault.
+// Hits are persisted as an opaque JSON blob, so the vault a hit came from and
+// the model that ranked it round-trip without any schema change — and blobs
+// written before either field existed still decode, with them empty.
 func TestTurnHitsCarryVault(t *testing.T) {
 	tests := []struct {
 		name string
@@ -123,6 +123,26 @@ func TestTurnHitsCarryVault(t *testing.T) {
 				return id
 			},
 			want: []Hit{{Path: "a.md", Heading: "Maps", Text: "written before vaults"}},
+		},
+		{
+			name: "the ranking model round-trips",
+			write: func(t *testing.T, s *Store) int64 {
+				t.Helper()
+				id, err := s.Create("models", time.Unix(8000, 0))
+				require.NoError(t, err)
+				_, err = s.AddTurn(id, Turn{Kind: KindSearch, Query: "maps", Hits: []Hit{
+					{Path: "a.md", Text: "one model", Vault: "work", Model: "model-x"},
+					{Path: "b.md", Text: "another", Vault: "old", Model: "model-y"},
+					{Path: "c.md", Text: "no model", Vault: "plain"},
+				}}, time.Unix(8001, 0))
+				require.NoError(t, err)
+				return id
+			},
+			want: []Hit{
+				{Path: "a.md", Text: "one model", Vault: "work", Model: "model-x"},
+				{Path: "b.md", Text: "another", Vault: "old", Model: "model-y"},
+				{Path: "c.md", Text: "no model", Vault: "plain"},
+			},
 		},
 	}
 	for _, tt := range tests {

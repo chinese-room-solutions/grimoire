@@ -1638,7 +1638,7 @@ func (s *Service) DeleteTurn(sessionID, turnID int64) error {
 // surfaced, with snippets) into the active session, so reopening it re-renders
 // the result cards.
 func (s *Service) RecordSearch(query string, hits []store.Hit) {
-	s.RecordSearchHits(query, toSessionHits(hits, s.Vault()))
+	s.RecordSearchHits(query, toSessionHits(hits, s.Vault(), s.EmbedModelName()))
 }
 
 // RecordSearchHits saves a search turn whose hits already carry the vault each
@@ -1650,11 +1650,12 @@ func (s *Service) RecordSearchHits(query string, hits []SessionHit) {
 
 // toSessionHits projects store hits to the slimmer shape persisted with a search
 // turn (label + snippet, no distance), tagged with the vault they came from so a
-// session spanning several vaults still says where each hit lives.
-func toSessionHits(hits []store.Hit, vault string) []session.Hit {
+// session spanning several vaults still says where each hit lives, and with the
+// model that ranked them so a replayed turn groups as the live one did.
+func toSessionHits(hits []store.Hit, vault, model string) []session.Hit {
 	out := make([]session.Hit, len(hits))
 	for i, h := range hits {
-		out[i] = session.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: vault}
+		out[i] = session.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: vault, Model: model}
 	}
 	return out
 }
