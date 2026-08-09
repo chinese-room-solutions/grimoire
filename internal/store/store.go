@@ -66,11 +66,14 @@ type Hit struct {
 }
 
 // SearchOptions are the relevance knobs the caller passes into a hybrid
-// search; the policy values live with the caller, the mechanics here.
+// search; the policy values live with the caller, the mechanics here. The
+// vector leg keeps candidates at or above max(best·TopRatio, MinSim), so
+// TopRatio 0 is not "no band" — it still drops everything below MinSim and
+// below zero similarity, and a negative best hit bands out every candidate.
 type SearchOptions struct {
 	K        int     // results to return (≤0 → 10).
 	MinSim   float64 // absolute similarity floor for the vector leg.
-	TopRatio float64 // relative band vs the best vector hit (0 disables).
+	TopRatio float64 // relative band vs the best vector hit; see above.
 }
 
 // rrfK is the standard Reciprocal Rank Fusion constant: score contributions
