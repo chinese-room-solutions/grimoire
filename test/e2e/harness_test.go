@@ -281,8 +281,9 @@ func startServer(t *testing.T, notes map[string]string, appCfg ...map[string]str
 	return s
 }
 
-// stopProcess ends a spawned process: SIGTERM (the serve loop exits cleanly on
-// it), then a kill if it lingers. Windows has no TERM, so it kills directly.
+// stopProcess ends a spawned process: an interrupt (the serve loop exits
+// cleanly on it), then a kill if it lingers. Windows can't be signalled, so it
+// kills directly.
 func stopProcess(cmd *exec.Cmd) {
 	if cmd.Process == nil {
 		return
