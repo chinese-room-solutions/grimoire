@@ -124,6 +124,13 @@ func docxBlocks(doc []byte, orderedByNumID map[string]bool, linkByRelID, mediaBy
 				bold = attrBool(t, "val", true)
 			case "i":
 				italic = attrBool(t, "val", true)
+			case "tabs":
+				// <w:pPr><w:tabs> defines tab *stops*; its <w:tab> children are
+				// positions, not characters. Skip the subtree so only a run-level
+				// <w:tab/> emits one.
+				if serr := dec.Skip(); serr != nil {
+					return nil, nil, ctxerr.With(fmt.Errorf("skipping tab stops: %w", serr), nil)
+				}
 			case "hyperlink":
 				linkTarget = linkByRelID[attrNS(t, "id")]
 			case "t":

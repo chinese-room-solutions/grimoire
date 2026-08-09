@@ -281,6 +281,36 @@ func TestConvertBuiltParity(t *testing.T) {
 	}
 }
 
+// TestConvertBuiltDocx covers docx-only markup quirks that have no .odt
+// counterpart.
+func TestConvertBuiltDocx(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "tab stop definitions emit no tabs",
+			body: docxP("", `<w:r><w:t>intro</w:t></w:r>`) +
+				docxP(`<w:tabs><w:tab w:val="left" w:pos="720"/><w:tab w:val="left" w:pos="1440"/></w:tabs>`,
+					`<w:r><w:t>hello</w:t></w:r>`),
+			want: "intro\n\nhello\n",
+		},
+		{
+			name: "run-level tab still emits a tab",
+			body: docxP("", `<w:r><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r>`),
+			want: "a\tb\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := Convert("built.docx", docxZip(t, tt.body, nil))
+			require.NoError(t, err)
+			require.Equal(t, tt.want, res.Markdown)
+		})
+	}
+}
+
 // TestConvertMalformedArchives covers the archive-level error paths for both
 // formats: bytes that aren't a zip, a truncated zip (the central directory at
 // the tail is gone), and a well-formed zip missing the body entry.
