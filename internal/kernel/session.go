@@ -37,6 +37,9 @@ type Session struct {
 	done   chan struct{}   // closed on kill/Close; unblocks the reader's sends.
 	stop   sync.Once       // guards closing done.
 
+	closeOnce sync.Once // teardown runs once, however many closers race.
+	closeErr  error
+
 	runMu  sync.Mutex
 	nextID int
 }
@@ -174,7 +177,15 @@ var closeWait = 5 * time.Second
 // Close ends the kernel: closing stdin makes a well-behaved runner's read loop
 // hit EOF and exit; the process is then reaped, with a deadline — a kernel that
 // ignores EOF (e.g. a block left something blocking) is killed after closeWait.
+// Teardown runs once — cmd.Wait must not be called twice on one process — and
+// every caller gets the first close's result.
 func (s *Session) Close() error {
+	s.closeOnce.Do(func() { s.closeErr = s.teardown() })
+	return s.closeErr
+}
+
+// teardown is Close's body, run under closeOnce.
+func (s *Session) teardown() error {
 	s.stop.Do(func() { close(s.done) })
 	if s.stdin != nil {
 		_ = s.stdin.Close()
@@ -321,16 +332,23 @@ func (m *Manager) session(noteKey string, man *Manifest) (*Session, error) {
 	return s, nil
 }
 
-// drop removes and closes a note's session if it's still the one recorded (a
-// concurrent run may already have replaced it).
+// drop removes and closes a note's session if it's still the one recorded. When
+// it isn't — a concurrent run replaced it, or CloseNote/CloseAll took it — the
+// holder that removed it does the closing, so the session is torn down once.
 func (m *Manager) drop(noteKey string, sess *Session) {
 	m.mu.Lock()
 	cur, ok := m.sessions[noteKey]
-	if ok && cur == sess {
+	removed := ok && cur == sess
+	if removed {
 		delete(m.sessions, noteKey)
 	}
 	m.mu.Unlock()
-	_ = sess.Close()
+	if !removed {
+		return
+	}
+	if err := sess.Close(); err != nil {
+		m.logger.Warn().Err(err).Str("session", noteKey).Msg("closing dead kernel session")
+	}
 }
 
 // CloseNote ends and forgets every kernel session for a note (called when its

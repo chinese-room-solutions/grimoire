@@ -3,6 +3,8 @@ package kernel
 import (
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -29,6 +31,47 @@ func TestManagerCloseNoteClosesAllItsKernels(t *testing.T) {
 	require.NotContains(t, m.sessions, sessionKey("a.md", "go-1.22"))
 	require.NotContains(t, m.sessions, sessionKey("a.md", "go-1.21"))
 	require.Contains(t, m.sessions, sessionKey("b.md", "go-1.22"), "another note's session is left alone")
+}
+
+// countingStdin counts teardowns: Session.Close closes stdin exactly once per
+// session, so the count is how many times the close body ran.
+type countingStdin struct {
+	fakeStdin
+	closes atomic.Int32
+}
+
+func (c *countingStdin) Close() error {
+	c.closes.Add(1)
+	return nil
+}
+
+// TestManagerDropAndCloseNoteCloseOnce is the double-close race: drop and
+// CloseNote both hold the same session, but only one of them removes it from the
+// map, and Session.Close is idempotent — so the teardown (cmd.Wait on a real
+// kernel) runs exactly once.
+func TestManagerDropAndCloseNoteCloseOnce(t *testing.T) {
+	m := NewManager(regOf(), zerolog.Nop())
+	in := &countingStdin{}
+	sess := newSession(nil, in, io.NopCloser(strings.NewReader("")))
+	key := sessionKey("a.md", "bash@5")
+	m.sessions[key] = sess
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); m.CloseNote("a.md") }()
+	go func() { defer wg.Done(); m.drop(key, sess) }()
+	wg.Wait()
+
+	require.Equal(t, int32(1), in.closes.Load(), "the session was torn down once")
+	require.NotContains(t, m.sessions, key)
+}
+
+func TestSessionCloseIsIdempotent(t *testing.T) {
+	in := &countingStdin{}
+	sess := newSession(nil, in, io.NopCloser(strings.NewReader("")))
+	require.NoError(t, sess.Close())
+	require.NoError(t, sess.Close())
+	require.Equal(t, int32(1), in.closes.Load())
 }
 
 func TestSessionKeyDistinguishesKernels(t *testing.T) {
