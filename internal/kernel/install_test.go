@@ -71,6 +71,19 @@ func TestInstallArchiveExtractsSharedKernel(t *testing.T) {
 	require.Equal(t, "go", entries[0].Name())
 }
 
+// TestInstallArchiveUnderGlobMetaPath installs into a directory whose name holds
+// a glob metacharacter — a vault under "notes [wip]" is ordinary — which used to
+// hide the package's manifest and fail the install.
+func TestInstallArchiveUnderGlobMetaPath(t *testing.T) {
+	shared := filepath.Join(t.TempDir(), "notes [wip]", "kernels")
+	require.NoError(t, os.MkdirAll(shared, 0o755))
+
+	m, err := InstallArchive(shared, "go", "1.26", goKernelZip(t))
+	require.NoError(t, err)
+	require.Equal(t, "go@1.26", m.Name())
+	require.FileExists(t, filepath.Join(shared, "go", "1.26", "go.kernel.yaml"))
+}
+
 func TestInstallArchiveRejectsUnsafeEntries(t *testing.T) {
 	tests := []struct {
 		name    string

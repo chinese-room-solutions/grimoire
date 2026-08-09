@@ -64,6 +64,22 @@ func TestNewRegistryOverwritesBuiltinButKeepsUserKernel(t *testing.T) {
 	require.Equal(t, "3.2", r.Version)
 }
 
+// TestNewRegistryUnderGlobMetaPath scans a vault whose path holds a glob
+// metacharacter ("notes [wip]"): its kernels must still be discovered.
+func TestNewRegistryUnderGlobMetaPath(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "notes [wip]")
+	require.NoError(t, os.MkdirAll(configDir, 0o755))
+	writeKernel(t, filepath.Join(configDir, "kernels"), "go", "1.26", "go")
+
+	reg, err := NewRegistry(configDir, "", zerolog.Nop())
+	require.NoError(t, err)
+	m, ok := reg.Lookup("go")
+	require.True(t, ok)
+	require.Equal(t, "go@1.26", m.Name())
+	_, ok = reg.Lookup("bash") // the materialized builtin is found there too.
+	require.True(t, ok)
+}
+
 // TestNewRegistrySharedDir proves the app-level shared dir is scanned in
 // addition to the per-vault dir, with per-vault entries winning on a
 // family/version collision and sources stamped per origin.
