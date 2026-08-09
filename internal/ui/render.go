@@ -67,6 +67,108 @@ const NoteLinkScheme = "grimoire-note:"
 // wikilink matches Obsidian-style [[Target]] and [[Target|Alias]] references.
 var wikilink = regexp.MustCompile(`\[\[([^\]|]+)(?:\|([^\]]+))?\]\]`)
 
+// rewriteWikilinks turns [[Target]] and [[Target|Alias]] into Markdown links to
+// the note scheme, skipping code: `[[ -f x ]]` in a bash fence or [[nodiscard]]
+// in a code span is code, not a link, and rewriting it would change what the
+// block displays, runs, and hashes.
+func rewriteWikilinks(source string) string {
+	if !strings.Contains(source, "[[") {
+		return source
+	}
+	segs, err := codeSegments(source)
+	if err != nil {
+		// Without the code ranges a rewrite would mangle code, so leave the note as
+		// written: its wikilinks stay literal, which beats broken blocks.
+		return source
+	}
+	var b strings.Builder
+	prev := 0
+	for _, seg := range segs {
+		if seg.start < prev {
+			continue
+		}
+		b.WriteString(wikilink.ReplaceAllStringFunc(source[prev:seg.start], noteLink))
+		b.WriteString(source[seg.start:seg.stop])
+		prev = seg.stop
+	}
+	b.WriteString(wikilink.ReplaceAllStringFunc(source[prev:], noteLink))
+	return b.String()
+}
+
+// noteLink renders one matched wikilink as a Markdown link. The URL is
+// percent-encoded so spaces in note names don't break parsing; the click handler
+// decodes it.
+func noteLink(m string) string {
+	g := wikilink.FindStringSubmatch(m)
+	target, alias := strings.TrimSpace(g[1]), strings.TrimSpace(g[2])
+	if alias == "" {
+		alias = target
+	}
+	return "[" + alias + "](" + NoteLinkScheme + url.PathEscape(target) + ")"
+}
+
+// srcSegment is a half-open byte range of a note's source.
+type srcSegment struct{ start, stop int }
+
+// codeSegments returns the source ranges that hold code — fenced and indented
+// blocks, and inline code spans — in document order. It parses with the renderer's
+// own parser, so what counts as code here is what the reader will see as code.
+func codeSegments(source string) ([]srcSegment, error) {
+	src := []byte(source)
+	doc := md.Parser().Parse(text.NewReader(src))
+	var out []srcSegment
+	err := ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		var seg srcSegment
+		var ok bool
+		switch n.(type) {
+		case *ast.FencedCodeBlock, *ast.CodeBlock:
+			seg, ok = linesSegment(n.Lines())
+		case *ast.CodeSpan:
+			seg, ok = childrenSegment(n)
+		}
+		if ok {
+			out = append(out, seg)
+		}
+		return ast.WalkContinue, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walking the note for code ranges: %w", err)
+	}
+	return out, nil
+}
+
+// linesSegment spans a block node's source lines, from the first line's start to
+// the last line's end.
+func linesSegment(lines *text.Segments) (srcSegment, bool) {
+	if lines == nil || lines.Len() == 0 {
+		return srcSegment{}, false
+	}
+	return srcSegment{lines.At(0).Start, lines.At(lines.Len() - 1).Stop}, true
+}
+
+// childrenSegment spans an inline node's text children, which is where a code
+// span keeps its content (the backticks themselves are not in the AST).
+func childrenSegment(n ast.Node) (srcSegment, bool) {
+	seg, ok := srcSegment{}, false
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		t, isText := c.(*ast.Text)
+		if !isText {
+			continue
+		}
+		if !ok || t.Segment.Start < seg.start {
+			seg.start = t.Segment.Start
+		}
+		if !ok || t.Segment.Stop > seg.stop {
+			seg.stop = t.Segment.Stop
+		}
+		ok = true
+	}
+	return seg, ok
+}
+
 // Property is a frontmatter key and its value(s) for the properties panel.
 type Property = frontmatter.Property
 
@@ -113,21 +215,11 @@ func RenderNoteBody(source, notePath string) string {
 // into in-vault links first, and wraps code blocks (run buttons, kernel badges,
 // and — when notePath is set — cached run output).
 func renderBody(source, notePath string) string {
-	source = wikilink.ReplaceAllStringFunc(source, func(m string) string {
-		g := wikilink.FindStringSubmatch(m)
-		target, alias := strings.TrimSpace(g[1]), strings.TrimSpace(g[2])
-		if alias == "" {
-			alias = target
-		}
-		// Emit a normal Markdown link. The URL is percent-encoded so spaces in
-		// note names don't break parsing; the click handler decodes it.
-		return "[" + alias + "](" + NoteLinkScheme + url.PathEscape(target) + ")"
-	})
-
 	// Per-block data recovered from the source (chroma drops it from the rendered
 	// HTML): the {kernel=FAMILY}{version=VER} override and the block's raw source.
 	// Overrides are only needed when one is actually present; sources only when a
-	// note path lets us look up cached output.
+	// note path lets us look up cached output. Both read the note as written, so a
+	// block's source hashes to the same key the app stores it under.
 	var overrides []blockFence
 	var sources []string
 	if strings.Contains(source, "{kernel=") || strings.Contains(source, "{version=") {
@@ -138,7 +230,7 @@ func renderBody(source, notePath string) string {
 	}
 
 	var buf bytes.Buffer
-	if err := md.Convert([]byte(source), &buf); err != nil {
+	if err := md.Convert([]byte(rewriteWikilinks(source)), &buf); err != nil {
 		// Fall back to the raw text rather than failing the preview.
 		return "<pre>" + strings.ReplaceAll(source, "<", "&lt;") + "</pre>"
 	}

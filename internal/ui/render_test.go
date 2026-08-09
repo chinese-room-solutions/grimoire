@@ -99,6 +99,82 @@ func TestRenderMarkdown(t *testing.T) {
 	}
 }
 
+func TestWikilinksSkipCode(t *testing.T) {
+	// [[…]] is a link in prose and code in code: a bash test, a C++ attribute. The
+	// rewrite happens before parsing, so it must skip every code range or the block
+	// shows — and runs, and hashes — text the author never wrote.
+	// Prose links either side of a fenced block whose code looks like a wikilink.
+	const mixed = "see [[A]]\n\n```bash\n[[ -f x ]]\n```\n\nand [[B]]\n"
+	tests := []struct {
+		name, in string
+		contains []string
+		absent   []string
+	}{
+		{
+			"prose wikilink is rewritten",
+			"see [[My Note]]",
+			[]string{`href="` + NoteLinkScheme + `My%20Note"`, ">My Note</a>"},
+			nil,
+		},
+		{
+			"wikilink in a fenced block is left alone",
+			"```bash\nif [[ -f x ]]; then echo hi; fi\n```",
+			[]string{"[[", "]]"},
+			[]string{NoteLinkScheme},
+		},
+		{
+			"wikilink in an inline code span is left alone",
+			"attribute `[[nodiscard]]` applies",
+			[]string{"<code>[[nodiscard]]</code>"},
+			[]string{NoteLinkScheme},
+		},
+		{
+			"wikilink in an indented block is left alone",
+			"para\n\n    [[nodiscard]] int f();\n",
+			[]string{"[[nodiscard]] int f();"},
+			[]string{NoteLinkScheme},
+		},
+		{
+			// Highlighting splits the code into spans, so the block is checked by what
+			// it must not become: a link. Both prose links are still rewritten.
+			"prose around a fenced block is still rewritten",
+			mixed,
+			[]string{`href="` + NoteLinkScheme + `A"`, `href="` + NoteLinkScheme + `B"`, "-f x"},
+			nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out := RenderMarkdown(tc.in)
+			for _, want := range tc.contains {
+				require.Contains(t, out, want)
+			}
+			for _, no := range tc.absent {
+				require.NotContains(t, out, no)
+			}
+		})
+	}
+	require.Equal(t, 2, strings.Count(RenderMarkdown(mixed), NoteLinkScheme),
+		"only the two prose wikilinks become links")
+}
+
+func TestBlockSourcesKeepRawCode(t *testing.T) {
+	// The re-hydration key is the block's raw source: the loader must be asked for
+	// the code as written, not a wikilink-rewritten copy of it, or the key never
+	// matches what the app stored.
+	stubKernelResolver(t)
+	var asked []string
+	prev := RunResultLoader
+	t.Cleanup(func() { RunResultLoader = prev })
+	RunResultLoader = func(_, code string) (RunResult, bool) {
+		asked = append(asked, code)
+		return RunResult{}, false
+	}
+
+	RenderNoteBody("```bash\nif [[ -f x ]]; then echo hi; fi\n```\n", "n.md")
+	require.Equal(t, []string{"if [[ -f x ]]; then echo hi; fi\n"}, asked)
+}
+
 func TestWrapCodeBlocks(t *testing.T) {
 	tests := []struct {
 		name, in string
