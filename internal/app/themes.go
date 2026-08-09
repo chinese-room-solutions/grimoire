@@ -35,11 +35,6 @@ const maxThemeBytes = 1 << 20
 // theme package (or no requested version with an artifact) by that name.
 var ErrThemePackageUnknown = errors.New("no such theme package")
 
-// SetThemeRegistryURL sets the theme package index URL. Called once right
-// after New, before the service takes requests (theme installs stay disabled
-// while empty).
-func (s *Service) SetThemeRegistryURL(url string) { s.themeRegistryURL = url }
-
 // ThemePackage is one installable theme package from the registry index: its
 // package name, the theme id it installs as, and the version an unqualified
 // install picks (the newest listed with an "any" artifact — the index appends
@@ -57,7 +52,7 @@ type ThemePackage struct {
 // ThemePackages lists the theme packages the registry index offers, with the
 // same staleness/degrade contract as KernelPackages.
 func (s *Service) ThemePackages(ctx context.Context) (pkgs []ThemePackage, stale bool, err error) {
-	idx, stale, err := s.fetchIndex(ctx, s.themeRegistryURL)
+	idx, stale, err := s.fetchIndex(ctx, s.shared.themeRegistryURL)
 	if err != nil {
 		return nil, false, err
 	}
@@ -83,7 +78,7 @@ func (s *Service) ThemePackages(ctx context.Context) (pkgs []ThemePackage, stale
 // immediately. Installing an already-installed theme overwrites it (the update
 // path). version "" picks the newest listed.
 func (s *Service) InstallTheme(ctx context.Context, name, version string) (uikit.ThemeInfo, error) {
-	idx, _, err := s.fetchIndex(ctx, s.themeRegistryURL)
+	idx, _, err := s.fetchIndex(ctx, s.shared.themeRegistryURL)
 	if err != nil {
 		return uikit.ThemeInfo{}, err
 	}

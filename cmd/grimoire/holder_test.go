@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/chinese-room-solutions/grimoire/internal/app"
 	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
@@ -23,7 +24,24 @@ func newTestHolder(t *testing.T, port int) *serviceHolder {
 	t.Setenv("HOME", cache)
 	t.Setenv("AppData", cache)
 	t.Setenv("XDG_CONFIG_HOME", cache)
-	return &serviceHolder{logger: zerolog.Nop(), port: port}
+	return &serviceHolder{logger: zerolog.Nop(), shared: testShared(t), port: port}
+}
+
+// testShared builds process-wide app state for a test: no gateway client, a
+// temp app dir, no registries.
+func testShared(t *testing.T) *app.Shared {
+	t.Helper()
+	return testSharedWith(t, "", "")
+}
+
+// testSharedWith is testShared with the shared kernels dir and theme registry a
+// test cares about.
+func testSharedWith(t *testing.T, kernelsDir, themeRegistryURL string) *app.Shared {
+	t.Helper()
+	sh, err := app.NewShared(nil, t.TempDir(), kernelsDir, "", themeRegistryURL, zerolog.Nop())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sh.Close()) })
+	return sh
 }
 
 // tempVault makes an empty vault folder and returns its path.

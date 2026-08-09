@@ -13,12 +13,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testShared builds process-wide app state for a test: no gateway client, a
+// temp app dir, no registries.
+func testShared(t *testing.T) *app.Shared {
+	t.Helper()
+	sh, err := app.NewShared(nil, t.TempDir(), "", "", "", zerolog.Nop())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sh.Close()) })
+	return sh
+}
+
 // newAPI builds an API over a service bound to vault, with no gateway client —
 // enough for the read ops that don't embed (GetNote, ListVault, ResolveLink).
 // Search needs a real embedder and is covered by the app package's tests.
 func newAPI(t *testing.T, vault string) *API {
 	t.Helper()
-	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
+	svc := app.New(testShared(t), t.TempDir(), t.TempDir(), vault, zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	return NewStatic(svc)
 }

@@ -1,17 +1,16 @@
 // Package vaultdir resolves the per-vault directories that hold a vault's own
-// config, session history, UI state (durable data) and its vector index (a
+// config, saved run output, UI state (durable data) and its vector index (a
 // derived cache).
 //
 // Durable data lives under the user config root (<config>/grimoire): the OS may
-// purge the cache dir at any time, and search history or saved run output must
-// survive that. Only the vector index — rebuildable from the vault — stays under
+// purge the cache dir at any time, and saved run output must survive that. Only the vector index — rebuildable from the vault — stays under
 // the user cache root (<cache>/grimoire). Each vault gets an isolated directory
 // under <root>/vaults/<hash> on both sides; the hash is derived from the
 // absolute vault path, so the same vault always maps to the same dir and
 // distinct vaults never collide. A single last-vault pointer file at the config
 // root records which vault a no-argument launch should reopen. App-wide state
-// that isn't tied to any one vault (the log file, the shared theme/log-level
-// config) lives under AppDir.
+// that isn't tied to any one vault (the log file, the search history, the
+// shared theme/log-level config) lives under AppDir.
 //
 // Earlier builds kept everything under the cache root; a cheap one-time
 // migration moves the durable pieces to the config root on first touch.
@@ -183,8 +182,8 @@ func KernelsDir() (string, error) {
 	return dir, nil
 }
 
-// For returns the durable data directory for the given vault (sessions, saved
-// run output, UI state, the vault config), creating it if needed. The vault path
+// For returns the durable data directory for the given vault (saved run output,
+// UI state, the vault config), creating it if needed. The vault path
 // is cleaned to an absolute path first so equivalent spellings map to the same
 // directory. An empty vault path is rejected.
 func For(vault string) (string, error) {

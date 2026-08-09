@@ -100,7 +100,7 @@ func (s *Service) KernelPackages(ctx context.Context) (pkgs []KernelPackage, sta
 // artifact. The kernel registry is reloaded on success, so the kernel resolves
 // immediately — no backend restart. Returns the installed kernel's manifest.
 func (s *Service) InstallKernel(ctx context.Context, name, version string) (*kernel.Manifest, error) {
-	if s.sharedKernels == "" {
+	if s.shared.sharedKernels == "" {
 		return nil, fmt.Errorf("%w: no shared kernels dir", ErrRegistryUnavailable)
 	}
 	idx, _, err := s.fetchRegistryIndex(ctx)
@@ -132,13 +132,14 @@ func (s *Service) InstallKernel(ctx context.Context, name, version string) (*ker
 			map[string]any{"package": pkg.Name, "url": artifact.URL})
 	}
 
-	s.kernelMu.Lock()
-	defer s.kernelMu.Unlock()
-	m, err := kernel.InstallArchive(s.sharedKernels, family, version, zipPath)
+	s.shared.kernelMu.Lock()
+	defer s.shared.kernelMu.Unlock()
+	m, err := kernel.InstallArchive(s.shared.sharedKernels, family, version, zipPath)
 	if err != nil {
 		return nil, err
 	}
 	s.reloadKernels()
+	s.shared.kernelsChanged()
 	return m, nil
 }
 
@@ -146,18 +147,19 @@ func (s *Service) InstallKernel(ctx context.Context, name, version string) (*ker
 // and reloads the kernel registry. Builtins and vault-dir kernels are refused
 // (kernel.ErrKernelBuiltin / kernel.ErrKernelVaultManaged).
 func (s *Service) RemoveKernel(family, version string) error {
-	s.kernelMu.Lock()
-	defer s.kernelMu.Unlock()
-	if err := kernel.Remove(s.sharedKernels, kernel.VaultKernelsDir(s.configDir), family, version); err != nil {
+	s.shared.kernelMu.Lock()
+	defer s.shared.kernelMu.Unlock()
+	if err := kernel.Remove(s.shared.sharedKernels, kernel.VaultKernelsDir(s.configDir), family, version); err != nil {
 		return err
 	}
 	s.reloadKernels()
+	s.shared.kernelsChanged()
 	return nil
 }
 
 // fetchRegistryIndex fetches the kernel package index.
 func (s *Service) fetchRegistryIndex(ctx context.Context) (idx *registry.Index, stale bool, err error) {
-	return s.fetchIndex(ctx, s.registryURL)
+	return s.fetchIndex(ctx, s.shared.registryURL)
 }
 
 // fetchIndex fetches a package index through the SDK client (ETag cache under
@@ -239,14 +241,14 @@ func (s *Service) kernelManager() *kernel.Manager {
 // reloadKernels rebuilds the kernel registry from both kernels dirs and swaps
 // it into the live manager, so an install or remove takes effect without a
 // backend restart — the invalidation counterpart of the resolve cache. Caller
-// holds kernelMu. When kernel discovery failed at startup there is no manager
+// holds Shared.kernelMu. When kernel discovery failed at startup there is no manager
 // to swap into; the shared dir still changed, so the next start picks it up.
 func (s *Service) reloadKernels() {
 	m := s.kernelManager()
 	if m == nil {
 		return
 	}
-	reg, err := kernel.NewRegistry(s.configDir, s.sharedKernels, s.logger)
+	reg, err := kernel.NewRegistry(s.configDir, s.shared.sharedKernels, s.logger)
 	if err != nil {
 		s.logger.Warn().Err(err).Msg("reloading kernels after install/remove; keeping the previous set")
 		return

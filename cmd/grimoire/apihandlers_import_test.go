@@ -57,7 +57,7 @@ func decodeImport(t *testing.T, rec *httptest.ResponseRecorder) []grimoireapi.Im
 // the indexing failure after the write doesn't fail the import.
 func TestAPIImportBatchPartialFailure(t *testing.T) {
 	vault := t.TempDir()
-	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
+	svc := app.New(testShared(t), t.TempDir(), t.TempDir(), vault, zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	mux := http.NewServeMux()
 	mountAPI(mux, grimoireapi.NewStatic(svc), zerolog.Nop())

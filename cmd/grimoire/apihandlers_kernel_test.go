@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/chinese-room-solutions/grimoire/internal/app"
@@ -110,20 +111,32 @@ func (s *registryStub) url() string { return s.srv.URL + "/index.yml" }
 // kernelTestEnv is a backend wired to a stub registry: the mounted API mux plus
 // the dirs and service the assertions inspect.
 type kernelTestEnv struct {
-	mux       *http.ServeMux
-	svc       *app.Service
-	shared    string // the shared kernels dir installs land in.
-	configDir string // the vault's data dir (its kernels subdir is the vault override).
+	mux        *http.ServeMux
+	svc        *app.Service
+	kernelsDir string       // the shared kernels dir installs land in.
+	configDir  string       // the vault's data dir (its kernels subdir is the vault override).
+	changed    atomic.Int64 // times the shared state's onKernelsChanged hook fired.
 }
 
 func newKernelEnv(t *testing.T, registryURL string) *kernelTestEnv {
 	t.Helper()
-	env := &kernelTestEnv{shared: t.TempDir(), configDir: t.TempDir()}
-	env.svc = app.New(nil, env.configDir, t.TempDir(), t.TempDir(), env.shared, registryURL, zerolog.Nop())
+	env := &kernelTestEnv{kernelsDir: t.TempDir(), configDir: t.TempDir()}
+	env.svc = app.New(env.newShared(t, registryURL), env.configDir, t.TempDir(), t.TempDir(), zerolog.Nop())
 	t.Cleanup(func() { _ = env.svc.Close() })
 	env.mux = http.NewServeMux()
 	mountAPI(env.mux, grimoireapi.NewStatic(env.svc), zerolog.Nop())
 	return env
+}
+
+// newShared builds the process-wide state the env's service runs over, counting
+// the kernels-changed notifications the daemon would fan out to other vaults.
+func (env *kernelTestEnv) newShared(t *testing.T, registryURL string) *app.Shared {
+	t.Helper()
+	sh, err := app.NewShared(nil, t.TempDir(), env.kernelsDir, registryURL, "", zerolog.Nop())
+	require.NoError(t, err)
+	sh.SetOnKernelsChanged(func() { env.changed.Add(1) })
+	t.Cleanup(func() { require.NoError(t, sh.Close()) })
+	return sh
 }
 
 func decodeKernelList(t *testing.T, rec *httptest.ResponseRecorder) grimoireapi.KernelListResult {
@@ -170,7 +183,8 @@ func TestAPIKernelInstallListRemoveRoundtrip(t *testing.T) {
 	require.Equal(t, "go", installed.Family)
 	require.Equal(t, "1.26", installed.Version)
 	require.Equal(t, "shared", installed.Source)
-	require.FileExists(t, filepath.Join(env.shared, "go", "1.26", "go.kernel.yaml"))
+	require.FileExists(t, filepath.Join(env.kernelsDir, "go", "1.26", "go.kernel.yaml"))
+	require.Equal(t, int64(1), env.changed.Load(), "the shared kernels dir changed; the daemon is told once")
 
 	// Usable immediately — the live registry was reloaded, no backend restart.
 	label, version, ok := env.svc.KernelInfo("go", "", "")
@@ -189,9 +203,10 @@ func TestAPIKernelInstallListRemoveRoundtrip(t *testing.T) {
 	rec = doJSON(t, env.mux, http.MethodPost, "/api/v1/kernel/remove",
 		map[string]any{"family": "go", "version": "1.26"})
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.NoDirExists(t, filepath.Join(env.shared, "go"))
+	require.NoDirExists(t, filepath.Join(env.kernelsDir, "go"))
 	_, _, ok = env.svc.KernelInfo("go", "", "")
 	require.False(t, ok, "removed kernel must stop resolving without a restart")
+	require.Equal(t, int64(2), env.changed.Load(), "a remove notifies the daemon too")
 }
 
 // TestAPIKernelInstallPicksNewestVersion: with no version in the request, the
@@ -230,7 +245,7 @@ func TestAPIKernelInstallPicksNewestVersion(t *testing.T) {
 	rec = doJSON(t, env.mux, http.MethodPost, "/api/v1/kernel/install",
 		map[string]any{"name": "grimoire-kernel-go", "version": "1.9"})
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.DirExists(t, filepath.Join(env.shared, "go", "1.9"))
+	require.DirExists(t, filepath.Join(env.kernelsDir, "go", "1.9"))
 }
 
 func sha256Hex(data []byte) string {
@@ -279,8 +294,8 @@ func TestAPIKernelInstallRejectsSlippingArchive(t *testing.T) {
 	rec := doJSON(t, env.mux, http.MethodPost, "/api/v1/kernel/install",
 		map[string]any{"name": "grimoire-kernel-go"})
 	require.Equal(t, http.StatusBadGateway, rec.Code, rec.Body.String())
-	require.NoDirExists(t, filepath.Join(env.shared, "go"))
-	require.NoFileExists(t, filepath.Join(filepath.Dir(env.shared), "evil.sh"))
+	require.NoDirExists(t, filepath.Join(env.kernelsDir, "go"))
+	require.NoFileExists(t, filepath.Join(filepath.Dir(env.kernelsDir), "evil.sh"))
 }
 
 // TestAPIKernelListOfflineDegrade: an unreachable registry must not break the
@@ -336,8 +351,8 @@ func TestAPIKernelListVaultShadowsShared(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(vaultCopy, "go.kernel.yaml"),
 		[]byte("language: VaultGo\ndisplay_name: VaultGo\nmatch: [go]\nrunner: run.sh\ncommand: {default: {exe: sh}}\n"), 0o644))
 
-	env := &kernelTestEnv{shared: t.TempDir(), configDir: configDir}
-	env.svc = app.New(nil, configDir, t.TempDir(), t.TempDir(), env.shared, reg.url(), zerolog.Nop())
+	env := &kernelTestEnv{kernelsDir: t.TempDir(), configDir: configDir}
+	env.svc = app.New(env.newShared(t, reg.url()), configDir, t.TempDir(), t.TempDir(), zerolog.Nop())
 	t.Cleanup(func() { _ = env.svc.Close() })
 	env.mux = http.NewServeMux()
 	mountAPI(env.mux, grimoireapi.NewStatic(env.svc), zerolog.Nop())

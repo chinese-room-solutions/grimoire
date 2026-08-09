@@ -89,15 +89,6 @@ func startBackend(logger zerolog.Logger, vault string, idleTimeout time.Duration
 		logger.Warn().Err(err).Msg("applying stored connection; using defaults")
 	}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		if closeLog != nil {
-			closeLog()
-		}
-		return nil, fmt.Errorf("opening local listener: %w", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-
 	// The shared kernels dir spans every vault; a failure to create it degrades
 	// to per-vault kernels only, it never blocks startup.
 	sharedKernels, err := vaultdir.KernelsDir()
@@ -109,11 +100,31 @@ func startBackend(logger zerolog.Logger, vault string, idleTimeout time.Duration
 	// grimoire.json next to the SDK's config.json), defaulting to the public
 	// grimoire-registry — resolved once at startup, like MASS does.
 	appCfg := appconfig.LoadApp(appDir)
-	holder := &serviceHolder{
-		logger: logger, client: client, port: port,
-		sharedKernels: sharedKernels, registryURL: appCfg.RegistryURLOrDefault(),
-		themeRegistryURL: appCfg.ThemeRegistryURLOrDefault(),
+	// Everything the process owns regardless of which vaults are open: the
+	// gateway client and its embed budget, the PDF renderer, the kernel and theme
+	// registries, and the cross-vault search history.
+	shared, err := grimoireapp.NewShared(client, appDir, sharedKernels,
+		appCfg.RegistryURLOrDefault(), appCfg.ThemeRegistryURLOrDefault(), logger)
+	if err != nil {
+		if closeLog != nil {
+			closeLog()
+		}
+		return nil, fmt.Errorf("preparing shared state: %w", err)
 	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		if cerr := shared.Close(); cerr != nil {
+			logger.Warn().Err(cerr).Msg("closing shared state")
+		}
+		if closeLog != nil {
+			closeLog()
+		}
+		return nil, fmt.Errorf("opening local listener: %w", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	holder := &serviceHolder{logger: logger, shared: shared, port: port}
 	settings := masgui.NewSettings(appDir, logger)
 
 	// The GUI routes depend on the bound vault, so they are rebuilt on every swap;
@@ -207,6 +218,9 @@ func startBackend(logger zerolog.Logger, vault string, idleTimeout time.Duration
 			_ = server.Shutdown(shutdownCtx)
 			<-done // wait for Serve to return.
 			holder.close()
+			if err := shared.Close(); err != nil {
+				logger.Warn().Err(err).Msg("closing shared state")
+			}
 			if closeLog != nil {
 				closeLog()
 			}

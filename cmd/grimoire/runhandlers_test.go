@@ -18,7 +18,7 @@ import (
 // bound to a fresh temp vault and config dir (so kernels materialize there).
 func newRunMux(t *testing.T) *http.ServeMux {
 	t.Helper()
-	svc := app.New(nil, t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), "", zerolog.Nop())
+	svc := app.New(testShared(t), t.TempDir(), t.TempDir(), t.TempDir(), zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /action/run-block", runBlockHandler(svc, zerolog.Nop()))
@@ -75,7 +75,7 @@ func TestRunBlockBash(t *testing.T) {
 // when the note changed, and leaves the view alone when nothing did.
 func TestRunSaveAllPatchesPreviewOnlyOnChange(t *testing.T) {
 	vault := t.TempDir()
-	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
+	svc := app.New(testShared(t), t.TempDir(), t.TempDir(), vault, zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, os.WriteFile(filepath.Join(vault, "n.md"), []byte("# n\n"), 0o600))
 	mux := http.NewServeMux()
@@ -105,7 +105,7 @@ func TestCloseNoteReturns204(t *testing.T) {
 // (unsaved) runs along with its kernel session, so a stale unsaved result can't
 // silently reattach when the note is reopened.
 func TestCloseNoteDropsPendingRuns(t *testing.T) {
-	svc := app.New(nil, t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), "", zerolog.Nop())
+	svc := app.New(testShared(t), t.TempDir(), t.TempDir(), t.TempDir(), zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/note/close", closeNoteHandler(svc, zerolog.Nop()))

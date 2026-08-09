@@ -29,7 +29,7 @@ func newStubAPI(t *testing.T) (*API, *stubBinding) {
 			return b.svc, nil
 		},
 		func(_ context.Context, vault string) error {
-			svc := app.New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
+			svc := app.New(testShared(t), t.TempDir(), t.TempDir(), vault, zerolog.Nop())
 			t.Cleanup(func() { _ = svc.Close() })
 			b.bound = vault
 			b.svc = svc
@@ -92,7 +92,7 @@ func TestOpenVaultRequiresPath(t *testing.T) {
 
 func TestVaultOpsUnsupportedWhenStatic(t *testing.T) {
 	// A static API has no bind/unbind hooks: the runtime vault ops report it.
-	api := NewStatic(app.New(nil, t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), "", zerolog.Nop()))
+	api := NewStatic(app.New(testShared(t), t.TempDir(), t.TempDir(), t.TempDir(), zerolog.Nop()))
 	_, err := api.OpenVault(context.Background(), "/vaults/a")
 	require.True(t, errors.Is(err, ErrSwitchUnsupported))
 	require.True(t, errors.Is(api.CloseVault(context.Background()), ErrSwitchUnsupported))

@@ -21,15 +21,11 @@ import (
 // advertises its port in each bound vault's port file so the CLI can find and
 // reuse a running instance.
 type serviceHolder struct {
-	logger           zerolog.Logger
-	client           *grimoireapp.GatewayClient // gateway client, shared across vaults (auth is gateway-scoped).
-	port             int                        // this backend's loopback port, advertised per bound vault.
-	sharedKernels    string                     // app-level kernels dir, shared across vaults ("" = unavailable).
-	registryURL      string                     // kernel package index URL (app-level config, resolved at startup).
-	themeRegistryURL string                     // theme package index URL (mass-registry; app-level config).
+	logger zerolog.Logger
+	shared *grimoireapp.Shared // daemon-wide state every binding runs over.
+	port   int                 // this backend's loopback port, advertised per bound vault.
 
-	folderPicker  func(title string) (string, bool, error) // wired from the GUI window, if any.
-	screenshotter func() ([]byte, error)
+	folderPicker func(title string) (string, bool, error) // wired from the GUI window, if any.
 
 	// rebuild re-derives the GUI routes for the new binding after every swap, so
 	// the per-vault action handlers close over the live service. Set by the backend.
@@ -74,16 +70,10 @@ func (h *serviceHolder) SetFolderPicker(fn func(title string) (string, bool, err
 	h.folderPicker = fn
 }
 
-// SetScreenshotter records the window screenshotter, applying it to the current
-// service and any later binding.
+// SetScreenshotter records the window screenshotter. The window outlives any
+// vault binding, so it lands on the shared state and every service sees it.
 func (h *serviceHolder) SetScreenshotter(fn func() ([]byte, error)) {
-	h.mu.Lock()
-	h.screenshotter = fn
-	svc := h.cur
-	h.mu.Unlock()
-	if svc != nil {
-		svc.SetScreenshotter(fn)
-	}
+	h.shared.SetScreenshotter(fn)
 }
 
 // pickFolder runs the native folder dialog, or reports false when no window is
@@ -127,13 +117,7 @@ func (h *serviceHolder) bind(ctx context.Context, vault string) error {
 		h.logger.Warn().Err(err).Msg("recording last vault")
 	}
 
-	svc := grimoireapp.New(h.client, dir, cacheDir, vault, h.sharedKernels, h.registryURL, h.logger)
-	svc.SetThemeRegistryURL(h.themeRegistryURL)
-	h.mu.Lock()
-	if h.screenshotter != nil {
-		svc.SetScreenshotter(h.screenshotter)
-	}
-	h.mu.Unlock()
+	svc := grimoireapp.New(h.shared, dir, cacheDir, vault, h.logger)
 
 	watchCtx, stopWatch := context.WithCancel(context.Background())
 	go svc.Watch(watchCtx)

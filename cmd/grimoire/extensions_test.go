@@ -50,8 +50,8 @@ packages:
 // (an empty URL means "no registry configured", the offline case).
 func newThemeAPI(t *testing.T, themeRegistry string) *grimoireapi.API {
 	t.Helper()
-	svc := app.New(nil, t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "vault"), t.TempDir(), "", zerolog.Nop())
-	svc.SetThemeRegistryURL(themeRegistry)
+	svc := app.New(testSharedWith(t, t.TempDir(), themeRegistry),
+		t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	return grimoireapi.NewStatic(svc)
 }

@@ -206,7 +206,7 @@ func TestForget(t *testing.T) {
 }
 
 // Forgetting a vault only drops it from the registry: the folder and both of its
-// Grimoire dirs survive, so reopening it restores the sessions and the index.
+// Grimoire dirs survive, so reopening it restores its data and its index.
 func TestForgetKeepsVaultDataOnDisk(t *testing.T) {
 	useTempDirs(t)
 	vault := t.TempDir()
@@ -215,12 +215,12 @@ func TestForgetKeepsVaultDataOnDisk(t *testing.T) {
 	require.NoError(t, err)
 	cacheDir, err := CacheFor(vault)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "sessions.db"), []byte("sessions"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "runs.db"), []byte("runs"), 0o600))
 
 	require.NoError(t, Forget(vault))
 
 	require.DirExists(t, vault)
-	require.FileExists(t, filepath.Join(dataDir, "sessions.db"))
+	require.FileExists(t, filepath.Join(dataDir, "runs.db"))
 	require.DirExists(t, cacheDir)
 }
 

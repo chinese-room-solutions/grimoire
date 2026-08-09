@@ -28,7 +28,7 @@ func newAPIMux(t *testing.T, notes map[string]string) *http.ServeMux {
 		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
 		require.NoError(t, os.WriteFile(full, []byte(content), 0o644))
 	}
-	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
+	svc := app.New(testShared(t), t.TempDir(), t.TempDir(), vault, zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	mux := http.NewServeMux()
 	mountAPI(mux, grimoireapi.NewStatic(svc), zerolog.Nop())
@@ -170,11 +170,12 @@ func TestAPIRestoreUnknownTrashNotFound(t *testing.T) {
 
 func TestAPIScreenshot(t *testing.T) {
 	vault := t.TempDir()
-	svc := app.New(nil, t.TempDir(), t.TempDir(), vault, t.TempDir(), "", zerolog.Nop())
+	shared := testShared(t)
+	svc := app.New(shared, t.TempDir(), t.TempDir(), vault, zerolog.Nop())
 	t.Cleanup(func() { _ = svc.Close() })
 	// A 1x1 PNG stand-in for a captured frame.
 	want := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
-	svc.SetScreenshotter(func() ([]byte, error) { return want, nil })
+	shared.SetScreenshotter(func() ([]byte, error) { return want, nil })
 
 	mux := http.NewServeMux()
 	mountAPI(mux, grimoireapi.NewStatic(svc), zerolog.Nop())

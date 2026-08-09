@@ -2,6 +2,11 @@
 // the persisted config (vault + embedding model), the vector store, and the
 // indexer, exposing the operations the GUI handlers call.
 //
+// State splits in two. A Service is one open vault — its config, index, kernels,
+// and UI state. A Shared is the process: the gateway client and its embed
+// budget, the PDF renderer, the shared kernels dir, and the search history.
+// Several Services can run over one Shared.
+//
 // The store is bound to the embedding model's dimension, so it is (re)opened
 // when the model is set. Changing the model points at a different store file
 // keyed by model id, so switching models doesn't corrupt an existing index and
@@ -83,37 +88,15 @@ const (
 	dirPerm  = 0o755
 )
 
-// Service is Grimoire's stateful core. Safe for concurrent use.
+// Service is Grimoire's stateful core, one per open vault. Safe for concurrent
+// use. Everything that belongs to the process rather than to the vault — the
+// gateway client, the embed budget, the PDF renderer, the search history — lives
+// in the Shared it points at, so several Services can run side by side.
 type Service struct {
-	client        *GatewayClient
-	configDir     string // the vault's durable data dir (config, sessions, runs, UI state).
-	cacheDir      string // the vault's cache dir: per-model index files only (purgeable).
-	sharedKernels string // the app-level kernels dir every vault shares ("" = none).
-	registryURL   string // the kernel package index (grimoire-registry index.yml); "" = installs disabled.
-
-	// themeRegistryURL is the theme package index (mass-registry index.yml —
-	// themes are shared with MASS); "" = theme installs disabled. Set once via
-	// SetThemeRegistryURL right after New, before the service takes requests.
-	themeRegistryURL string
-	logger           zerolog.Logger
-
-	// embedGate caps concurrent embed calls across every indexing path (reindex,
-	// import, watcher), sized by the IndexConcurrency setting and resized live.
-	embedGate *gate
-
-	// renderer is the long-lived PDFium (WASM) page renderer for PDF import. It
-	// is created lazily on the first PDF (its startup cost is wasted otherwise)
-	// and closed on shutdown; guarded by mu.
-	renderer *pdfconvert.Renderer
-	// pdfMu serializes PDF conversions: each is a long, vision/GPU-bound job and
-	// the gateway runs one at a time, so a multi-PDF drop must not fan out.
-	pdfMu sync.Mutex
-	// pdfCancel cancels the in-flight conversion's context, set while ConvertPDF
-	// runs (nil otherwise). CancelImport calls it so the operator can stop a long
-	// conversion directly, without waiting for the dropped HTTP connection to be
-	// noticed. Guarded by pdfCancelMu.
-	pdfCancelMu sync.Mutex
-	pdfCancel   context.CancelFunc
+	shared    *Shared
+	configDir string // the vault's durable data dir (config, runs, UI state).
+	cacheDir  string // the vault's cache dir: per-model index files only (purgeable).
+	logger    zerolog.Logger
 
 	// writeMu serializes every read-modify-write of a note file (body/frontmatter
 	// rewrites, renames, deletes, trash moves), so concurrent API/GUI edits can't
@@ -133,24 +116,17 @@ type Service struct {
 	resolveNotes []string
 	resolveGen   uint64
 
-	mu            sync.Mutex
-	cfg           appconfig.Config
-	store         *store.Store
-	embedder      *embed.Embedder
-	storeGen      uint64 // bumped each time store/embedder are replaced.
-	screenshot    func() ([]byte, error)
-	sessions      *session.Store
-	ui            *uistate.Store
-	runs          *runs.Store
-	activeSession int64 // 0 == no session selected yet.
+	mu       sync.Mutex
+	cfg      appconfig.Config
+	store    *store.Store
+	embedder *embed.Embedder
+	storeGen uint64 // bumped each time store/embedder are replaced.
+	ui       *uistate.Store
+	runs     *runs.Store
 
 	// kernels runs code blocks through pluggable, out-of-process kernels, one
 	// per note so a note's blocks share a shell session. nil if discovery failed.
 	kernels *kernel.Manager
-	// kernelMu serializes kernel installs/removes and the registry reload that
-	// follows, so two writers can't interleave on the shared kernels dir. It is
-	// never held across a registry fetch or artifact download.
-	kernelMu sync.Mutex
 
 	// pendingRuns holds blocks whose latest run hasn't been saved over the stored
 	// result, keyed by notePath\x00blockHash. A re-run of a block that already has
@@ -161,33 +137,25 @@ type Service struct {
 	pendingRuns map[string]pendingRun
 }
 
-// New builds the service for one vault. configDir is that vault's durable data
-// dir (which holds its sessions, run results, and UI state); cacheDir is where
-// its per-model vector index files live (a purgeable cache); vault is the
-// absolute path to its note folder, fixed for the service's lifetime;
-// sharedKernels is the app-level kernels dir every vault shares ("" to scan
-// none); registryURL is the resolved kernel package index ("" disables
-// registry-backed installs and listings — the caller applies the app-config
-// default, so a blank here is deliberate, e.g. in tests). The session history
-// and UI state are opened here; the index opens once a model is set.
-func New(client *GatewayClient, configDir, cacheDir, vault, sharedKernels, registryURL string, logger zerolog.Logger) *Service {
+// New builds the service for one vault over the process-wide shared state.
+// configDir is that vault's durable data dir (which holds its run results and UI
+// state); cacheDir is where its per-model vector index files live (a purgeable
+// cache); vault is the absolute path to its note folder, fixed for the service's
+// lifetime. The UI state and run results are opened here; the index opens once a
+// model is set.
+func New(shared *Shared, configDir, cacheDir, vault string, logger zerolog.Logger) *Service {
 	cfg := appconfig.Load(configDir)
 	cfg.Vault = vault // the vault is owned by the data dir, not the config file.
 	s := &Service{
-		client:        client,
-		configDir:     configDir,
-		cacheDir:      cacheDir,
-		sharedKernels: sharedKernels,
-		registryURL:   registryURL,
-		logger:        logger.With().Str("component", "app").Logger(),
-		cfg:           cfg,
+		shared:    shared,
+		configDir: configDir,
+		cacheDir:  cacheDir,
+		logger:    logger.With().Str("component", "app").Logger(),
+		cfg:       cfg,
 	}
-	s.embedGate = newGate(effectiveConcurrency(s.cfg.IndexConcurrency))
-	if sess, err := session.Open(filepath.Join(configDir, "sessions.db")); err != nil {
-		s.logger.Warn().Err(err).Msg("could not open session history; searches won't persist")
-	} else {
-		s.sessions = sess
-	}
+	// The embed budget is the gateway's, not the vault's: this vault's setting
+	// resizes the one shared gate (last vault opened wins).
+	shared.embedGate.resize(effectiveConcurrency(cfg.IndexConcurrency))
 	if ui, err := uistate.Open(filepath.Join(configDir, "uistate.db")); err != nil {
 		s.logger.Warn().Err(err).Msg("could not open UI state; tabs won't be restored")
 	} else {
@@ -198,7 +166,7 @@ func New(client *GatewayClient, configDir, cacheDir, vault, sharedKernels, regis
 	} else {
 		s.runs = rr
 	}
-	if reg, err := kernel.NewRegistry(configDir, sharedKernels, s.logger); err != nil {
+	if reg, err := kernel.NewRegistry(configDir, shared.sharedKernels, s.logger); err != nil {
 		s.logger.Warn().Err(err).Msg("could not load code-block kernels; running blocks disabled")
 	} else {
 		s.kernels = kernel.NewManager(reg, s.logger)
@@ -206,18 +174,14 @@ func New(client *GatewayClient, configDir, cacheDir, vault, sharedKernels, regis
 	return s
 }
 
-// Close releases the store and session history.
+// Close releases this vault's stores. The process-wide state it borrows (the
+// search history, the PDF renderer) belongs to Shared and outlives the service.
 func (s *Service) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var firstErr error
 	if s.store != nil {
 		if err := s.store.Close(); err != nil {
-			firstErr = err
-		}
-	}
-	if s.sessions != nil {
-		if err := s.sessions.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -228,11 +192,6 @@ func (s *Service) Close() error {
 	}
 	if s.runs != nil {
 		if err := s.runs.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if s.renderer != nil {
-		if err := s.renderer.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -251,22 +210,12 @@ func (s *Service) Config() appconfig.Config {
 	return s.cfg
 }
 
-// SetScreenshotter installs the native window-capture function (wired from the
-// webview window after it opens). Without it, Screenshot returns
-// ErrNoScreenshot.
-func (s *Service) SetScreenshotter(fn func() ([]byte, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.screenshot = fn
-}
-
 // Screenshot captures the app window's rendered UI as PNG bytes, for a local
-// agent to see what the user sees. Returns ErrNoScreenshot when no capture
-// backend is wired (headless or browser fallback).
+// agent to see what the user sees. The window is process-wide (Shared owns the
+// capture function). Returns ErrNoScreenshot when no capture backend is wired
+// (headless or browser fallback).
 func (s *Service) Screenshot() ([]byte, error) {
-	s.mu.Lock()
-	fn := s.screenshot
-	s.mu.Unlock()
+	fn := s.shared.screenshotter()
 	if fn == nil {
 		return nil, ErrNoScreenshot
 	}
@@ -275,7 +224,8 @@ func (s *Service) Screenshot() ([]byte, error) {
 
 // SetIndexConcurrency records how many notes are embedded at once across all
 // indexing (reindex, import, watcher), clamped to a sane range, and resizes the
-// shared embed gate live. 0 keeps the default.
+// embed gate live. 0 keeps the default. The gate is process-wide (the budget is
+// the gateway's), while the setting is per-vault: last one set wins.
 func (s *Service) SetIndexConcurrency(n int) error {
 	if n < 0 {
 		n = 0
@@ -287,7 +237,7 @@ func (s *Service) SetIndexConcurrency(n int) error {
 	s.cfg.IndexConcurrency = n
 	cfg := s.cfg
 	s.mu.Unlock()
-	s.embedGate.resize(effectiveConcurrency(n))
+	s.shared.embedGate.resize(effectiveConcurrency(n))
 	return appconfig.Save(s.configDir, cfg)
 }
 
@@ -362,7 +312,7 @@ func (s *Service) SetModel(ctx context.Context, model string) error {
 
 // ListModels returns the gateway's available model ids for the picker.
 func (s *Service) ListModels(ctx context.Context) ([]string, error) {
-	models, err := s.client.ListModels(ctx)
+	models, err := s.shared.client.ListModels(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing models: %w", err)
 	}
@@ -1491,29 +1441,15 @@ func (s *Service) SetConvertPageTimeout(d time.Duration) error {
 	return appconfig.Save(s.configDir, cfg)
 }
 
-// ensureRenderer lazily creates the shared PDFium renderer on first use. Caller
-// must hold s.mu.
-func (s *Service) ensureRenderer() (*pdfconvert.Renderer, error) {
-	if s.renderer != nil {
-		return s.renderer, nil
-	}
-	r, err := pdfconvert.NewRenderer()
-	if err != nil {
-		return nil, ctxerr.With(fmt.Errorf("starting PDF renderer: %w", err), nil)
-	}
-	s.renderer = r
-	return r, nil
-}
-
 // ConvertPDF turns a PDF's bytes into Markdown via the gateway's vision model.
-// Conversions serialize (pdfMu) since each is a long, one-at-a-time gateway job.
-// Requires a convert model; returns ErrNoConvertModel otherwise.
+// Conversions serialize process-wide (Shared.pdfMu) since each is a long,
+// one-at-a-time gateway job. Requires a convert model; returns
+// ErrNoConvertModel otherwise.
 func (s *Service) ConvertPDF(ctx context.Context, name string, data []byte) (string, error) {
 	s.mu.Lock()
 	convertModel := s.cfg.ConvertModel
 	maxPixels := s.cfg.ConvertMaxPixels
 	pageTimeout := time.Duration(s.cfg.ConvertPageTimeoutSec) * time.Second
-	client := s.client
 	s.mu.Unlock()
 	if convertModel == "" {
 		return "", ErrNoConvertModel
@@ -1522,25 +1458,19 @@ func (s *Service) ConvertPDF(ctx context.Context, name string, data []byte) (str
 		maxPixels = pdfconvert.DefaultMaxPixels
 	}
 
-	s.pdfMu.Lock()
-	defer s.pdfMu.Unlock()
+	sh := s.shared
+	client := sh.client
+	sh.pdfMu.Lock()
+	defer sh.pdfMu.Unlock()
 
 	// Make the conversion cancelable directly (not only via the request's
 	// connection), so CancelImport can stop it promptly.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	s.pdfCancelMu.Lock()
-	s.pdfCancel = cancel
-	s.pdfCancelMu.Unlock()
-	defer func() {
-		s.pdfCancelMu.Lock()
-		s.pdfCancel = nil
-		s.pdfCancelMu.Unlock()
-	}()
+	sh.setPDFCancel(cancel)
+	defer sh.setPDFCancel(nil)
 
-	s.mu.Lock()
-	renderer, err := s.ensureRenderer()
-	s.mu.Unlock()
+	renderer, err := sh.ensureRenderer()
 	if err != nil {
 		return "", err
 	}
@@ -1583,14 +1513,7 @@ func (s *Service) ConvertPDF(ctx context.Context, name string, data []byte) (str
 // conversion's context, which both halts the page loop and tells the gateway to
 // cancel the running job — so a cancel takes effect without waiting for the
 // dropped request connection to be detected. A no-op when nothing is converting.
-func (s *Service) CancelImport() {
-	s.pdfCancelMu.Lock()
-	cancel := s.pdfCancel
-	s.pdfCancelMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-}
+func (s *Service) CancelImport() { s.shared.cancelPDF() }
 
 // ── search sessions ───────────────────────────────────────────────────
 
@@ -1605,129 +1528,55 @@ type (
 // KindSearch is re-exported so the web layer can branch on a turn's type.
 const KindSearch = session.KindSearch
 
+// The history is process-wide, so these all delegate to Shared: a session can
+// hold turns from several vaults, and the active one follows the window, not the
+// binding.
+
 // ListSessions returns the search sessions, most recently used first.
-func (s *Service) ListSessions() ([]Session, error) {
-	s.mu.Lock()
-	ss := s.sessions
-	s.mu.Unlock()
-	if ss == nil {
-		return nil, ErrNoSessions
-	}
-	return ss.List()
-}
+func (s *Service) ListSessions() ([]Session, error) { return s.shared.ListSessions() }
 
 // SetActiveSession selects which session subsequent turns are recorded into.
-func (s *Service) SetActiveSession(id int64) {
-	s.mu.Lock()
-	s.activeSession = id
-	s.mu.Unlock()
-}
+func (s *Service) SetActiveSession(id int64) { s.shared.SetActiveSession(id) }
 
 // ActiveSession returns the selected session id (0 if none).
-func (s *Service) ActiveSession() int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.activeSession
-}
+func (s *Service) ActiveSession() int64 { return s.shared.ActiveSession() }
 
 // SessionTurns returns a session's turns in order.
-func (s *Service) SessionTurns(id int64) ([]Turn, error) {
-	s.mu.Lock()
-	ss := s.sessions
-	s.mu.Unlock()
-	if ss == nil {
-		return nil, ErrNoSessions
-	}
-	return ss.Turns(id)
-}
+func (s *Service) SessionTurns(id int64) ([]Turn, error) { return s.shared.SessionTurns(id) }
 
 // RenameSession sets a session's title.
 func (s *Service) RenameSession(id int64, title string) error {
-	s.mu.Lock()
-	ss := s.sessions
-	s.mu.Unlock()
-	if ss == nil {
-		return ErrNoSessions
-	}
-	return ss.Rename(id, title)
+	return s.shared.RenameSession(id, title)
 }
 
 // DeleteSession removes a session and clears it as active if selected.
-func (s *Service) DeleteSession(id int64) error {
-	s.mu.Lock()
-	ss := s.sessions
-	if s.activeSession == id {
-		s.activeSession = 0
-	}
-	s.mu.Unlock()
-	if ss == nil {
-		return ErrNoSessions
-	}
-	return ss.Delete(id)
-}
+func (s *Service) DeleteSession(id int64) error { return s.shared.DeleteSession(id) }
 
 // DeleteTurn removes a single turn (a search request and its results) from a
 // session.
 func (s *Service) DeleteTurn(sessionID, turnID int64) error {
-	s.mu.Lock()
-	ss := s.sessions
-	s.mu.Unlock()
-	if ss == nil {
-		return ErrNoSessions
-	}
-	return ss.DeleteTurn(sessionID, turnID)
+	return s.shared.DeleteTurn(sessionID, turnID)
 }
 
 // RecordSearch saves a search turn (query + the ranked hits it surfaced, with
 // snippets) into the active session, so reopening it re-renders the result cards.
 func (s *Service) RecordSearch(query string, hits []store.Hit) {
-	s.recordTurn(session.Turn{
+	s.shared.recordTurn(session.Turn{
 		Kind:  session.KindSearch,
 		Query: query,
-		Hits:  toSessionHits(hits),
+		Hits:  toSessionHits(hits, s.Vault()),
 	})
 }
 
 // toSessionHits projects store hits to the slimmer shape persisted with a search
-// turn (label + snippet, no distance).
-func toSessionHits(hits []store.Hit) []session.Hit {
+// turn (label + snippet, no distance), tagged with the vault they came from so a
+// session spanning several vaults still says where each hit lives.
+func toSessionHits(hits []store.Hit, vault string) []session.Hit {
 	out := make([]session.Hit, len(hits))
 	for i, h := range hits {
-		out[i] = session.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text}
+		out[i] = session.Hit{Path: h.Path, Heading: h.Heading, Text: h.Text, Vault: vault}
 	}
 	return out
-}
-
-// recordTurn appends a turn to the active session, creating one on first use
-// (the New-session button and the "+" open a blank scratch tab with no active
-// session; the first turn is what actually creates the session, named from the
-// query). Best-effort: a history failure is logged, never surfaced.
-func (s *Service) recordTurn(turn session.Turn) {
-	s.mu.Lock()
-	ss, active := s.sessions, s.activeSession
-	s.mu.Unlock()
-	if ss == nil {
-		return
-	}
-
-	now := time.Now()
-	if active == 0 {
-		// First turn of a scratch tab: create the session now, titled from the query.
-		id, err := ss.Create(sessionTitle(turn.Query), now)
-		if err != nil {
-			s.logger.Warn().Err(err).Msg("creating session for turn")
-			return
-		}
-		active = id
-		s.mu.Lock()
-		s.activeSession = id
-		s.mu.Unlock()
-	}
-
-	if _, err := ss.AddTurn(active, turn, now); err != nil {
-		s.logger.Warn().Err(err).Msg("recording turn")
-		return
-	}
 }
 
 // defaultSessionTitle names a session before its first turn (e.g. one created
@@ -1777,7 +1626,7 @@ func (s *Service) openStore(ctx context.Context) error {
 		return ErrNoModel
 	}
 
-	emb := embed.New(s.client.Client, model).WithLimiter(s.embedGate).
+	emb := embed.New(s.shared.client.Client, model).WithLimiter(s.shared.embedGate).
 		WithPrefixes(queryPrefix, docPrefix)
 	dim, err := emb.Dimension(ctx) // gateway round-trip — lock-free.
 	if err != nil {

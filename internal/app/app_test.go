@@ -90,7 +90,7 @@ func TestWriteFrontmatter(t *testing.T) {
 
 func TestUIStateRoundTrip(t *testing.T) {
 	configDir := t.TempDir()
-	s := New(nil, configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), t.TempDir(), "", zerolog.Nop())
+	s := New(testShared(t), configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
 	t.Cleanup(func() { _ = s.Close() })
 
 	// Unset key reads empty.
@@ -128,7 +128,7 @@ func TestSetConvertMaxPixels_ClampsAndPersists(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			configDir := t.TempDir()
-			s := New(nil, configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), t.TempDir(), "", zerolog.Nop())
+			s := New(testShared(t), configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
 			t.Cleanup(func() { _ = s.Close() })
 			require.NoError(t, s.SetConvertMaxPixels(tt.px))
 			require.Equal(t, tt.want, appconfig.Load(configDir).ConvertMaxPixels)
@@ -151,7 +151,7 @@ func TestSetConvertPageTimeout_ClampsAndPersists(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			configDir := t.TempDir()
-			s := New(nil, configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), t.TempDir(), "", zerolog.Nop())
+			s := New(testShared(t), configDir, t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
 			t.Cleanup(func() { _ = s.Close() })
 			require.NoError(t, s.SetConvertPageTimeout(tt.d))
 			require.Equal(t, tt.want, appconfig.Load(configDir).ConvertPageTimeoutSec)
