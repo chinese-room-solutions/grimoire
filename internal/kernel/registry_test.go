@@ -41,7 +41,7 @@ func TestNewRegistryOverwritesBuiltinButKeepsUserKernel(t *testing.T) {
 	require.NoError(t, os.MkdirAll(userDir, 0o755))
 	userManifest := filepath.Join(userDir, "ruby.kernel.yaml")
 	require.NoError(t, os.WriteFile(userManifest, []byte(
-		"language: Ruby\nmatch: [ruby]\nrunner: ruby.rb\ncommand: {default: {exe: ruby}}\n"), 0o644))
+		"protocol: 1\nlanguage: Ruby\nmatch: [ruby]\nrunner: ruby.rb\ncommand: {default: {exe: ruby}}\n"), 0o644))
 
 	// Tamper with the built-in to prove it gets restored.
 	bashManifest := filepath.Join(dir, "kernels", "bash", "5", "bash.kernel.yaml")
@@ -132,6 +132,44 @@ func TestNewRegistrySharedDir(t *testing.T) {
 			require.True(t, ok, "lookup %q", tt.lookup)
 			require.Equal(t, tt.wantSource, m.Source)
 			require.Equal(t, strings.ToLower(tt.wantLang), m.Match[0])
+		})
+	}
+}
+
+// TestNewRegistryProtocolGate: a kernel is indexed only when it declares a
+// runner protocol this core speaks. A missing or unknown one is skipped at load
+// — never at install — with a log naming the kernel, its protocol, and the set.
+func TestNewRegistryProtocolGate(t *testing.T) {
+	tests := []struct {
+		name     string
+		manifest string
+		want     bool
+	}{
+		{name: "supported protocol loads", manifest: "protocol: 1\n", want: true},
+		{name: "missing protocol is skipped", manifest: ""},
+		{name: "unknown protocol is skipped", manifest: "protocol: 99\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			kd := filepath.Join(dir, "kernels", "go", "1.26")
+			require.NoError(t, os.MkdirAll(kd, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(kd, "go.kernel.yaml"),
+				[]byte(tt.manifest+"language: Go\nmatch: [go]\nrunner: r\ncommand: {default: {exe: go}}\n"), 0o644))
+
+			var logs strings.Builder
+			reg, err := NewRegistry(dir, "", zerolog.New(&logs))
+			require.NoError(t, err)
+
+			_, ok := reg.Lookup("go")
+			require.Equal(t, tt.want, ok)
+			if tt.want {
+				require.NotContains(t, logs.String(), "unsupported runner protocol")
+				return
+			}
+			require.Contains(t, logs.String(), "unsupported runner protocol")
+			require.Contains(t, logs.String(), `"kernel":"go@1.26"`)
+			require.Contains(t, logs.String(), `"supported":[1]`)
 		})
 	}
 }

@@ -6,6 +6,7 @@ require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/KernelPryanic/ctxerr v1.0.0
 	github.com/KernelPryanic/golog v1.2.0
+	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a-h/templ v0.3.1020
 	github.com/alecthomas/chroma/v2 v2.2.0
 	github.com/chinese-room-solutions/llama-cpp-openai-client-go v0.1.0
@@ -29,7 +30,6 @@ require (
 	fyne.io/systray v1.12.0 // indirect
 	github.com/CAFxX/httpcompression v0.0.9 // indirect
 	github.com/JohannesKaufmann/dom v0.3.1 // indirect
-	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/a-h/parse v0.0.0-20250122154542-74294addb73e // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect

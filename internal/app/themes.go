@@ -37,8 +37,7 @@ var ErrThemePackageUnknown = errors.New("no such theme package")
 
 // ThemePackage is one installable theme package from the registry index: its
 // package name, the theme id it installs as, and the version an unqualified
-// install picks (the newest listed with an "any" artifact — the index appends
-// newest last).
+// install picks (the newest compatible with this Grimoire).
 type ThemePackage struct {
 	Name    string
 	ID      string
@@ -57,14 +56,15 @@ func (s *Service) ThemePackages(ctx context.Context) (pkgs []ThemePackage, stale
 		return nil, false, err
 	}
 	for _, pkg := range idx.Search(registry.SearchOptions{Kind: KindTheme}) {
-		version, ok := newestThemeVersion(&pkg)
-		if !ok {
+		res, err := s.resolvePackage(idx, pkg.Name, "", ErrThemePackageUnknown)
+		if err != nil {
+			s.logger.Debug().Err(err).Str("package", pkg.Name).Msg("theme package not installable here")
 			continue
 		}
 		pkgs = append(pkgs, ThemePackage{
 			Name:        pkg.Name,
 			ID:          themePackageID(pkg.Name),
-			Version:     version,
+			Version:     res.Version.Version,
 			DisplayName: pkg.DisplayName,
 			Description: pkg.Description,
 		})
@@ -76,7 +76,8 @@ func (s *Service) ThemePackages(ctx context.Context) (pkgs []ThemePackage, stale
 // .css with sha256 verification, and installs it live through uikit — validated
 // against the theme contract, written into the shared themes dir, registered
 // immediately. Installing an already-installed theme overwrites it (the update
-// path). version "" picks the newest listed.
+// path). version "" picks the newest compatible with this Grimoire; a named
+// version must be that one.
 func (s *Service) InstallTheme(ctx context.Context, name, version string) (uikit.ThemeInfo, error) {
 	idx, _, err := s.fetchIndex(ctx, s.shared.themeRegistryURL)
 	if err != nil {
@@ -87,10 +88,11 @@ func (s *Service) InstallTheme(ctx context.Context, name, version string) (uikit
 		return uikit.ThemeInfo{}, ctxerr.With(fmt.Errorf("%w: %s", ErrThemePackageUnknown, name),
 			map[string]any{"package": name})
 	}
-	artifact, _, err := pickArtifact(pkg, version, newestThemeVersion, ErrThemePackageUnknown)
+	res, err := s.resolvePackage(idx, name, version, ErrThemePackageUnknown)
 	if err != nil {
 		return uikit.ThemeInfo{}, err
 	}
+	artifact := res.Artifact
 
 	dlDir, err := os.MkdirTemp("", "grimoire-theme-")
 	if err != nil {
@@ -116,19 +118,6 @@ func (s *Service) InstallTheme(ctx context.Context, name, version string) (uikit
 // refused (uikit.ErrThemeBuiltin); an unknown id is uikit.ErrThemeNotInstalled.
 func (s *Service) RemoveTheme(id string) error {
 	return uikit.RemoveTheme(id)
-}
-
-// newestThemeVersion returns the package's newest version with an "any"
-// artifact. Theme versions are plain semver maintained append-newest-last in
-// the hand-edited index, so "newest" is the last qualifying entry (unlike
-// kernels, which compare version numbers).
-func newestThemeVersion(pkg *registry.Package) (string, bool) {
-	for i := len(pkg.Versions) - 1; i >= 0; i-- {
-		if _, ok := pkg.Versions[i].Artifacts[artifactKeyAny]; ok {
-			return pkg.Versions[i].Version, true
-		}
-	}
-	return "", false
 }
 
 // themePackageID derives the theme id from its package name (theme-neon →

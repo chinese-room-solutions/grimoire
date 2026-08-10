@@ -79,7 +79,7 @@ func writeKernel(t *testing.T, root, family, version, match string) {
 	kd := filepath.Join(root, family, version)
 	require.NoError(t, os.MkdirAll(kd, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(kd, family+".kernel.yaml"),
-		[]byte("language: Go\nmatch: ["+match+"]\nrunner: r\ncommand: {default: {exe: go}}\n"), 0o644))
+		[]byte("protocol: 1\nlanguage: Go\nmatch: ["+match+"]\nrunner: r\ncommand: {default: {exe: go}}\n"), 0o644))
 }
 
 func TestScanKeepsAllVersionsNewestFirst(t *testing.T) {

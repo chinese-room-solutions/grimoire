@@ -10,6 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testCoreVersion is the Grimoire version test services report — a release
+// semver, so the package indexes' grimoire: ranges are actually enforced.
+const testCoreVersion = "0.2.0"
+
 // testShared builds process-wide state for a test: no gateway client, a temp app
 // dir, no registries. Closed on cleanup.
 func testShared(t *testing.T) *Shared {
@@ -20,7 +24,7 @@ func testShared(t *testing.T) *Shared {
 // testSharedThemes is testShared with a theme package index wired up.
 func testSharedThemes(t *testing.T, themeRegistryURL string) *Shared {
 	t.Helper()
-	sh, err := NewShared(nil, t.TempDir(), "", "", themeRegistryURL, zerolog.Nop())
+	sh, err := NewShared(nil, t.TempDir(), "", "", themeRegistryURL, testCoreVersion, zerolog.Nop())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sh.Close()) })
 	return sh
@@ -38,7 +42,7 @@ func newVaultService(t *testing.T, sh *Shared) (*Service, string) {
 
 func TestNewSharedCreatesTheAppDir(t *testing.T) {
 	appDir := filepath.Join(t.TempDir(), "nested", "grimoire")
-	sh, err := NewShared(nil, appDir, "", "", "", zerolog.Nop())
+	sh, err := NewShared(nil, appDir, "", "", "", testCoreVersion, zerolog.Nop())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sh.Close()) })
 	require.FileExists(t, filepath.Join(appDir, "sessions.db"))
@@ -47,7 +51,7 @@ func TestNewSharedCreatesTheAppDir(t *testing.T) {
 func TestNewSharedRejectsAnUnusableAppDir(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "not-a-dir")
 	require.NoError(t, os.WriteFile(file, []byte("x"), 0o600))
-	_, err := NewShared(nil, filepath.Join(file, "grimoire"), "", "", "", zerolog.Nop())
+	_, err := NewShared(nil, filepath.Join(file, "grimoire"), "", "", "", testCoreVersion, zerolog.Nop())
 	require.Error(t, err)
 }
 

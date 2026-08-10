@@ -64,17 +64,20 @@ version of a family, drop in a new `<family>/<version>/` sibling.
 
 ```
 <family>/<version>/
-  <name>.kernel.yaml   # manifest: language, match, runner, per-OS command,
-                       #           optional display_name (NO name/version — the
-                       #           path supplies those)
+  <name>.kernel.yaml   # manifest: protocol, language, match, runner, per-OS
+                       #           command, optional display_name (NO
+                       #           name/version — the path supplies those)
   runner…              # the runner: reads NDJSON requests on stdin, streams
                        # output/exit/error events on stdout (see protocol below)
 ```
 
-The manifest's `command` is the spawn recipe, keyed by `GOOS` with a `default`
-fallback; `{runner}` in its args is replaced with the runner's path. The runner
-speaks the kernel protocol: per block it reads an id line then a base64 line of
-the code, and emits NDJSON events (`output`, then a terminal `exit` or `error`).
+The manifest's `protocol` is the runner protocol version the kernel speaks —
+`protocol: 1` today, and a kernel declaring anything else is skipped at load
+with a log, so a future protocol never reaches a core that can't talk it. Its
+`command` is the spawn recipe, keyed by `GOOS` with a `default` fallback;
+`{runner}` in its args is replaced with the runner's path. The runner speaks the
+kernel protocol: per block it reads an id line then a base64 line of the code,
+and emits NDJSON events (`output`, then a terminal `exit` or `error`).
 One runner process is kept alive per note so blocks share session state like
 notebook cells.
 

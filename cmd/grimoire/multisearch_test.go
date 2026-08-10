@@ -106,7 +106,7 @@ func newEmbedRegistry(t *testing.T, gw *embedServer) *vaultRegistry {
 	t.Helper()
 	isolateVaultDirs(t)
 	client := app.NewGatewayClient(openai.New(openai.Options{BaseURL: gw.URL}))
-	shared, err := app.NewShared(client, t.TempDir(), "", "", "", zerolog.Nop())
+	shared, err := app.NewShared(client, t.TempDir(), "", "", "", testCoreVersion, zerolog.Nop())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, shared.Close()) })
 	reg := newVaultRegistry(shared, zerolog.Nop())

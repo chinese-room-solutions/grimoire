@@ -124,7 +124,7 @@ func kernelPackageZip(t *testing.T) []byte {
 	t.Helper()
 	prefix := e2eKernelFamily + "/" + e2eKernelVersion + "/"
 	files := map[string]string{
-		prefix + e2eKernelFamily + ".kernel.yaml": "language: Go\ndisplay_name: Go\nmatch: [go]\n" +
+		prefix + e2eKernelFamily + ".kernel.yaml": "protocol: 1\nlanguage: Go\ndisplay_name: Go\nmatch: [go]\n" +
 			"runner: run.sh\ncommand: {default: {exe: sh, args: [\"{runner}\"]}}\n",
 		prefix + "run.sh": e2eRunnerSh,
 	}

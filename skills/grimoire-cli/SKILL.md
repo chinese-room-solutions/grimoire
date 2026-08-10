@@ -120,7 +120,9 @@ packages; a `registry unreachable` warning means only the available rows are
 stale. `kernel install NAME[@VERSION]` installs into the shared dir for every
 vault (exit 4 already installed, 3 unknown); `kernel remove FAMILY VERSION`
 removes one, refusing builtins and vault-local kernels. `theme list|install|
-remove` works the same for UI themes.
+remove` works the same for UI themes. The registry picks the version: a bare
+NAME installs the newest one compatible with this Grimoire build (what `list`
+shows), and an @VERSION that isn't that one exits 3.
 
 ## Exit codes
 

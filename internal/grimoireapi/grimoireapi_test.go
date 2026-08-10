@@ -17,7 +17,7 @@ import (
 // temp app dir, no registries.
 func testShared(t *testing.T) *app.Shared {
 	t.Helper()
-	sh, err := app.NewShared(nil, t.TempDir(), "", "", "", zerolog.Nop())
+	sh, err := app.NewShared(nil, t.TempDir(), "", "", "", "0.2.0", zerolog.Nop())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sh.Close()) })
 	return sh

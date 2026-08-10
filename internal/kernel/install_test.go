@@ -12,7 +12,7 @@ import (
 )
 
 // goodManifest is a minimal valid kernel manifest for archive fixtures.
-const goodManifest = "language: Go\nmatch: [go]\nrunner: run.sh\ncommand: {default: {exe: sh, args: [\"{runner}\"]}}\n"
+const goodManifest = "protocol: 1\nlanguage: Go\nmatch: [go]\nrunner: run.sh\ncommand: {default: {exe: sh, args: [\"{runner}\"]}}\n"
 
 // zipEntry is one entry for buildZip; Dir entries carry a trailing-slash name
 // and no body.

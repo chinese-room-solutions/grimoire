@@ -52,7 +52,7 @@ func testShared(t *testing.T) *app.Shared {
 // test cares about.
 func testSharedWith(t *testing.T, kernelsDir, themeRegistryURL string) *app.Shared {
 	t.Helper()
-	sh, err := app.NewShared(nil, t.TempDir(), kernelsDir, "", themeRegistryURL, zerolog.Nop())
+	sh, err := app.NewShared(nil, t.TempDir(), kernelsDir, "", themeRegistryURL, testCoreVersion, zerolog.Nop())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sh.Close()) })
 	return sh

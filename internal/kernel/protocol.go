@@ -11,7 +11,20 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"slices"
 )
+
+// supportedProtocols are the runner protocol versions this core speaks. A
+// kernel manifest declares its own with `protocol: N`; the loader skips a
+// kernel outside this set, so an installed kernel is honored (or dropped) by
+// the core that has to talk to it, not by the version that installed it.
+var supportedProtocols = []int{1}
+
+// protocolSupported reports whether this core speaks a kernel's declared
+// protocol. A manifest without the field reads as 0 and is never supported.
+func protocolSupported(protocol int) bool {
+	return slices.Contains(supportedProtocols, protocol)
+}
 
 // Event types streamed from a runner.
 const (

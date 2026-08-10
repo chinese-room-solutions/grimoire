@@ -98,6 +98,36 @@ func TestThemeInstallRejectsInvalidCSS(t *testing.T) {
 	require.ErrorContains(t, err, "forbidden character")
 }
 
+// TestThemePackagesPicksNewestSemver: the listed version is the one an install
+// would take, and that is the highest semver — not the last row in the index,
+// and not the one with the longest version string.
+func TestThemePackagesPicksNewestSemver(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/index.yml", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `schema_version: 1
+packages:
+  - name: theme-neon-test
+    kind: theme
+    display_name: Neon Test
+    description: test theme
+    versions:
+      - version: "0.10.0"
+        artifacts: {any: {url: "https://example.test/a.css", sha256: "ab"}}
+      - version: "0.9.0"
+        artifacts: {any: {url: "https://example.test/b.css", sha256: "cd"}}
+`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	s := New(testSharedThemes(t, srv.URL+"/index.yml"),
+		t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
+	pkgs, _, err := s.ThemePackages(context.Background())
+	require.NoError(t, err)
+	require.Len(t, pkgs, 1)
+	require.Equal(t, "0.10.0", pkgs[0].Version)
+}
+
 func TestThemePackagesOffline(t *testing.T) {
 	s := New(testSharedThemes(t, "http://127.0.0.1:1/index.yml"),
 		t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "vault"), zerolog.Nop())
