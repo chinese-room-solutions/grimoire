@@ -124,9 +124,9 @@ unreachable registry degrades to a warning; the installed list still prints.`},
 	{"kernel install", "kernel install NAME[@VERSION]", "install a kernel package", `
 Install a kernel package from the registry into the shared kernels directory.
 The registry decides what this build may install: without @VERSION you get the
-newest version marked compatible with it, and @VERSION must name that version.
-Exit 4 if it is already installed, exit 3 if the package or version is
-unknown.`},
+newest version marked compatible with it, and @VERSION picks any listed version
+that is compatible — older versions install beside newer ones. Exit 4 if it is
+already installed, exit 3 if the package or version is unknown.`},
 
 	{"kernel remove", "kernel remove FAMILY VERSION", "remove an installed kernel version", `
 Remove one installed kernel version. Built-in and vault-local kernels are
@@ -137,9 +137,9 @@ List the registered UI themes plus the packages the registry offers.`},
 
 	{"theme install", "theme install NAME[@VERSION]", "install a theme package", `
 Install a theme package from the registry, live. Without @VERSION it takes the
-newest version compatible with this build, and @VERSION must name that version;
-reinstalling overwrites. The theme joins the palette but is not applied —
-activate it in the app.`},
+newest version compatible with this build, and @VERSION picks any listed
+compatible version. Reinstalling overwrites. The theme joins the palette but is
+not applied — activate it in the app.`},
 
 	{"theme remove", "theme remove NAME", "remove an installed theme", `
 Remove an installed theme. The built-in themes can't be removed.`},

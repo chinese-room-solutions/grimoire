@@ -214,9 +214,9 @@ func TestAPIKernelInstallListRemoveRoundtrip(t *testing.T) {
 }
 
 // TestAPIKernelInstallPicksNewestVersion: with no version in the request, the
-// newest package version wins (semver, so 1.26 > 1.9). A named version is a pin
-// on that resolution — it must be the version the resolver picked, so an older
-// one is rejected rather than silently installed.
+// newest package version wins (semver, so 1.26 > 1.9). A named version is a
+// real pin — an older listed version installs beside the newest, since kernel
+// families keep versions side by side.
 func TestAPIKernelInstallPicksNewestVersion(t *testing.T) {
 	reg := newRegistryStub(t)
 	reg.setIndex(
@@ -247,11 +247,13 @@ func TestAPIKernelInstallPicksNewestVersion(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &installed))
 	require.Equal(t, "1.26", installed.Version)
 
-	// An older version is not what the resolver picks, so pinning it is a miss.
+	// Pinning the older version installs it beside the newest.
 	rec = doJSON(t, env.mux, http.MethodPost, "/api/v1/kernel/install",
 		map[string]any{"name": "grimoire-kernel-go", "version": "1.9"})
-	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
-	require.NoDirExists(t, filepath.Join(env.kernelsDir, "go", "1.9"))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &installed))
+	require.Equal(t, "1.9", installed.Version)
+	require.DirExists(t, filepath.Join(env.kernelsDir, "go", "1.9"))
 }
 
 func sha256Hex(data []byte) string {

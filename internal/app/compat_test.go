@@ -135,7 +135,16 @@ func TestResolvePackageVersion(t *testing.T) {
 				indexVersion{version: "1.26", grimoire: ">=0.3"}),
 			coreVersion: "0.2.0",
 			requested:   "1.26",
-			wantErr:     `has no version "1.26"`,
+			wantErr:     "no compatible version",
+		},
+		{
+			name: "a pin on an older compatible version installs it beside the newest",
+			idx: testIndex("grimoire-kernel-go", KindKernel,
+				indexVersion{version: "1.21", grimoire: ">=0.1"},
+				indexVersion{version: "1.26", grimoire: ">=0.1"}),
+			coreVersion: "0.2.0",
+			requested:   "1.21",
+			want:        "1.21",
 		},
 	}
 	for _, tt := range tests {
