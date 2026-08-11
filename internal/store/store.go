@@ -506,7 +506,9 @@ func band(candidates []scored, opts SearchOptions) []scored {
 // keywordLeg returns up to pool chunk ids by ascending BM25 rank for the
 // sanitized query, or nil when the query has no searchable terms. Column
 // weights favor the note path (the title lives in the filename) and heading
-// over body text. Untuned defaults.
+// over body text, but only mildly: tuned against eval/, the former 4/2/1
+// over-promoted notes whose filename happened to carry a query word over notes
+// that actually answer the query.
 func (s *Store) keywordLeg(query string, pool int) ([]int64, error) {
 	expr := sanitizeFTSQuery(query)
 	if expr == "" {
@@ -515,7 +517,7 @@ func (s *Store) keywordLeg(query string, pool int) ([]int64, error) {
 	rows, err := s.db.Query(`
 SELECT rowid FROM chunks_fts
 WHERE chunks_fts MATCH ?
-ORDER BY bm25(chunks_fts, 4.0, 2.0, 1.0)
+ORDER BY bm25(chunks_fts, 2.0, 1.5, 1.0)
 LIMIT ?`, expr, pool)
 	if err != nil {
 		return nil, fmt.Errorf("keyword query %q: %w", expr, err)
@@ -533,19 +535,45 @@ LIMIT ?`, expr, pool)
 	return ids, rows.Err()
 }
 
+// ftsStopwords are the English function words the keyword leg drops. Measured
+// on eval/: they match most of the corpus, so each one OR'd into the MATCH
+// expression floods the pool with notes that answer nothing, and RRF then
+// promotes whatever they rank first.
+var ftsStopwords = map[string]struct{}{
+	"a": {}, "about": {}, "an": {}, "and": {}, "any": {}, "are": {}, "as": {},
+	"at": {}, "be": {}, "by": {}, "can": {}, "could": {}, "did": {}, "do": {},
+	"does": {}, "for": {}, "from": {}, "how": {}, "i": {}, "if": {}, "in": {},
+	"into": {}, "is": {}, "it": {}, "its": {}, "me": {}, "my": {}, "no": {},
+	"not": {}, "of": {}, "on": {}, "or": {}, "our": {}, "over": {}, "should": {},
+	"so": {}, "than": {}, "that": {}, "the": {}, "them": {}, "there": {},
+	"these": {}, "they": {}, "this": {}, "those": {}, "to": {}, "under": {},
+	"versus": {}, "vs": {}, "was": {}, "we": {}, "what": {}, "when": {},
+	"where": {}, "which": {}, "who": {}, "why": {}, "will": {}, "with": {},
+	"would": {}, "you": {}, "your": {},
+}
+
 // sanitizeFTSQuery turns free text into a safe FTS5 MATCH expression: each
 // whitespace token becomes a quoted phrase (immune to the MATCH grammar's
 // operators and punctuation), tokens with no letter or digit are dropped, and
 // terms are joined with OR — natural-language queries would match nothing
-// under implicit AND, and BM25 already ranks multi-term matches higher.
-// Returns "" when nothing searchable remains.
+// under implicit AND, and BM25 already ranks multi-term matches higher. Because
+// the join is OR, stopwords are dropped too; a query made only of them keeps
+// them, since it still has to search something. Returns "" when nothing
+// searchable remains.
 func sanitizeFTSQuery(query string) string {
-	var terms []string
+	var terms, kept []string
 	for _, tok := range strings.Fields(query) {
 		if !strings.ContainsFunc(tok, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
 			continue
 		}
-		terms = append(terms, `"`+strings.ReplaceAll(tok, `"`, `""`)+`"`)
+		term := `"` + strings.ReplaceAll(tok, `"`, `""`) + `"`
+		terms = append(terms, term)
+		if _, stop := ftsStopwords[strings.ToLower(tok)]; !stop {
+			kept = append(kept, term)
+		}
+	}
+	if len(kept) > 0 {
+		terms = kept
 	}
 	return strings.Join(terms, " OR ")
 }

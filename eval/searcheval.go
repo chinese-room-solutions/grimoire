@@ -50,7 +50,9 @@ const (
 
 // defaultBM25 are the store's own FTS5 column weights (path, heading, text):
 // the note title lives in the filename, so path outranks heading outranks body.
-var defaultBM25 = [3]float64{4, 2, 1}
+// Keep in step with keywordLeg's bm25() call — legs only reproduces prod while
+// they match.
+var defaultBM25 = [3]float64{2, 1.5, 1}
 
 // options is the whole command line.
 type options struct {
@@ -115,7 +117,7 @@ func parseFlags() (options, error) {
 	flag.IntVar(&o.poolK, "pool-k", resultK, "legs: K passed to SearchLegs; pool per leg is max(4K,40)")
 	flag.StringVar(&o.ftsVariant, "fts-variant", variantOr,
 		"legs: keyword leg — or (the store's own), and-or, or stopdrop")
-	bm25 := flag.String("bm25-weights", "4,2,1", "legs: BM25 column weights path,heading,text")
+	bm25 := flag.String("bm25-weights", "2,1.5,1", "legs: BM25 column weights path,heading,text")
 	flag.BoolVar(&o.jsonOut, "json", false, "emit the whole report as JSON")
 	flag.StringVar(&o.dump, "dump", "", "print the top-10 detail for a query id, or all")
 	flag.BoolVar(&o.parity, "parity", false, "only check that untuned legs reproduces prod")

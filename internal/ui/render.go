@@ -709,8 +709,11 @@ func initialSignals(st State) string {
 		"gGraphMinSim":  0.5,
 		// Search tuning, surfaced as the session view's top-panel sliders. Search
 		// covers every vault unless gSearchThisVault narrows it to this page's.
+		// The minimum-similarity default mirrors app.SearchFloor, which owns it —
+		// spelled out here because this package stays free of internal/app (the
+		// setup binary renders it too). Keep the two in step.
 		"gSearchK":         10,
-		"gSearchMinSim":    0.5,
+		"gSearchMinSim":    0.35,
 		"gSearchThisVault": false,
 		"gModel":           st.EmbedModel,
 		"gConvertModel":    st.ConvertModel,

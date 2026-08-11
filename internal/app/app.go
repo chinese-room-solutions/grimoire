@@ -385,19 +385,25 @@ func (s *Service) indexer(ctx context.Context) (*index.Indexer, error) {
 }
 
 // Vector relevance is judged relative to the best hit, not by a fixed cutoff:
-// embedding models compress all similarities into a narrow band (e.g. Qwen3
-// puts everything in ~0.57–0.71), so real matches sit just above the noise and
-// the band shifts per model. Vector hits within SearchTopRatio of the top hit
-// (the query's own scale) and above SearchFloor (a sanity guard so an all-weak
-// vector set contributes nothing rather than promoting its least-bad member)
-// survive; keyword hits are unaffected. SearchFloor is the default minimum
-// similarity when the caller passes 0 (the session panel overrides it).
+// embedding models compress all similarities into a narrow band and the band
+// shifts per model, so an absolute threshold is the wrong instrument. Vector
+// hits within SearchTopRatio of the top hit (the query's own scale) and above
+// SearchFloor survive; keyword hits are unaffected. SearchFloor is also the
+// default minimum similarity when the caller passes 0 (the session panel
+// overrides it).
+//
+// Both values are tuned against eval/. Qwen3-0.6B scores correct paraphrase
+// matches at cosine 0.40–0.50, so the old floor of 0.50 emptied the vector leg
+// on exactly the queries that need it and search fell back to BM25 over OR'd
+// tokens. 0.35 is only a junk guard against an all-weak vector set; the
+// relative band does the real filtering. The band itself was 0.88, tight enough
+// that a query whose best hit was already weak kept just one or two hits.
 //
 // They are exported because a cross-vault search over vaults sharing one model
 // applies the band itself, across their merged vector legs (see SearchLegsVec).
 const (
-	SearchTopRatio = 0.88
-	SearchFloor    = 0.50
+	SearchTopRatio = 0.75
+	SearchFloor    = 0.35
 )
 
 // Search embeds the query (with the model's query instruction) and runs the

@@ -322,7 +322,9 @@ func join(terms []string, op string) string {
 
 // stopwords are the high-frequency English words the stopdrop variant removes:
 // they match half the corpus, so BM25 spends the pool on them instead of on the
-// terms that carry the query. Kept deliberately small and hand-picked.
+// terms that carry the query. Kept deliberately small and hand-picked. The
+// store's own leg now drops stopwords too (store.ftsStopwords); this list stays
+// so the variant can be re-tuned independently of it.
 var stopwords = map[string]bool{
 	"a": true, "about": true, "an": true, "and": true, "any": true, "are": true,
 	"as": true, "at": true, "be": true, "by": true, "can": true, "do": true,
