@@ -1,0 +1,334 @@
+[
+  {
+    "id": "q01",
+    "query": "k8s stateful set vs deployment",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "kubernetes/statefulset-vs-deployment.md": 3,
+      "kubernetes/statefulsets.md": 2,
+      "kubernetes/deployments.md": 2,
+      "databases/postgres-on-kubernetes.md": 1
+    }
+  },
+  {
+    "id": "q02",
+    "query": "stable network identity for pods running databases",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "kubernetes/statefulsets.md": 3,
+      "kubernetes/statefulset-vs-deployment.md": 2,
+      "kubernetes/services-and-networking.md": 2,
+      "databases/postgres-on-kubernetes.md": 2,
+      "databases/postgres-replication.md": 1
+    }
+  },
+  {
+    "id": "q03",
+    "query": "how do I keep my sourdough starter alive",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "cooking/sourdough.md": 3,
+      "cooking/fermentation.md": 1,
+      "journal/2026-07-14.md": 1
+    }
+  },
+  {
+    "id": "q04",
+    "query": "shipping a new version to production without downtime",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "journal/release-process.md": 3,
+      "kubernetes/deployments.md": 2,
+      "journal/2026-07-14.md": 2,
+      "kubernetes/statefulset-vs-deployment.md": 1,
+      "networking/load-balancing.md": 1
+    }
+  },
+  {
+    "id": "q05",
+    "query": "keeping a second copy of the database up to date automatically",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "databases/postgres-replication.md": 3,
+      "databases/postgres-on-kubernetes.md": 1,
+      "databases/sqlite.md": 1,
+      "homelab/backups.md": 1
+    }
+  },
+  {
+    "id": "q06",
+    "query": "finding notes that mean the same thing but use different words",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "ml/embeddings.md": 3,
+      "ml/vector-search.md": 2,
+      "journal/2026-06-02.md": 2,
+      "ml/rag.md": 1
+    }
+  },
+  {
+    "id": "q07",
+    "query": "small local storage engine that lives in one file on disk",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "databases/sqlite.md": 3,
+      "databases/btree-indexes.md": 1,
+      "homelab/backups.md": 1
+    }
+  },
+  {
+    "id": "q08",
+    "query": "protect against losing everything if the disk dies",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "homelab/backups.md": 3,
+      "databases/postgres-replication.md": 1,
+      "kubernetes/persistent-volumes.md": 1,
+      "homelab/k3s-cluster.md": 1,
+      "databases/sqlite.md": 1
+    }
+  },
+  {
+    "id": "q09",
+    "query": "spreading requests across several machines",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "networking/load-balancing.md": 3,
+      "kubernetes/services-and-networking.md": 2,
+      "kubernetes/ingress.md": 1,
+      "networking/dns.md": 1
+    }
+  },
+  {
+    "id": "q10",
+    "query": "sync.Once",
+    "kind": "keyword-exact",
+    "relevant": {
+      "go/concurrency.md": 3,
+      "go/generics.md": 1
+    }
+  },
+  {
+    "id": "q11",
+    "query": "CrashLoopBackOff",
+    "kind": "keyword-exact",
+    "relevant": {
+      "kubernetes/troubleshooting-pods.md": 3,
+      "kubernetes/resource-limits.md": 1
+    }
+  },
+  {
+    "id": "q12",
+    "query": "pg_basebackup",
+    "kind": "keyword-exact",
+    "relevant": {
+      "databases/postgres-replication.md": 3,
+      "databases/postgres-on-kubernetes.md": 1,
+      "homelab/backups.md": 1
+    }
+  },
+  {
+    "id": "q13",
+    "query": "ef_construction",
+    "kind": "keyword-exact",
+    "relevant": {
+      "ml/vector-search.md": 3,
+      "ml/embeddings.md": 1
+    }
+  },
+  {
+    "id": "q14",
+    "query": "autovacuum_vacuum_scale_factor",
+    "kind": "keyword-exact",
+    "relevant": {
+      "databases/postgres-tuning.md": 3,
+      "databases/postgres-replication.md": 1
+    }
+  },
+  {
+    "id": "q15",
+    "query": "running postgres in kubernetes",
+    "kind": "cross-topic",
+    "relevant": {
+      "databases/postgres-on-kubernetes.md": 3,
+      "kubernetes/statefulsets.md": 2,
+      "kubernetes/statefulset-vs-deployment.md": 2,
+      "databases/postgres-replication.md": 2,
+      "kubernetes/persistent-volumes.md": 1,
+      "kubernetes/operators.md": 1,
+      "kubernetes/resource-limits.md": 1,
+      "homelab/k3s-cluster.md": 1
+    }
+  },
+  {
+    "id": "q16",
+    "query": "expose a home service to the internet",
+    "kind": "cross-topic",
+    "relevant": {
+      "homelab/router.md": 3,
+      "networking/wireguard.md": 2,
+      "kubernetes/ingress.md": 2,
+      "homelab/k3s-cluster.md": 1,
+      "networking/tls.md": 1,
+      "networking/dns.md": 1
+    }
+  },
+  {
+    "id": "q17",
+    "query": "writing a kubernetes controller in go",
+    "kind": "cross-topic",
+    "relevant": {
+      "kubernetes/operators.md": 3,
+      "go/concurrency.md": 2,
+      "kubernetes/rbac-and-service-accounts.md": 1,
+      "go/testing.md": 1,
+      "go/error-handling.md": 1
+    }
+  },
+  {
+    "id": "q18",
+    "query": "hybrid keyword and semantic search over a sqlite index",
+    "kind": "cross-topic",
+    "relevant": {
+      "ml/vector-search.md": 3,
+      "databases/sqlite.md": 2,
+      "ml/embeddings.md": 2,
+      "journal/2026-06-02.md": 2,
+      "ml/rag.md": 1,
+      "databases/btree-indexes.md": 1
+    }
+  },
+  {
+    "id": "q19",
+    "query": "certificate renewal for internal services",
+    "kind": "cross-topic",
+    "relevant": {
+      "networking/tls.md": 3,
+      "kubernetes/ingress.md": 2,
+      "homelab/k3s-cluster.md": 1,
+      "homelab/router.md": 1,
+      "homelab/monitoring.md": 1,
+      "networking/dns.md": 1
+    }
+  },
+  {
+    "id": "q20",
+    "query": "deployment rollout strategy",
+    "kind": "ambiguous",
+    "relevant": {
+      "kubernetes/deployments.md": 3,
+      "kubernetes/statefulset-vs-deployment.md": 2,
+      "journal/release-process.md": 2,
+      "kubernetes/statefulsets.md": 1,
+      "journal/2026-07-14.md": 1
+    }
+  },
+  {
+    "id": "q21",
+    "query": "blue-green deployment",
+    "kind": "ambiguous",
+    "relevant": {
+      "journal/release-process.md": 3,
+      "journal/2026-07-14.md": 2,
+      "kubernetes/deployments.md": 1
+    }
+  },
+  {
+    "id": "q22",
+    "query": "fermentation temperature",
+    "kind": "ambiguous",
+    "relevant": {
+      "cooking/fermentation.md": 3,
+      "cooking/sourdough.md": 2,
+      "journal/2026-06-02.md": 1
+    }
+  },
+  {
+    "id": "q23",
+    "query": "rebuilding an index from scratch",
+    "kind": "ambiguous",
+    "relevant": {
+      "databases/btree-indexes.md": 3,
+      "ml/embeddings.md": 2,
+      "ml/vector-search.md": 2,
+      "databases/postgres-tuning.md": 1,
+      "journal/2026-06-02.md": 1
+    }
+  },
+  {
+    "id": "q24",
+    "query": "upgrading the cluster",
+    "kind": "ambiguous",
+    "relevant": {
+      "homelab/k3s-cluster.md": 3,
+      "journal/standup-notes.md": 2,
+      "databases/postgres-on-kubernetes.md": 1,
+      "databases/postgres-replication.md": 1,
+      "kubernetes/statefulset-vs-deployment.md": 1
+    }
+  },
+  {
+    "id": "q25",
+    "query": "why does my pod keep restarting?",
+    "kind": "natural-question",
+    "relevant": {
+      "kubernetes/troubleshooting-pods.md": 3,
+      "kubernetes/resource-limits.md": 2,
+      "databases/postgres-on-kubernetes.md": 1,
+      "homelab/monitoring.md": 1,
+      "homelab/k3s-cluster.md": 1
+    }
+  },
+  {
+    "id": "q26",
+    "query": "when should I use a StatefulSet instead of a Deployment?",
+    "kind": "natural-question",
+    "relevant": {
+      "kubernetes/statefulset-vs-deployment.md": 3,
+      "kubernetes/statefulsets.md": 2,
+      "kubernetes/deployments.md": 2,
+      "databases/postgres-on-kubernetes.md": 1,
+      "kubernetes/persistent-volumes.md": 1
+    }
+  },
+  {
+    "id": "q27",
+    "query": "how much salt do I need for sauerkraut?",
+    "kind": "natural-question",
+    "relevant": {
+      "cooking/fermentation.md": 3
+    }
+  },
+  {
+    "id": "q28",
+    "query": "what do I do if a deploy breaks production?",
+    "kind": "natural-question",
+    "relevant": {
+      "journal/release-process.md": 3,
+      "journal/2026-07-14.md": 2,
+      "kubernetes/deployments.md": 2,
+      "homelab/monitoring.md": 1,
+      "journal/standup-notes.md": 1
+    }
+  },
+  {
+    "id": "q29",
+    "query": "why is my espresso shot pulling too fast?",
+    "kind": "natural-question",
+    "relevant": {
+      "cooking/espresso.md": 3,
+      "journal/2026-06-02.md": 1
+    }
+  },
+  {
+    "id": "q30",
+    "query": "how should I structure error messages in a Go service?",
+    "kind": "natural-question",
+    "relevant": {
+      "go/error-handling.md": 3,
+      "go/http-services.md": 2,
+      "kubernetes/operators.md": 1,
+      "go/concurrency.md": 1
+    }
+  }
+]
