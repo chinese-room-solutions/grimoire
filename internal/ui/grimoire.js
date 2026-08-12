@@ -4606,6 +4606,23 @@
     setTimeout(revealMain, 5000); // safety: never leave the app hidden if init stalls.
   }
 
+  // Reload keys. The window is a webview with no browser chrome, so F5 and
+  // Ctrl/Cmd+R (Shift variants included — the browser convention for a hard
+  // reload) have to be wired by hand; WebKit's own handling of them is partial.
+  // A plain reload is the right "refresh the view" semantics here: the page
+  // restores the active sidebar tab (restoreActiveTab, sessionStorage) and the
+  // workspace tabs (navRestore, server-side uistate) on boot. Registered at
+  // script load rather than in init(), so the keys still work if boot stalls —
+  // which is exactly when a refresh is wanted.
+  function initReload() {
+    document.addEventListener("keydown", function (e) {
+      if (e.altKey) return;
+      if (e.key !== "F5" && !((e.ctrlKey || e.metaKey) && (e.key === "r" || e.key === "R"))) return;
+      e.preventDefault();
+      location.reload();
+    });
+  }
+
   // Pre-paint: hide the whole app until the persisted workspace is restored, so
   // neither the default Sessions tab nor the empty home flashes before the saved
   // tabs/view swap in. Tab state now lives server-side (per-vault SQLite), so it
@@ -4622,6 +4639,7 @@
     if (app) app.classList.remove("g-prepaint-hide");
   }
   hideMainUntilRestore();
+  initReload();
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
