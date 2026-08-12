@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"html"
 	"net/url"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -229,7 +231,8 @@ func renderBody(nr NoteRenderer, source, notePath string) string {
 		// Fall back to the raw text rather than failing the preview.
 		return "<pre>" + strings.ReplaceAll(source, "<", "&lt;") + "</pre>"
 	}
-	return wrapCodeBlocksWithRuns(nr, resolveImageSrcs(renderCallouts(buf.String())), overrides, sources, notePath)
+	rendered := resolveImageSrcs(renderCallouts(buf.String()), notePath, nr.FileExists)
+	return wrapCodeBlocksWithRuns(nr, rendered, overrides, sources, notePath)
 }
 
 // blockFence is a block's per-block kernel override, recovered from its fence
@@ -327,6 +330,12 @@ type NoteRenderer struct {
 	// note re-hydrates its saved output without the render layer depending on the
 	// run-result store.
 	RunResult func(notePath, code string) (RunResult, bool)
+	// FileExists, when set, reports whether a vault-relative path names a file in
+	// the vault. It decides where an image embed's relative src lands (the note's
+	// own directory or the vault root) and whether it lands anywhere at all. With
+	// no probe the renderer can't tell, so it reads the src's own form and never
+	// marks an embed broken.
+	FileExists func(rel string) bool
 }
 
 // RunResult is a block's persisted last run, mirrored from the app/runs layer so
@@ -467,22 +476,101 @@ func runResultPanelHTML(blockID string, res RunResult) string {
 // preview. The web layer mounts a handler at this path.
 const VaultFileRoute = "vault-file/"
 
-// imageSrc matches an <img src="…"> attribute in rendered HTML.
-var imageSrc = regexp.MustCompile(`(<img[^>]*\bsrc=")([^"]*)(")`)
+// imageTag matches a rendered image element, and imageSrc/imageAlt its src and
+// alt attributes. The whole tag is matched because a broken embed is replaced
+// outright, not just re-pointed. Raw HTML in a note is escaped, so every <img>
+// here is one the renderer emitted.
+var (
+	imageTag = regexp.MustCompile(`<img\b[^>]*>`)
+	imageSrc = regexp.MustCompile(`\bsrc="([^"]*)"`)
+	imageAlt = regexp.MustCompile(`\balt="([^"]*)"`)
+)
 
-// resolveImageSrcs rewrites a rendered note's relative image sources to point at
-// the vault-file route, so an ![](attachments/x.png) (a vault-relative path)
-// loads from the vault. Absolute URLs (http(s), data:, the note scheme, a leading
-// slash) are left as-is.
-func resolveImageSrcs(html string) string {
-	return imageSrc.ReplaceAllStringFunc(html, func(m string) string {
-		g := imageSrc.FindStringSubmatch(m)
-		src := g[2]
-		if src == "" || isAbsoluteURL(src) {
-			return m
+// resolveImageSrcs points a rendered note's relative image sources at the
+// vault-file route, resolving each against the note at notePath (see
+// vaultRelImage), and replaces an embed whose file isn't there with a warning
+// chip. Absolute URLs (http(s), data:, the note scheme, a leading slash) are
+// neither resolved nor checked.
+func resolveImageSrcs(rendered, notePath string, exists func(rel string) bool) string {
+	return imageTag.ReplaceAllStringFunc(rendered, func(tag string) string {
+		g := imageSrc.FindStringSubmatch(tag)
+		if g == nil || g[1] == "" || isAbsoluteURL(g[1]) {
+			return tag
 		}
-		return g[1] + VaultFileRoute + src + g[3]
+		// goldmark percent-encodes the destination; resolution and the existence
+		// probe work on real path bytes, so decode first and re-encode after.
+		src := g[1]
+		if dec, err := url.PathUnescape(src); err == nil {
+			src = dec
+		}
+		rel, ok := vaultRelImage(src, notePath, exists)
+		if !ok {
+			return missingImage(tag, src)
+		}
+		return imageSrc.ReplaceAllLiteralString(tag, `src="`+VaultFileRoute+escapePath(rel)+`"`)
 	})
+}
+
+// vaultRelImage resolves an image src to a vault-relative path the way Obsidian
+// does: relative to the note's own directory first (what every Markdown editor
+// writes), then relative to the vault root (what vault-rooted Obsidian embeds
+// rely on). Without an existence probe there is nothing to choose between the
+// two, so the src's own form decides — an explicit ./ or ../ is note-relative,
+// a bare path keeps its vault-relative reading. ok is false when the src names
+// no file inside the vault.
+func vaultRelImage(src, notePath string, exists func(rel string) bool) (string, bool) {
+	noteRel, noteOK := inVault(path.Join(path.Dir(filepath.ToSlash(notePath)), src))
+	vaultRel, vaultOK := inVault(src)
+	if exists == nil {
+		if strings.HasPrefix(src, "./") || strings.HasPrefix(src, "../") {
+			return noteRel, noteOK
+		}
+		return vaultRel, vaultOK
+	}
+	if noteOK && exists(noteRel) {
+		return noteRel, true
+	}
+	if vaultOK && exists(vaultRel) {
+		return vaultRel, true
+	}
+	return "", false
+}
+
+// inVault cleans a slash-separated path and reports whether it still names
+// something under the vault root. A src that climbs past the root or is rooted
+// itself doesn't, and is never emitted as a URL — it is a broken embed.
+func inVault(p string) (string, bool) {
+	clean := path.Clean(p)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
+		return "", false
+	}
+	return clean, true
+}
+
+// escapePath percent-encodes a vault-relative path for the vault-file URL,
+// segment by segment so the separators survive, then escapes it for the HTML
+// attribute it goes into.
+func escapePath(rel string) string {
+	segs := strings.Split(rel, "/")
+	for i, seg := range segs {
+		segs[i] = url.PathEscape(seg)
+	}
+	return html.EscapeString(strings.Join(segs, "/"))
+}
+
+// missingImage replaces an embed whose file isn't in the vault with a warning
+// chip naming the missing path — a browser's broken-image glyph says only that
+// something failed, not what, and an SVG that isn't there shows nothing at all.
+// The alt text labels the chip when the note gave one (goldmark has already
+// escaped it); the path is always on the title, for the alt-less case and for
+// checking what the preview actually looked for.
+func missingImage(tag, src string) string {
+	label := html.EscapeString(src)
+	if g := imageAlt.FindStringSubmatch(tag); g != nil && g[1] != "" {
+		label = g[1]
+	}
+	return `<span class="g-img-missing" title="Missing image: ` + html.EscapeString(src) + `">` +
+		`<sl-icon name="image"></sl-icon>` + label + `</span>`
 }
 
 // isAbsoluteURL reports whether a src needs no vault rewrite: an external/data URL
@@ -633,6 +721,9 @@ type State struct {
 	// TrashEnabled seeds the Settings trash switch: deletes move to the vault's
 	// trash (restorable) rather than being permanent.
 	TrashEnabled bool
+	// Search seeds the search tuning bar with the vault's persisted values (the
+	// zero value renders the defaults).
+	Search SearchParams
 	// Recents are the vaults Grimoire knows about, shown as quick-pick rows in the
 	// empty state (ignored when HasVault is true).
 	Recents []VaultRef
@@ -642,6 +733,75 @@ type State struct {
 	// Version is the running build's version, shown at the foot of the settings
 	// menu. Rendered verbatim (a "dev" build says dev); empty drops the line.
 	Version string
+}
+
+// SearchParams is the search tuning bar's state: how many results to return, the
+// minimum relevance a hit needs, and whether search stays in this page's vault.
+// It persists per vault in the UI-state store — the JS writes this shape, and
+// ParseSearchParams reads it back to seed the page.
+type SearchParams struct {
+	K         int     `json:"k"`
+	MinSim    float64 `json:"minSim"`
+	ThisVault bool    `json:"thisVault"`
+}
+
+// The sliders' ranges, mirrored from the Results and Min relevance controls in
+// grimoire.templ: a stored value outside them would put the thumb somewhere the
+// control cannot express. Keep the two in step.
+const (
+	searchKMin      = 1
+	searchKMax      = 30
+	searchMinSimMax = 0.95
+)
+
+// defaultSearchParams is the tuning a vault starts with. The minimum-similarity
+// default mirrors app.SearchFloor, which owns it — spelled out here because this
+// package stays free of internal/app (the setup binary renders it too).
+func defaultSearchParams() SearchParams {
+	return SearchParams{K: 10, MinSim: 0.35}
+}
+
+// ParseSearchParams reads a persisted tuning blob. Anything missing, unparsable,
+// or out of the sliders' range falls back to the default, so neither an older
+// blob nor a corrupt one can wedge the page. The fields are decoded through
+// pointers because zero is a value the controls can hold: an absent minimum
+// relevance means the default, a stored 0 means no floor at all.
+func ParseSearchParams(blob string) SearchParams {
+	p := defaultSearchParams()
+	var stored struct {
+		K         *int     `json:"k"`
+		MinSim    *float64 `json:"minSim"`
+		ThisVault *bool    `json:"thisVault"`
+	}
+	if err := json.Unmarshal([]byte(blob), &stored); err != nil {
+		return p
+	}
+	if stored.K != nil {
+		p.K = *stored.K
+	}
+	if stored.MinSim != nil {
+		p.MinSim = *stored.MinSim
+	}
+	if stored.ThisVault != nil {
+		p.ThisVault = *stored.ThisVault
+	}
+	return p.orDefaults()
+}
+
+// orDefaults defaults the zero SearchParams (a State the caller left unset) and
+// pulls any out-of-range field back to its default.
+func (p SearchParams) orDefaults() SearchParams {
+	d := defaultSearchParams()
+	if p == (SearchParams{}) {
+		return d
+	}
+	if p.K < searchKMin || p.K > searchKMax {
+		p.K = d.K
+	}
+	if p.MinSim < 0 || p.MinSim > searchMinSimMax {
+		p.MinSim = d.MinSim
+	}
+	return p
 }
 
 // VaultRef is one vault in the empty-state picker: its display name (the folder's
@@ -692,6 +852,7 @@ type ConnState struct {
 // data-attr:loading expression). The Vault-tab string signals are seeded with their
 // saved values so the model selects and vault input show the current choice.
 func initialSignals(st State) string {
+	search := st.Search.orDefaults()
 	sig := map[string]any{
 		// The vault this page is for, as an absolute path. Datastar sends the whole
 		// signal store with every request, so every action the page fires carries it
@@ -709,9 +870,10 @@ func initialSignals(st State) string {
 		"gGraphMinSim":  0.5,
 		// Search tuning, surfaced as the session view's top-panel sliders. Search
 		// covers every vault unless gSearchThisVault narrows it to this page's.
-		"gSearchK":         10,
-		"gSearchMinSim":    0.5,
-		"gSearchThisVault": false,
+		// The values persist per vault, so a page load restores what was set.
+		"gSearchK":         search.K,
+		"gSearchMinSim":    search.MinSim,
+		"gSearchThisVault": search.ThisVault,
 		"gModel":           st.EmbedModel,
 		"gConvertModel":    st.ConvertModel,
 		// gRunKernel/gRunVersion carry a block's per-run {kernel=FAMILY}{version=VER}
@@ -1338,6 +1500,18 @@ var styleBlock = `<style>
    underline. */
 /* Height matches the sidebar header (.g-side-head) so the two top bars line up. */
 #app-grimoire .g-tabstrip{display:flex;align-items:stretch;height:40px;background:var(--mass-bg-panel);border-bottom:1px solid var(--mass-border);flex-shrink:0}
+/* Vaults sidebar tab: the workspace becomes that vault's similarity graph, so the
+   whole strip (tabs and "+") goes away and the graph gets the full panel. The
+   tabs themselves are untouched — they come back with the strip. The graph's ×
+   goes too: there's no tab to close, you leave by picking another sidebar tab. */
+#app-grimoire.g-vault-graph .g-tabstrip{display:none}
+#app-grimoire.g-vault-graph .g-graph-close{display:none}
+/* With the strip gone the overlay reaches the top of the panel, so lift the
+   collapsed sidebar's floating header (z-index 20) above it — otherwise the
+   expand button would sit under the graph — and indent the graph's own header
+   past those 62px of icons, the way the strip does. */
+#app-grimoire.g-vault-graph .g-sidebar.g-collapsed .g-side-head{z-index:31}
+#app-grimoire.g-vault-graph.g-sidebar-collapsed .g-graph-head{padding-left:72px}
 /* Tabs scroll horizontally; the "+" stays pinned to their right. */
 #app-grimoire .g-tabstrip-tabs{display:flex;align-items:stretch;overflow-x:auto;min-width:0}
 /* New-tab "+" at the end of the strip (browser convention). */
@@ -1539,6 +1713,11 @@ var styleBlock = `<style>
 #app-grimoire .markdown-body table{border-collapse:collapse;margin:0.6em 0}
 #app-grimoire .markdown-body th,#app-grimoire .markdown-body td{border:1px solid var(--mass-border);padding:0.35rem 0.6rem;text-align:left}
 #app-grimoire .markdown-body img{max-width:100%}
+/* A missing image embed, rendered in place of the <img>: a subdued warning chip
+   carrying the alt text (or the path), with the missing path on hover. Sized
+   below body text so a broken embed reads as a margin note, not as content. */
+#app-grimoire .markdown-body .g-img-missing{display:inline-flex;align-items:center;gap:0.35rem;max-width:100%;padding:0.1rem 0.5rem;border:1px solid color-mix(in srgb,var(--mass-warning) 40%,transparent);border-radius:999px;background:var(--mass-warning-soft);color:var(--mass-warning);font-size:0.78rem;overflow-wrap:anywhere}
+#app-grimoire .markdown-body .g-img-missing sl-icon{flex-shrink:0;font-size:0.9rem}
 </style>`
 
 // RenderPage returns the grimoire HTML fragment (without layout wrapper).

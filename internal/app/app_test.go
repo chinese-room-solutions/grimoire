@@ -212,6 +212,32 @@ func TestOpenFileGuards(t *testing.T) {
 	})
 }
 
+func TestVaultFileExists(t *testing.T) {
+	vault := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(vault, "sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(vault, "sub", "pic.png"), []byte("x"), 0o644))
+	s := &Service{cfg: appconfig.Config{Vault: vault}}
+
+	tests := []struct {
+		name, rel string
+		want      bool
+	}{
+		{"a file in the vault", "sub/pic.png", true},
+		{"a missing file", "sub/gone.png", false},
+		{"a directory is not a file", "sub", false},
+		{"a path outside the vault", "../escape.png", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, s.VaultFileExists(tc.rel))
+		})
+	}
+
+	t.Run("no vault set", func(t *testing.T) {
+		require.False(t, (&Service{}).VaultFileExists("x.png"))
+	})
+}
+
 func TestNoteTimes(t *testing.T) {
 	vault := t.TempDir()
 	note := filepath.Join(vault, "n.md")

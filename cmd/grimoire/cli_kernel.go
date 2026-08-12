@@ -104,7 +104,7 @@ func (e *cliEnv) runKernelInstall(args []string) int {
 }
 
 // splitNameVersion splits NAME[@VERSION] on the last "@", so a bare name means
-// "the newest version".
+// "the newest compatible version".
 func splitNameVersion(arg string) (name, version string) {
 	if i := strings.LastIndexByte(arg, '@'); i >= 0 {
 		return arg[:i], arg[i+1:]

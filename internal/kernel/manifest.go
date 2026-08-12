@@ -30,11 +30,14 @@ type command struct {
 // Manifest is a decoded kernel spec — one toolchain version's runner. Identity
 // comes from the on-disk path, not the YAML: a kernel lives at
 // kernels/<family>/<version>/, so Family and Version are set by the loader from
-// that path (e.g. family "go", version "1.21"). Match lists the fenced-code
-// info-strings it claims (e.g. go, golang). Command is keyed by GOOS with a
-// "default" fallback. DisplayName is an optional friendly label. dir is the
-// manifest's own directory, used to resolve the runner script path.
+// that path (e.g. family "go", version "1.21"). Protocol is the runner protocol
+// version the kernel speaks (see protocol.go); the loader skips a kernel whose
+// protocol this core doesn't support. Match lists the fenced-code info-strings
+// it claims (e.g. go, golang). Command is keyed by GOOS with a "default"
+// fallback. DisplayName is an optional friendly label. dir is the manifest's own
+// directory, used to resolve the runner script path.
 type Manifest struct {
+	Protocol    int                `yaml:"protocol"`
 	Language    string             `yaml:"language"`
 	DisplayName string             `yaml:"display_name,omitempty"`
 	Match       []string           `yaml:"match"`

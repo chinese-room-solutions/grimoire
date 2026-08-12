@@ -289,7 +289,10 @@ func (r *Registry) Installed() []*Manifest {
 }
 
 // loadFrom reads and decodes one manifest, stamping its path-derived identity.
-// It returns nil (and logs) on an unreadable or invalid manifest.
+// It returns nil (and logs) on an unreadable or invalid manifest, or on one
+// whose runner protocol this core doesn't speak. The protocol is checked here
+// rather than at install time so the verdict follows the running core: a later
+// core that gains a protocol keeps honoring the kernels already on disk.
 func loadFrom(path, dir, family, version string, logger zerolog.Logger) *Manifest {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -299,6 +302,11 @@ func loadFrom(path, dir, family, version string, logger zerolog.Logger) *Manifes
 	m, err := loadManifest(data, dir, family, version)
 	if err != nil {
 		logger.Warn().Err(err).Str("manifest", path).Msg("skipping invalid kernel manifest")
+		return nil
+	}
+	if !protocolSupported(m.Protocol) {
+		logger.Warn().Str("kernel", m.Name()).Int("protocol", m.Protocol).Ints("supported", supportedProtocols).
+			Str("manifest", path).Msg("skipping kernel: unsupported runner protocol")
 		return nil
 	}
 	return m

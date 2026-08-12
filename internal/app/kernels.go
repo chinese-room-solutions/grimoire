@@ -28,11 +28,6 @@ const KindKernel = registry.Kind("kernel")
 // suffix is the family the package's archive must unpack to.
 const kernelPackagePrefix = "grimoire-kernel-"
 
-// artifactKeyAny is the platform key of a kernel artifact: kernels are
-// platform-independent (a manifest plus interpreter-run sources), so each
-// version ships one "any" artifact instead of os/arch builds.
-const artifactKeyAny = "any"
-
 var (
 	// ErrRegistryUnavailable wraps a failure to reach (or use) the kernel package
 	// registry — no URL configured, the fetch failed with nothing cached, or the
@@ -57,7 +52,8 @@ func (s *Service) InstalledKernels() []*kernel.Manifest {
 
 // KernelPackage is one installable kernel package from the registry index: its
 // package name, the family its archive unpacks to, and the version an install
-// without an explicit version would pick (the newest with an "any" artifact).
+// without an explicit version would pick (the newest compatible with this
+// Grimoire).
 type KernelPackage struct {
 	Name    string
 	Family  string
@@ -79,14 +75,17 @@ func (s *Service) KernelPackages(ctx context.Context) (pkgs []KernelPackage, sta
 		return nil, false, err
 	}
 	for _, pkg := range idx.Search(registry.SearchOptions{Kind: KindKernel}) {
-		version, ok := newestKernelVersion(&pkg)
-		if !ok {
-			continue // no installable artifact in any version.
+		res, err := s.resolvePackage(idx, pkg.Name, "", ErrKernelPackageUnknown)
+		if err != nil {
+			// Nothing this Grimoire can install: a version-less row, or none whose
+			// grimoire range covers this build. Not an error — just not on offer.
+			s.logger.Debug().Err(err).Str("package", pkg.Name).Msg("kernel package not installable here")
+			continue
 		}
 		pkgs = append(pkgs, KernelPackage{
 			Name:        pkg.Name,
 			Family:      kernelPackageFamily(pkg.Name),
-			Version:     version,
+			Version:     res.Version.Version,
 			DisplayName: pkg.DisplayName,
 			Description: pkg.Description,
 		})
@@ -96,9 +95,10 @@ func (s *Service) KernelPackages(ctx context.Context) (pkgs []KernelPackage, sta
 
 // InstallKernel resolves a kernel package from the registry index, downloads
 // its archive with sha256 verification, and installs it into the shared kernels
-// dir. version "" picks the package's newest version carrying an "any"
-// artifact. The kernel registry is reloaded on success, so the kernel resolves
-// immediately — no backend restart. Returns the installed kernel's manifest.
+// dir. version "" picks the package's newest version compatible with this
+// Grimoire; a named version must be that one. The kernel registry is reloaded
+// on success, so the kernel resolves immediately — no backend restart. Returns
+// the installed kernel's manifest.
 func (s *Service) InstallKernel(ctx context.Context, name, version string) (*kernel.Manifest, error) {
 	if s.shared.sharedKernels == "" {
 		return nil, fmt.Errorf("%w: no shared kernels dir", ErrRegistryUnavailable)
@@ -111,10 +111,11 @@ func (s *Service) InstallKernel(ctx context.Context, name, version string) (*ker
 	if pkg == nil || pkg.Kind != KindKernel {
 		return nil, ctxerr.With(fmt.Errorf("%w: %s", ErrKernelPackageUnknown, name), map[string]any{"package": name})
 	}
-	artifact, version, err := pickArtifact(pkg, version, newestKernelVersion, ErrKernelPackageUnknown)
+	res, err := s.resolvePackage(idx, name, version, ErrKernelPackageUnknown)
 	if err != nil {
 		return nil, err
 	}
+	artifact, version := res.Artifact, res.Version.Version
 	family := kernelPackageFamily(pkg.Name)
 
 	// Download to a scratch file; InstallArchive re-streams it into a temp dir
@@ -177,50 +178,6 @@ func (s *Service) fetchIndex(ctx context.Context, url string) (idx *registry.Ind
 		return nil, false, ctxerr.With(fmt.Errorf("%w: %v", ErrRegistryUnavailable, err), map[string]any{"url": url})
 	}
 	return res.Index, res.Stale, nil
-}
-
-// pickArtifact resolves the package version to install — the requested one, or
-// newest(pkg) when want is "" — and returns its "any" artifact alongside the
-// version chosen. Shared by kernels and themes, which differ only in how they
-// order versions and in the sentinel (unknown) a miss reports.
-func pickArtifact(
-	pkg *registry.Package, want string, newest func(*registry.Package) (string, bool), unknown error,
-) (registry.Artifact, string, error) {
-	if want == "" {
-		v, ok := newest(pkg)
-		if !ok {
-			return registry.Artifact{}, "", ctxerr.With(
-				fmt.Errorf("%w: %s has no installable version", unknown, pkg.Name),
-				map[string]any{"package": pkg.Name})
-		}
-		want = v
-	}
-	for _, v := range pkg.Versions {
-		if v.Version != want {
-			continue
-		}
-		if a, ok := v.Artifacts[artifactKeyAny]; ok {
-			return a, want, nil
-		}
-	}
-	return registry.Artifact{}, "", ctxerr.With(
-		fmt.Errorf("%w: %s@%s", unknown, pkg.Name, want),
-		map[string]any{"package": pkg.Name, "version": want})
-}
-
-// newestKernelVersion returns the package's newest version (kernel version
-// order, e.g. 1.21 < 1.26) that carries an "any" artifact.
-func newestKernelVersion(pkg *registry.Package) (string, bool) {
-	newest, found := "", false
-	for _, v := range pkg.Versions {
-		if _, ok := v.Artifacts[artifactKeyAny]; !ok {
-			continue
-		}
-		if !found || kernel.CompareVersions(v.Version, newest) > 0 {
-			newest, found = v.Version, true
-		}
-	}
-	return newest, found
 }
 
 // kernelPackageFamily derives the family a kernel package installs from its

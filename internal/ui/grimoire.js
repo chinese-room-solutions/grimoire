@@ -619,6 +619,32 @@
     });
   }
 
+  // The search tuning bar (results, minimum relevance, this vault only) persists
+  // per vault in the UI-state store, so switching vaults — a page load — keeps
+  // what was set. The controls are Datastar signals, not data-bind inputs, so the
+  // values are read off the DOM (as the graph's params() does). Saves are
+  // debounced: a slider drag fires an input per pixel.
+  var SEARCH_PARAMS_URL = "api/ui-state/search";
+  function initSearchParams() {
+    var k = getEl("g-search-k"), minSim = getEl("g-search-minsim"), thisVault = getEl("g-search-this-vault");
+    if (!k || !minSim || !thisVault) return;
+    var timer = null;
+    function save() {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () {
+        timer = null;
+        fetch(apiURL(SEARCH_PARAMS_URL), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ k: Number(k.value), minSim: Number(minSim.value), thisVault: !!thisVault.checked }),
+        }).catch(function () { /* persistence is best-effort. */ });
+      }, 400);
+    }
+    k.addEventListener("input", save);
+    minSim.addEventListener("input", save);
+    thisVault.addEventListener("change", save);
+  }
+
   function initSearch() {
     var input = getEl("g-query-input");
     var search = getEl("g-search-btn");
@@ -1921,19 +1947,62 @@
       }
     }
 
+    // ── Vaults-tab graph view ──
+    // While the Vaults sidebar tab is active the workspace IS that vault's
+    // similarity graph: the tab strip is hidden and the graph overlay fills the
+    // panel. It's a view MODE, not a tab — the open tabs, the focused one, their
+    // scroll and their server-side persistence are untouched, so leaving Vaults
+    // brings the workspace back exactly as it was. The sidebar group's active tab
+    // is the source of truth: show() sets it synchronously, so a programmatic
+    // switch reads right even before its sl-tab-show lands.
+    var vaultGraph = false; // the applied mode; render() and the strip follow it.
+    function vaultTabActive() {
+      var group = getEl("g-tabs");
+      if (group && group.activeTab) return group.activeTab.panel === "vaults";
+      // The group hasn't upgraded/rendered yet (a fast reload can get here before
+      // Shoelace's first update), so activeTab is unset. Predict where it will
+      // land: the saved sidebar tab, else the first tab — Vaults.
+      var saved = null;
+      try { saved = sessionStorage.getItem(TAB_KEY); } catch (e) { /* opaque storage */ }
+      return SIDEBAR_PANELS[saved] ? saved === "vaults" : true;
+    }
+    // syncVaultGraph re-applies the rule after a sidebar tab change. It only acts
+    // when the mode actually flips, so Files↔Sessions stays what it has always
+    // been: a sidebar-only move that never touches the main panel.
+    function syncVaultGraph() {
+      var on = vaultTabActive();
+      if (on === vaultGraph) return;
+      vaultGraph = on;
+      var app = getEl("app-grimoire");
+      if (app) app.classList.toggle("g-vault-graph", on);
+      if (on) saveFocusedCache(); // keep the outgoing tab's scroll + unsaved text.
+      render();
+    }
+    // showSidebar switches the sidebar tab and applies the rule in the same beat,
+    // for the actions that need the workspace back (home, a search).
+    function showSidebar(name) {
+      var group = getEl("g-tabs");
+      if (group && typeof group.show === "function") group.show(name);
+      syncVaultGraph();
+    }
+    // showGraphView reveals the graph overlay over the panel — the Graph tab's
+    // view and the Vaults-tab view are the same picture.
+    function showGraphView() {
+      hidePreview(); clearActiveSession(); setGraph(true);
+      if (showGraph) showGraph(); // build/redraw once the overlay is shown + sized.
+    }
+
     // render drives the shared panel for the focused tab. It is the SINGLE source
     // of truth for "what's shown + which sidebar row is lit", so highlight state
     // can't drift from the view. Reuses the existing show paths (no history).
     function render() {
       var t = focusedTab();
+      // The Vaults tab's graph view outranks the focused tab; otherwise the
+      // focused tab decides what the panel shows.
+      if (vaultGraph || (t && t.kind === "graph")) { showGraphView(); return; }
       if (!t) {                                  // empty prompt (no tabs at all).
         setGraph(false); hidePreview(); clearActiveSession();
         var clear = getEl("g-session-clear-trigger"); if (clear) clear.click();
-        return;
-      }
-      if (t.kind === "graph") {
-        hidePreview(); clearActiveSession(); setGraph(true);
-        if (showGraph) showGraph(); // build/redraw once the overlay is shown + sized.
         return;
       }
       setGraph(false);
@@ -2342,7 +2411,9 @@
     // sidebar tab it creates a new note (a real file, opened as a tab — Grimoire
     // notes are always files, like Obsidian); on the Vaults tab it adds a vault;
     // elsewhere it opens a blank session scratch tab that commits nothing until
-    // you search. Shared by the strip's "+" and the Ctrl+N shortcut.
+    // you search. Shared by the strip's "+" and the Ctrl+N shortcut. On Vaults the
+    // strip (and its "+") is hidden by the graph view, so only Ctrl+N reaches this
+    // — it still adds a vault, the one "new" that tab has.
     function newTab() {
       var group = getEl("g-tabs");
       var active = group && group.activeTab ? group.activeTab.panel : "sessions";
@@ -2428,8 +2499,7 @@
     // the Sessions sidebar tab) WITHOUT closing the user's open tabs.
     // Focus an existing blank scratch tab if there is one, else open one.
     function home() {
-      var group = getEl("g-tabs");
-      if (group && typeof group.show === "function") group.show("sessions");
+      showSidebar("sessions");
       var blank = null;
       for (var i = 0; i < tabs.length; i++) {
         if (tabs[i].kind === "session" && !tabs[i].ref.id) { blank = tabs[i]; break; }
@@ -2526,10 +2596,17 @@
       },
       home: home,
       focusedNotePath: focusedNotePath,
+      // syncVaultGraph: apply the "Vaults tab shows the graph" rule for whatever
+      // sidebar tab is active now. Called on every sidebar tab change and once at
+      // init for the restored tab.
+      syncVaultGraph: syncVaultGraph,
       // ensureSessionFocused: before a search, surface the conversation base
       // panel by hiding any preview/graph overlay, so the streamed results are
       // visible even if a note or the graph tab was focused.
       ensureSessionFocused: function () {
+        // The Vaults tab's graph view covers the conversation, so a search leaves
+        // it: back to Sessions, and the workspace returns as the user left it.
+        if (vaultGraph) showSidebar("sessions");
         var t = focusedTab();
         // Remember which tab the results belong to, so adoptActiveSession rebinds
         // THIS tab when the (late) session list re-render arrives — even if the
@@ -3871,7 +3948,9 @@
       reheat(0); // force one redraw with the new colours (no physics re-run).
     });
 
-    // The × closes the graph tab (the focused tab when the overlay is up).
+    // The × closes the graph tab (the focused tab when the overlay is up). It's
+    // hidden in the Vaults tab's graph view, which has no tab to close — you leave
+    // that view by picking another sidebar tab.
     var closeBtn = overlay.querySelector(".g-graph-close");
     if (closeBtn) closeBtn.addEventListener("click", function () { if (nav) nav.closeFocused(); });
 
@@ -4480,9 +4559,10 @@
   }
 
   // Tab persistence: remember the active sidebar tab across a reload (F5) so the
-  // page comes back where it was instead of defaulting to Sessions. The sidebar
-  // tabs (Sessions/Files/Vault) are pure navigators — switching them never touches
-  // the main panel; they just open things into the workspace tabs.
+  // page comes back where it was instead of the default (Vaults). Files and
+  // Sessions are pure navigators — switching between them never touches the main
+  // panel; they just open things into the workspace tabs. Vaults is the exception:
+  // it takes the panel over with the vault's similarity graph (nav.syncVaultGraph).
   var TAB_KEY = "grimoire.tab";
   function saveActiveTab(name) {
     try { sessionStorage.setItem(TAB_KEY, name); } catch (e) { /* best-effort. */ }
@@ -4500,6 +4580,9 @@
     if (group) group.addEventListener("sl-tab-show", function (e) {
       saveActiveTab(e.detail.name);
       syncNewTitle(e.detail.name);
+      // Vaults shows that vault's similarity graph in place of the workspace;
+      // leaving it puts the workspace back untouched.
+      if (nav) nav.syncVaultGraph();
     });
     syncNewTitle(group && group.activeTab ? group.activeTab.panel : "sessions");
   }
@@ -4510,15 +4593,19 @@
   // group think the tab is already active and skip the panel sync.
   var SIDEBAR_PANELS = { vaults: true, sessions: true, files: true };
   function restoreActiveTab() {
-    var name;
-    try { name = sessionStorage.getItem(TAB_KEY); } catch (e) { return Promise.resolve(); }
-    // Anything that isn't a sidebar panel is a stale value ("graph" moved to the
-    // main panel); leave the group on its default rather than showing nothing.
-    if (!SIDEBAR_PANELS[name]) return Promise.resolve();
     var group = getEl("g-tabs");
-    if (!group || typeof group.show !== "function") return Promise.resolve();
+    if (!group) return Promise.resolve();
+    // Always wait out the group's first render, even when there is nothing to
+    // show(): the caller reads group.activeTab next (the Vaults-graph rule), and
+    // on a fast reload that property is unset until this promise settles.
     var ready = group.updateComplete && group.updateComplete.then
       ? group.updateComplete : Promise.resolve();
+    var name;
+    try { name = sessionStorage.getItem(TAB_KEY); } catch (e) { return ready; }
+    // Anything that isn't a sidebar panel is a stale value ("graph" moved to the
+    // main panel); leave the group on its default rather than showing nothing.
+    if (!SIDEBAR_PANELS[name]) return ready;
+    if (typeof group.show !== "function") return ready;
     return ready.then(function () {
       group.show(name);
       return group.updateComplete || Promise.resolve(); // wait for the switch to render.
@@ -4533,6 +4620,7 @@
     extensions.init();
     initTrashSwitch();
     initSearch();
+    initSearchParams();
     initSidebarCollapse();
     initSidebarTabs();
     calmHoverWhileScrolling("g-sessions");
@@ -4564,6 +4652,12 @@
     // Restore the saved tab + view, then reveal the app — held hidden pre-paint so
     // neither the default Sessions tab nor the empty home flashes first.
     restoreActiveTab().then(function () {
+      // Apply the Vaults-tab graph rule for the restored sidebar tab. Shoelace
+      // emits sl-tab-show only on a change, so a tab that was already active
+      // (the default, or a show() that was a no-op) needs this one call. Running
+      // it before the workspace restore also means the graph view never paints a
+      // focused tab first.
+      if (nav) nav.syncVaultGraph();
       // navRestore (restoreTabs) fetches the persisted tabs server-side; reveal
       // only once it resolves so the restored view doesn't flash in after paint.
       var done = navRestore ? navRestore() : null;
@@ -4606,6 +4700,23 @@
     setTimeout(revealMain, 5000); // safety: never leave the app hidden if init stalls.
   }
 
+  // Reload keys. The window is a webview with no browser chrome, so F5 and
+  // Ctrl/Cmd+R (Shift variants included — the browser convention for a hard
+  // reload) have to be wired by hand; WebKit's own handling of them is partial.
+  // A plain reload is the right "refresh the view" semantics here: the page
+  // restores the active sidebar tab (restoreActiveTab, sessionStorage) and the
+  // workspace tabs (navRestore, server-side uistate) on boot. Registered at
+  // script load rather than in init(), so the keys still work if boot stalls —
+  // which is exactly when a refresh is wanted.
+  function initReload() {
+    document.addEventListener("keydown", function (e) {
+      if (e.altKey) return;
+      if (e.key !== "F5" && !((e.ctrlKey || e.metaKey) && (e.key === "r" || e.key === "R"))) return;
+      e.preventDefault();
+      location.reload();
+    });
+  }
+
   // Pre-paint: hide the whole app until the persisted workspace is restored, so
   // neither the default Sessions tab nor the empty home flashes before the saved
   // tabs/view swap in. Tab state now lives server-side (per-vault SQLite), so it
@@ -4622,6 +4733,7 @@
     if (app) app.classList.remove("g-prepaint-hide");
   }
   hideMainUntilRestore();
+  initReload();
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);

@@ -81,14 +81,12 @@ func TestCLISkillUsage(t *testing.T) {
 }
 
 // TestCLISkillNeedsNoVault: skill runs through the real entry point with no
-// --vault and no last-used vault to fall back on. Someone who just ran the
-// installer has no vault yet, and that is precisely when they want the skill.
+// --vault. Someone who just ran the installer has no vault yet, and that is
+// precisely when they want the skill.
 func TestCLISkillNeedsNoVault(t *testing.T) {
 	dir := t.TempDir()
 	var out, errBuf bytes.Buffer
 	require.Equal(t, exitOK, runCLIWith([]string{"skill", "install", dir}, &out, &errBuf))
 	require.FileExists(t, filepath.Join(dir, "grimoire-cli", "SKILL.md"))
 	require.Empty(t, errBuf.String())
-	require.False(t, needsVault("skill"))
-	require.True(t, needsVault("search"))
 }

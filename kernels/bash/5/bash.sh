@@ -46,6 +46,26 @@ emit_output() {
   printf '{"id":"%s","type":"output","data":"%s"}\n' "$id" "$(json_escape "$data")"
 }
 
+# now_ms — epoch milliseconds. Only an all-digit answer counts: BSD date (macOS)
+# leaves %3N unexpanded and still exits 0, so "17..N" would poison the arithmetic
+# below — the exit code can't be trusted, the value must be validated. Fallbacks:
+# gdate (coreutils on macOS), python3, then whole seconds ×1000.
+now_ms() {
+  local t
+  t=$(date +%s%3N 2>/dev/null)
+  if [[ -z $t || $t == *[!0-9]* ]] && command -v gdate >/dev/null 2>&1; then
+    t=$(gdate +%s%3N 2>/dev/null)
+  fi
+  if [[ -z $t || $t == *[!0-9]* ]]; then
+    t=$(python3 -c 'import time;print(int(time.time()*1000))' 2>/dev/null)
+  fi
+  if [[ -z $t || $t == *[!0-9]* ]]; then
+    t=$(date +%s 2>/dev/null); [[ -z $t || $t == *[!0-9]* ]] && t=0
+    t=$(( t * 1000 ))
+  fi
+  printf '%s' "$t"
+}
+
 out=$(mktemp)
 trap 'rm -f "$out"' EXIT
 
@@ -53,12 +73,12 @@ while IFS= read -r id; do
   IFS= read -r b64 || break
   code=$(printf '%s' "$b64" | base64 --decode 2>/dev/null)
 
-  start=$(date +%s%3N 2>/dev/null || echo 0)
+  start=$(now_ms)
   : >"$out"
   # Merge stderr into stdout so the output keeps its chronological order.
   eval "$code" >"$out" 2>&1 </dev/null
   rc=$?
-  end=$(date +%s%3N 2>/dev/null || echo 0)
+  end=$(now_ms)
   dur=$(( end - start )); (( dur < 0 )) && dur=0
 
   emit_output "$id" "$out"

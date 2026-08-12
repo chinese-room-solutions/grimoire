@@ -1,3 +1,4 @@
+protocol: 1
 language: Bash
 display_name: Bash
 match: [bash, sh, shell]

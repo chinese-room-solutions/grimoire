@@ -33,7 +33,10 @@ type Shared struct {
 	// themeRegistryURL is the theme package index (mass-registry index.yml —
 	// themes are shared with MASS); "" = theme installs disabled.
 	themeRegistryURL string
-	logger           zerolog.Logger
+	// coreVersion is this build's own version, matched against the index's
+	// grimoire: ranges to decide which package versions may be installed.
+	coreVersion string
+	logger      zerolog.Logger
 
 	// embedGate caps concurrent embed calls across every indexing path (reindex,
 	// import, watcher) of every vault: the budget belongs to the gateway, not to
@@ -74,9 +77,12 @@ type Shared struct {
 // search history lives in; sharedKernels is the kernels dir every vault scans
 // ("" for none); registryURL and themeRegistryURL are the resolved kernel and
 // theme package indexes ("" disables the respective installs — the caller
-// applies the app-config default, so a blank here is deliberate, e.g. in tests).
+// applies the app-config default, so a blank here is deliberate, e.g. in tests);
+// coreVersion is the binary's build stamp, which the package indexes' grimoire:
+// ranges are matched against ("" or any non-release string installs unchecked).
 func NewShared(
-	client *GatewayClient, appDir, sharedKernels, registryURL, themeRegistryURL string, logger zerolog.Logger,
+	client *GatewayClient, appDir, sharedKernels, registryURL, themeRegistryURL, coreVersion string,
+	logger zerolog.Logger,
 ) (*Shared, error) {
 	if err := os.MkdirAll(appDir, appDirPerm); err != nil {
 		return nil, ctxerr.With(fmt.Errorf("creating app data dir: %w", err), map[string]any{"dir": appDir})
@@ -87,6 +93,7 @@ func NewShared(
 		sharedKernels:    sharedKernels,
 		registryURL:      registryURL,
 		themeRegistryURL: themeRegistryURL,
+		coreVersion:      coreVersion,
 		logger:           logger.With().Str("component", "app").Logger(),
 		embedGate:        newGate(effectiveConcurrency(0)),
 	}

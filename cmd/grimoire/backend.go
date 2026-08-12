@@ -101,7 +101,7 @@ func startBackend(logger zerolog.Logger, idleTimeout time.Duration) (*backend, e
 	// gateway client and its embed budget, the PDF renderer, the kernel and theme
 	// registries, and the cross-vault search history.
 	shared, err := grimoireapp.NewShared(client, appDir, sharedKernels,
-		appCfg.RegistryURLOrDefault(), appCfg.ThemeRegistryURLOrDefault(), logger)
+		appCfg.RegistryURLOrDefault(), appCfg.ThemeRegistryURLOrDefault(), version, logger)
 	if err != nil {
 		if closeLog != nil {
 			closeLog()

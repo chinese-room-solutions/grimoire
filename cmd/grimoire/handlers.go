@@ -75,10 +75,12 @@ func writeVaultError(w http.ResponseWriter, err error, logger zerolog.Logger) {
 }
 
 // noteRenderer wires the render layer to one vault: which kernel a runnable
-// block would use, and that block's cached last run.
+// block would use, that block's cached last run, and whether a referenced file
+// is in the vault.
 func noteRenderer(svc *app.Service) ui.NoteRenderer {
 	return ui.NoteRenderer{
-		Kernel: svc.KernelInfo,
+		Kernel:     svc.KernelInfo,
+		FileExists: svc.VaultFileExists,
 		RunResult: func(notePath, code string) (ui.RunResult, bool) {
 			res, ok := svc.RunResultFor(notePath, code)
 			if !ok {
@@ -160,6 +162,10 @@ func grimoireRoutes(reg *vaultRegistry, api *grimoireapi.API, ctl *daemonControl
 	})
 	vm.handle("POST /api/ui-state/tabs", func(svc *app.Service, l zerolog.Logger) http.HandlerFunc {
 		return uiStateSetHandler(svc, l, uiStateTabsKey)
+	})
+	// Search tuning has no GET: the page render seeds the controls from the store.
+	vm.handle("POST /api/ui-state/search", func(svc *app.Service, l zerolog.Logger) http.HandlerFunc {
+		return uiStateSetHandler(svc, l, uiStateSearchKey)
 	})
 	vm.handle("POST /api/note/import", importNoteHandler)
 	vm.handle("POST /api/note/import/cancel", func(svc *app.Service, _ zerolog.Logger) http.HandlerFunc {
@@ -248,6 +254,7 @@ func pageHandler(reg *vaultRegistry, appDir string, store *connstore.Store, clie
 			IndexConcurrency:      concurrency,
 			GraphOpen:             focusedTabIsGraph(svc, logger),
 			TrashEnabled:          ac.Trashes(),
+			Search:                searchParams(svc, logger),
 			Conn:                  connState,
 			Version:               version,
 		}))
@@ -1389,6 +1396,20 @@ func openFileHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 // uiStateTabsKey is the ui_state key under which the workspace's open tabs,
 // focused tab, and scroll positions are persisted (an opaque JSON blob).
 const uiStateTabsKey = "tabs"
+
+// uiStateSearchKey is the ui_state key under which the search tuning bar's
+// values (results, minimum relevance, this vault only) are persisted.
+const uiStateSearchKey = "search"
+
+// searchParams reads the vault's persisted search tuning for the page render.
+// An unreadable store is not fatal — the bar just shows the defaults.
+func searchParams(svc *app.Service, logger zerolog.Logger) ui.SearchParams {
+	value, err := svc.UIState(uiStateSearchKey)
+	if err != nil {
+		logger.Warn().Err(err).Msg("reading search params for page render")
+	}
+	return ui.ParseSearchParams(value)
+}
 
 // focusedTabIsGraph reports whether the persisted workspace's focused tab is the
 // graph, so the page can paint the graph overlay on first render (no restore-time

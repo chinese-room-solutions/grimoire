@@ -21,11 +21,15 @@ import (
 )
 
 // kernelManifestYAML is a minimal valid manifest for fixture packages.
-const kernelManifestYAML = "language: Go\ndisplay_name: Go\nmatch: [go]\nrunner: run.sh\ncommand: {default: {exe: sh, args: [\"{runner}\"]}}\n"
+const kernelManifestYAML = "protocol: 1\nlanguage: Go\ndisplay_name: Go\nmatch: [go]\nrunner: run.sh\ncommand: {default: {exe: sh, args: [\"{runner}\"]}}\n"
 
 // goPackage is the fixture package every test installs; its archive unpacks to
 // the "go" family.
 const goPackage = "grimoire-kernel-go"
+
+// testCoreVersion is the Grimoire version the fixture backends report — a
+// release semver, so the index's grimoire: ranges are actually enforced.
+const testCoreVersion = "0.2.0"
 
 // kernelZip builds a go-family package zip whose entries live under
 // go/<version>/, mirroring what `make kernels` produces.
@@ -132,7 +136,7 @@ func newKernelEnv(t *testing.T, registryURL string) *kernelTestEnv {
 // the kernels-changed notifications the daemon would fan out to other vaults.
 func (env *kernelTestEnv) newShared(t *testing.T, registryURL string) *app.Shared {
 	t.Helper()
-	sh, err := app.NewShared(nil, t.TempDir(), env.kernelsDir, registryURL, "", zerolog.Nop())
+	sh, err := app.NewShared(nil, t.TempDir(), env.kernelsDir, registryURL, "", testCoreVersion, zerolog.Nop())
 	require.NoError(t, err)
 	sh.SetOnKernelsChanged(func() { env.changed.Add(1) })
 	t.Cleanup(func() { require.NoError(t, sh.Close()) })
@@ -210,7 +214,9 @@ func TestAPIKernelInstallListRemoveRoundtrip(t *testing.T) {
 }
 
 // TestAPIKernelInstallPicksNewestVersion: with no version in the request, the
-// newest package version wins (numeric segments: 1.26 > 1.9).
+// newest package version wins (semver, so 1.26 > 1.9). A named version is a
+// real pin — an older listed version installs beside the newest, since kernel
+// families keep versions side by side.
 func TestAPIKernelInstallPicksNewestVersion(t *testing.T) {
 	reg := newRegistryStub(t)
 	reg.setIndex(
@@ -241,10 +247,12 @@ func TestAPIKernelInstallPicksNewestVersion(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &installed))
 	require.Equal(t, "1.26", installed.Version)
 
-	// An explicit version still installs exactly that version.
+	// Pinning the older version installs it beside the newest.
 	rec = doJSON(t, env.mux, http.MethodPost, "/api/v1/kernel/install",
 		map[string]any{"name": "grimoire-kernel-go", "version": "1.9"})
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &installed))
+	require.Equal(t, "1.9", installed.Version)
 	require.DirExists(t, filepath.Join(env.kernelsDir, "go", "1.9"))
 }
 
@@ -349,7 +357,7 @@ func TestAPIKernelListVaultShadowsShared(t *testing.T) {
 	vaultCopy := filepath.Join(configDir, "kernels", "go", "1.26")
 	require.NoError(t, os.MkdirAll(vaultCopy, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(vaultCopy, "go.kernel.yaml"),
-		[]byte("language: VaultGo\ndisplay_name: VaultGo\nmatch: [go]\nrunner: run.sh\ncommand: {default: {exe: sh}}\n"), 0o644))
+		[]byte("protocol: 1\nlanguage: VaultGo\ndisplay_name: VaultGo\nmatch: [go]\nrunner: run.sh\ncommand: {default: {exe: sh}}\n"), 0o644))
 
 	env := &kernelTestEnv{kernelsDir: t.TempDir(), configDir: configDir}
 	env.svc = app.New(env.newShared(t, reg.url()), configDir, t.TempDir(), t.TempDir(), zerolog.Nop())

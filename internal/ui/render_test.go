@@ -587,6 +587,8 @@ func TestPropIcon(t *testing.T) {
 }
 
 func TestResolveImageSrcs(t *testing.T) {
+	// Without a probe (the zero NoteRenderer) nothing is checked and nothing is
+	// marked broken: the src's own form decides where it points.
 	tests := []struct {
 		name, in, want string
 	}{
@@ -602,7 +604,106 @@ func TestResolveImageSrcs(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, resolveImageSrcs(tc.in))
+			require.Equal(t, tc.want, resolveImageSrcs(tc.in, "", nil))
+		})
+	}
+}
+
+// TestRenderNoteImagePaths pins the resolution order a Markdown image embed
+// follows: the note's own directory first (what an editor writes), then the
+// vault root (what a vault-rooted Obsidian embed relies on), then broken.
+func TestRenderNoteImagePaths(t *testing.T) {
+	// The vault the probe answers for: a note in a subfolder, one image beside
+	// it, one in a vault-root folder, one in a sibling folder.
+	vault := map[string]bool{
+		"notes/local.png":     true,
+		"assets/shared.svg":   true,
+		"notes/img/deep.png":  true,
+		"attachments/a b.png": true,
+	}
+	exists := func(rel string) bool { return vault[rel] }
+	nr := NoteRenderer{FileExists: exists}
+
+	tests := []struct {
+		name, notePath, in string
+		contains           []string
+		absent             []string
+	}{
+		{
+			name:     "vault-relative src that exists stays vault-relative",
+			notePath: "notes/n.md",
+			in:       "![](assets/shared.svg)",
+			contains: []string{`src="` + VaultFileRoute + `assets/shared.svg"`},
+		},
+		{
+			name:     "note-relative ../ resolves against the note's directory",
+			notePath: "notes/img/n.md",
+			in:       "![](../../assets/shared.svg)",
+			contains: []string{`src="` + VaultFileRoute + `assets/shared.svg"`},
+		},
+		{
+			name:     "./ form resolves against the note's directory",
+			notePath: "notes/n.md",
+			in:       "![](./local.png)",
+			contains: []string{`src="` + VaultFileRoute + `notes/local.png"`},
+		},
+		{
+			name:     "a bare src beside the note wins over the vault root",
+			notePath: "notes/n.md",
+			in:       "![](local.png)",
+			contains: []string{`src="` + VaultFileRoute + `notes/local.png"`},
+		},
+		{
+			name:     "a nested note reaches a sibling directory",
+			notePath: "notes/n.md",
+			in:       "![](img/deep.png)",
+			contains: []string{`src="` + VaultFileRoute + `notes/img/deep.png"`},
+		},
+		{
+			name:     "spaces in the path survive the round trip",
+			notePath: "n.md",
+			in:       "![](<attachments/a b.png>)",
+			contains: []string{`src="` + VaultFileRoute + `attachments/a%20b.png"`},
+		},
+		{
+			// The path is named in the chip, but never emitted as a URL.
+			name:     "an escape attempt is broken, not a path out of the vault",
+			notePath: "notes/n.md",
+			in:       "![](../../../etc/passwd)",
+			contains: []string{`class="g-img-missing"`, "../../../etc/passwd"},
+			absent:   []string{"<img", VaultFileRoute},
+		},
+		{
+			name:     "a missing file is marked broken and names the path",
+			notePath: "notes/n.md",
+			in:       "![](assets/gone.png)",
+			contains: []string{`class="g-img-missing"`, `title="Missing image: assets/gone.png"`, ">assets/gone.png<"},
+			absent:   []string{"<img", VaultFileRoute},
+		},
+		{
+			name:     "the alt text labels a broken embed",
+			notePath: "notes/n.md",
+			in:       "![a diagram](assets/gone.png)",
+			contains: []string{`title="Missing image: assets/gone.png"`, ">a diagram<"},
+			absent:   []string{"<img"},
+		},
+		{
+			name:     "external and data srcs are never checked",
+			notePath: "notes/n.md",
+			in:       "![](https://x/a.png) ![](http://x/b.png) ![](data:image/png;base64,AAAA)",
+			contains: []string{`src="https://x/a.png"`, `src="http://x/b.png"`, `src="data:image/png;base64,AAAA"`},
+			absent:   []string{"g-img-missing", VaultFileRoute},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out := RenderNoteBody(nr, tc.in, tc.notePath)
+			for _, want := range tc.contains {
+				require.Contains(t, out, want)
+			}
+			for _, no := range tc.absent {
+				require.NotContains(t, out, no)
+			}
 		})
 	}
 }
@@ -773,4 +874,63 @@ func TestExtensionRowRemoveShapes(t *testing.T) {
 	require.Contains(t, kernel, `content="Remove"`)
 	require.Contains(t, kernel, `data-g-version="1.0.0"`)
 	require.NotContains(t, kernel, "data-g-activate")
+}
+
+// TestParseSearchParams covers what a persisted search-tuning blob can be: absent
+// (a fresh vault), written before the field existed, corrupt, or outside the
+// sliders' range. None of them may leave the bar showing a value its controls
+// cannot express.
+func TestParseSearchParams(t *testing.T) {
+	def := SearchParams{K: 10, MinSim: 0.35}
+	tests := []struct {
+		name string
+		blob string
+		want SearchParams
+	}{
+		{"nothing stored", "", def},
+		{"an older blob without the field", `{}`, def},
+		{"a partial blob keeps the other defaults", `{"thisVault":true}`, SearchParams{K: 10, MinSim: 0.35, ThisVault: true}},
+		{"a stored tuning", `{"k":23,"minSim":0.6,"thisVault":true}`, SearchParams{K: 23, MinSim: 0.6, ThisVault: true}},
+		{"corrupt json", `{"k":`, def},
+		{"a wrongly typed field", `{"k":"23"}`, def},
+		{"k below the slider", `{"k":0,"minSim":0.6}`, SearchParams{K: 10, MinSim: 0.6}},
+		{"k above the slider", `{"k":9000,"minSim":0.6}`, SearchParams{K: 10, MinSim: 0.6}},
+		{"a negative minimum relevance", `{"k":5,"minSim":-1}`, SearchParams{K: 5, MinSim: 0.35}},
+		{"a minimum relevance above the slider", `{"k":5,"minSim":2}`, SearchParams{K: 5, MinSim: 0.35}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, ParseSearchParams(tc.blob))
+		})
+	}
+}
+
+// TestRenderFullPageSeedsSearchParams pins both halves of the seeding the tuning
+// bar needs: the signals (what the readout shows and a search sends) and the
+// controls' own attributes (where the thumb sits, whether the box is ticked).
+func TestRenderFullPageSeedsSearchParams(t *testing.T) {
+	t.Run("an unset state renders the defaults", func(t *testing.T) {
+		signals := initialSignals(State{})
+		require.Contains(t, signals, `"gSearchK":10`)
+		require.Contains(t, signals, `"gSearchMinSim":0.35`)
+		require.Contains(t, signals, `"gSearchThisVault":false`)
+
+		page := RenderFullPage("dark", "info", State{})
+		require.Contains(t, page, `id="g-search-k" class="g-range" min="1" max="30" step="1" value="10"`)
+		require.Contains(t, page, `id="g-search-minsim" class="g-range" min="0" max="0.95" step="0.05" value="0.35"`)
+		require.Contains(t, page, `id="g-search-this-vault" data-bind="gSearchThisVault">`)
+	})
+
+	t.Run("stored values reach the signals and the controls", func(t *testing.T) {
+		st := State{Search: SearchParams{K: 23, MinSim: 0.6, ThisVault: true}}
+		signals := initialSignals(st)
+		require.Contains(t, signals, `"gSearchK":23`)
+		require.Contains(t, signals, `"gSearchMinSim":0.6`)
+		require.Contains(t, signals, `"gSearchThisVault":true`)
+
+		page := RenderFullPage("dark", "info", st)
+		require.Contains(t, page, `id="g-search-k" class="g-range" min="1" max="30" step="1" value="23"`)
+		require.Contains(t, page, `id="g-search-minsim" class="g-range" min="0" max="0.95" step="0.05" value="0.6"`)
+		require.Contains(t, page, `id="g-search-this-vault" data-bind="gSearchThisVault" checked>`)
+	})
 }

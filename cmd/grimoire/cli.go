@@ -55,7 +55,7 @@ func runCLIWith(args []string, out, errW io.Writer) int {
 	fs.SetOutput(errW)
 	fs.Usage = func() { usage(errW) }
 	vaultFlag := fs.String("vault", "",
-		"absolute path to the vault to act on (defaults to the last-used vault; narrows a search to one vault)")
+		"absolute path to the vault to act on (required by every vault-scoped command; narrows a search to one vault)")
 	jsonOut := fs.Bool("json", false, "emit raw JSON instead of human-readable output")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -66,48 +66,21 @@ func runCLIWith(args []string, out, errW io.Writer) int {
 		return exitUsage
 	}
 
-	env := &cliEnv{out: out, err: errW, json: *jsonOut}
-	// A verb that reads nothing but the binary itself runs before the vault is
-	// resolved: a fresh install has no vault yet, and `skill` is exactly what a
-	// user reaches for at that point.
-	if !needsVault(rest[0]) {
-		return env.dispatch(rest)
-	}
-
-	// Search takes the flag alone: no --vault means every vault, so falling back
-	// to the last-used one would silently narrow it. Every other verb acts on one
-	// vault and must have one.
-	vault := *vaultFlag
-	if requiresVault(rest[0]) {
-		resolved, err := resolveVault(vault)
-		if err != nil {
-			_, _ = fmt.Fprintf(errW, "error: %v\n", err)
-			return exitError
-		}
-		if resolved == "" {
-			_, _ = fmt.Fprintln(errW, "error: no vault: pass --vault PATH, or open one in the app first")
-			return exitUsage
-		}
-		vault = resolved
-	}
-
 	// The vault rides on each request rather than binding the daemon to it: a CLI
 	// verb never moves the last-vault pointer, so an agent probing another vault
-	// can't change which vault the user's GUI reopens.
-	env.vault = vault
-	env.connect = func(ctx context.Context) (*apiclient.Client, error) { return connectDaemon(ctx, vault) }
-	env.respawn = func(ctx context.Context) (*apiclient.Client, error) { return respawnDaemon(ctx, vault) }
+	// can't change which vault the user's GUI reopens. It is taken as written,
+	// with no last-vault fallback — see dispatch.
+	vault := *vaultFlag
+	env := &cliEnv{
+		out:     out,
+		err:     errW,
+		json:    *jsonOut,
+		vault:   vault,
+		connect: func(ctx context.Context) (*apiclient.Client, error) { return connectDaemon(ctx, vault) },
+		respawn: func(ctx context.Context) (*apiclient.Client, error) { return respawnDaemon(ctx, vault) },
+	}
 	return env.dispatch(rest)
 }
-
-// needsVault reports whether --vault means anything to a verb. Every verb takes
-// it except skill, which only prints or copies a file compiled into the binary.
-func needsVault(verb string) bool { return verb != "skill" }
-
-// requiresVault reports whether a verb can't run without one. Search can: with
-// no vault named it covers them all, so it is the one verb that works on a
-// machine that has never opened a vault in the app.
-func requiresVault(verb string) bool { return needsVault(verb) && verb != "search" }
 
 // firstNonFlagIndex returns the index of the first argument that isn't a global
 // flag (or its value), which is the subcommand, or -1 when there is none. main
@@ -146,6 +119,13 @@ func (e *cliEnv) dispatch(args []string) int {
 	// positional (folder create PATH) and would otherwise treat "--help" as it.
 	if helpRequested(args[1:]) && printHelp(e.out, verbChain(args)) {
 		return exitOK
+	}
+	// A command that acts on one vault is told which, every time. The CLI has no
+	// last-used fallback on purpose: that pointer follows the app's window, so a
+	// vault switch there would silently redirect a script's next write.
+	if e.vault == "" && vaultUseFor(args) == vaultRequired {
+		e.errorf("--vault is required: pass the vault folder this command acts on (see 'grimoire vault list')")
+		return exitUsage
 	}
 	switch args[0] {
 	case "search":
@@ -371,11 +351,13 @@ func usage(w io.Writer) {
 grimoire — knowledge base over a folder of Markdown notes
 
 Usage:
-  grimoire [--vault PATH] [--json] <command> [args]
+  grimoire --vault PATH [--json] <command> [args]
 
 Global flags:
-  --vault PATH   vault to act on (default: the last-used vault; for search,
-                 narrows to one vault instead of covering them all)
+  --vault PATH   the vault to act on. Required by every vault-scoped command
+                 (note, folder, trash, import, reindex, resolve, vault tree) —
+                 there is no last-used fallback. For search it narrows to one
+                 vault instead of covering them all.
   --json         emit raw JSON instead of human-readable output
 
 Commands:

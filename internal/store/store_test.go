@@ -181,9 +181,13 @@ func TestSanitizeFTSQuery(t *testing.T) {
 		want  string
 	}{
 		{"plain words", "rotate api key", `"rotate" OR "api" OR "key"`},
-		{"operators are neutralized", `NEAR NOT AND foo*`, `"NEAR" OR "NOT" OR "AND" OR "foo*"`},
+		{"operators are neutralized", `NEAR NOT AND foo*`, `"NEAR" OR "foo*"`},
 		{"punctuation-only tokens dropped", "? - :: !", ""},
-		{"embedded quotes doubled", `say "hi" there`, `"say" OR """hi""" OR "there"`},
+		{"embedded quotes doubled", `say "hi" twice`, `"say" OR """hi""" OR "twice"`},
+		{"stopwords dropped", "how do I keep my sourdough starter alive",
+			`"keep" OR "sourdough" OR "starter" OR "alive"`},
+		{"stopwords match case-insensitively", "The Why And How Of Ranking", `"Ranking"`},
+		{"all-stopword query keeps its terms", "how do i", `"how" OR "do" OR "i"`},
 		{"cyrillic kept", "как дела", `"как" OR "дела"`},
 		{"empty", "   ", ""},
 		{"colons and paths", "internal/store: bug?", `"internal/store:" OR "bug?"`},
