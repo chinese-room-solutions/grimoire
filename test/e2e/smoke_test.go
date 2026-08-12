@@ -54,7 +54,9 @@ func TestUISmoke(t *testing.T) {
 		for _, sel := range []string{"#g-sidebar", "#g-bottombar", "#g-query-input", "#g-search-btn"} {
 			waitVisible(t, d, sel)
 		}
-		// The workspace strip always holds at least one tab (the blank session).
+		// Off the Vaults tab, the workspace strip always holds at least one tab
+		// (the blank session).
+		openSessionsTab(t, d)
 		waitVisible(t, d, "#g-tabstrip-tabs .g-tab")
 		title, err := d.evalString("document.title")
 		if err != nil || !strings.Contains(title, "Grimoire") {
@@ -296,6 +298,9 @@ func TestUISmoke(t *testing.T) {
 		_, d := boot(t, map[string]string{"a.md": "# A\n", "b.md": "# B\n"})
 		defer failShot(t, d)
 
+		// As a workspace TAB — the Vaults sidebar tab has its own graph view, so
+		// start off it.
+		openSessionsTab(t, d)
 		clickReady(t, d, "#g-open-graph")
 		waitVisible(t, d, "#g-graph.g-graph-open")
 		waitVisible(t, d, "#g-graph-canvas")
@@ -315,6 +320,61 @@ func TestUISmoke(t *testing.T) {
 		waitNotVisible(t, d, "#g-graph.g-graph-open")
 		// The workspace fell back to a live tab; the page is still interactive.
 		waitVisible(t, d, ".g-tab-active")
+	})
+
+	// The Vaults sidebar tab takes the workspace over with that vault's similarity
+	// graph: strip and "+" gone, graph full-panel. It's a view, not a tab — leaving
+	// Vaults restores the workspace and no tab is ever added.
+	t.Run("VaultsTabShowsGraph", func(t *testing.T) {
+		_, d := boot(t, map[string]string{"a.md": "# A\n", "b.md": "# B\n"})
+		defer failShot(t, d)
+
+		// Vaults is the default sidebar tab, so the page opens on the graph view.
+		waitVisible(t, d, "#g-graph.g-graph-open")
+		waitNotVisible(t, d, ".g-tabstrip")
+		// Baseline: off Vaults the strip is back and the graph is gone.
+		openSessionsTab(t, d)
+		waitVisible(t, d, "#g-tabstrip-tabs .g-tab")
+		waitNotVisible(t, d, "#g-graph.g-graph-open")
+		tabsBefore := countTabs(t, d)
+
+		for i := range 3 {
+			clickReady(t, d, `#g-tabs sl-tab[panel="vaults"]`)
+			waitVisible(t, d, "#g-vaults")
+			waitVisible(t, d, "#g-graph.g-graph-open")
+			waitVisible(t, d, "#g-graph-canvas")
+			waitNotVisible(t, d, ".g-tabstrip")
+			waitNotVisible(t, d, "#g-tab-new")
+
+			clickReady(t, d, `#g-tabs sl-tab[panel="sessions"]`)
+			waitNotVisible(t, d, "#g-graph.g-graph-open")
+			waitVisible(t, d, ".g-tabstrip")
+			if got := countTabs(t, d); got != tabsBefore {
+				t.Fatalf("flip %d left %d workspace tabs, want %d — the graph view must not open one", i, got, tabsBefore)
+			}
+		}
+
+		// A reload with Vaults as the restored sidebar tab comes back on the graph,
+		// still with no strip and no extra tab.
+		clickReady(t, d, `#g-tabs sl-tab[panel="vaults"]`)
+		waitVisible(t, d, "#g-graph.g-graph-open")
+		if err := d.refresh(); err != nil {
+			t.Fatalf("reloading the page: %v", err)
+		}
+		waitReady(t, d)
+		waitVisible(t, d, "#g-graph.g-graph-open")
+		waitNotVisible(t, d, ".g-tabstrip")
+		if got := countTabs(t, d); got != tabsBefore {
+			t.Fatalf("after the reload %d workspace tabs, want %d", got, tabsBefore)
+		}
+
+		// A search needs the conversation the graph view covers, so it leaves that
+		// view (back to Sessions) rather than streaming underneath it.
+		submitSearch(t, d, "what is in my notes")
+		waitNotVisible(t, d, "#g-graph.g-graph-open")
+		waitVisible(t, d, ".g-tabstrip")
+		waitTextContains(t, d, "#g-conversation .g-turn .g-bubble-user", "what is in my notes")
+		assertNoConsoleErrors(t, d)
 	})
 
 	// The Extensions dialog against stub registries: the installed sections read
@@ -501,11 +561,37 @@ func waitReady(t *testing.T, d *driver) {
 	})
 }
 
+// countTabs reports how many tabs the workspace strip holds (they're counted in
+// the DOM, so a hidden strip still answers).
+func countTabs(t *testing.T, d *driver) int {
+	t.Helper()
+	var n int
+	poll(t, "the workspace tab count", func() (bool, string) {
+		out, err := d.exec("return document.querySelectorAll('#g-tabstrip-tabs .g-tab').length;")
+		if err != nil {
+			return false, err.Error()
+		}
+		f, ok := out.(float64)
+		n = int(f)
+		return ok, fmt.Sprintf("tabs=%v", out)
+	})
+	return n
+}
+
 // openFilesTab switches the sidebar to the Files tab and waits for the tree.
 func openFilesTab(t *testing.T, d *driver) {
 	t.Helper()
 	clickReady(t, d, `#g-tabs sl-tab[panel="files"]`)
 	waitVisible(t, d, "#g-files")
+}
+
+// openSessionsTab switches the sidebar to the Sessions tab and waits for the
+// workspace strip. Vaults is the default sidebar tab and shows the similarity
+// graph over the whole workspace, so a flow that needs the tabs starts here.
+func openSessionsTab(t *testing.T, d *driver) {
+	t.Helper()
+	clickReady(t, d, `#g-tabs sl-tab[panel="sessions"]`)
+	waitVisible(t, d, ".g-tabstrip")
 }
 
 // submitSearch types a query into the search box and submits it.
@@ -599,6 +685,13 @@ func assertNoConsoleErrors(t *testing.T, d *driver) {
 			continue
 		}
 		if strings.Contains(e.Message, "favicon") {
+			continue
+		}
+		// The Vaults sidebar tab (the default) loads the similarity graph, and with
+		// no gateway /api/graph answers 503 by design — the overlay holds its
+		// spinner and retries. That degrade is asserted where it belongs
+		// (GraphOverlayOpensCloses); here it's expected noise.
+		if strings.Contains(e.Message, "/api/graph") && strings.Contains(e.Message, "503") {
 			continue
 		}
 		bad = append(bad, e.Message)

@@ -1429,6 +1429,18 @@ var styleBlock = `<style>
    underline. */
 /* Height matches the sidebar header (.g-side-head) so the two top bars line up. */
 #app-grimoire .g-tabstrip{display:flex;align-items:stretch;height:40px;background:var(--mass-bg-panel);border-bottom:1px solid var(--mass-border);flex-shrink:0}
+/* Vaults sidebar tab: the workspace becomes that vault's similarity graph, so the
+   whole strip (tabs and "+") goes away and the graph gets the full panel. The
+   tabs themselves are untouched — they come back with the strip. The graph's ×
+   goes too: there's no tab to close, you leave by picking another sidebar tab. */
+#app-grimoire.g-vault-graph .g-tabstrip{display:none}
+#app-grimoire.g-vault-graph .g-graph-close{display:none}
+/* With the strip gone the overlay reaches the top of the panel, so lift the
+   collapsed sidebar's floating header (z-index 20) above it — otherwise the
+   expand button would sit under the graph — and indent the graph's own header
+   past those 62px of icons, the way the strip does. */
+#app-grimoire.g-vault-graph .g-sidebar.g-collapsed .g-side-head{z-index:31}
+#app-grimoire.g-vault-graph.g-sidebar-collapsed .g-graph-head{padding-left:72px}
 /* Tabs scroll horizontally; the "+" stays pinned to their right. */
 #app-grimoire .g-tabstrip-tabs{display:flex;align-items:stretch;overflow-x:auto;min-width:0}
 /* New-tab "+" at the end of the strip (browser convention). */

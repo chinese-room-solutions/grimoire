@@ -261,7 +261,8 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 			     the shared panel below. The "+" opens a blank scratch tab (the empty
 			     search prompt) that becomes a session once you search — it commits
 			     nothing by itself. There's always at least one tab open, so the strip
-			     is always present. -->
+			     is always present — except on the Vaults sidebar tab, where the graph
+			     view hides it (see .g-vault-graph). -->
 			<div class="g-tabstrip">
 				<div id="g-tabstrip-tabs" class="g-tabstrip-tabs"></div>
 				<sl-icon-button id="g-tab-new" class="g-tab-new" name="plus-lg" title="New tab"></sl-icon-button>
@@ -359,7 +360,8 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 			</div>
 
 			<!-- Similarity graph: a full-panel canvas overlay (peer of the preview)
-			     shown while the Graph tab's view is open. The canvas is drawn and
+			     shown while the Graph tab's view is open, and while the Vaults sidebar
+			     tab is selected (there it replaces the workspace). The canvas is drawn and
 			     simulated entirely in JS; left-clicking a node opens that note,
 			     right-dragging one moves it. Visibility
 			     is a plain class (g-graph-open) the workspace toggles directly — not a
