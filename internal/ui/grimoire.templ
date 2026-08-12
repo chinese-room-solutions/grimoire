@@ -558,12 +558,16 @@ templ SearchResults(hits []Hit, warnings []string) {
 	}
 }
 
-// hitCards renders one ranking's result cards (label + snippet).
+// hitCards renders one ranking's result cards (label + snippet). The snippet is
+// the hit's chunk rendered as Markdown — .markdown-body so it is styled like a
+// note, .g-hit-text so it stays snippet-sized (see snippetHTML).
 templ hitCards(hits []Hit) {
 	for _, h := range hits {
 		<div class="g-hit">
 			@previewLink(h.Path, h.Heading, h.Vault, sourceLabel(h))
-			<div class="g-hit-text">{ snippet(h.Text) }</div>
+			<div class="g-hit-text markdown-body">
+				@templ.Raw(snippetHTML(h.Text))
+			</div>
 		</div>
 	}
 }

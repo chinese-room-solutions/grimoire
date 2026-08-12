@@ -71,10 +71,18 @@ const NoteLinkScheme = "grimoire-note:"
 var wikilink = regexp.MustCompile(`\[\[([^\]|]+)(?:\|([^\]]+))?\]\]`)
 
 // rewriteWikilinks turns [[Target]] and [[Target|Alias]] into Markdown links to
-// the note scheme, skipping code: `[[ -f x ]]` in a bash fence or [[nodiscard]]
-// in a code span is code, not a link, and rewriting it would change what the
-// block displays, runs, and hashes.
-func rewriteWikilinks(source string) string {
+// the note scheme.
+func rewriteWikilinks(source string) string { return replaceWikilinks(source, noteLink) }
+
+// flattenWikilinks reduces [[Target]] and [[Target|Alias]] to the text they
+// display, for a render that must not link out (see snippetHTML).
+func flattenWikilinks(source string) string { return replaceWikilinks(source, wikilinkLabel) }
+
+// replaceWikilinks rewrites every wikilink outside code through repl, skipping
+// code: `[[ -f x ]]` in a bash fence or [[nodiscard]] in a code span is code,
+// not a link, and rewriting it would change what the block displays, runs, and
+// hashes.
+func replaceWikilinks(source string, repl func(string) string) string {
 	if !strings.Contains(source, "[[") {
 		return source
 	}
@@ -90,11 +98,11 @@ func rewriteWikilinks(source string) string {
 		if seg.start < prev {
 			continue
 		}
-		b.WriteString(wikilink.ReplaceAllStringFunc(source[prev:seg.start], noteLink))
+		b.WriteString(wikilink.ReplaceAllStringFunc(source[prev:seg.start], repl))
 		b.WriteString(source[seg.start:seg.stop])
 		prev = seg.stop
 	}
-	b.WriteString(wikilink.ReplaceAllStringFunc(source[prev:], noteLink))
+	b.WriteString(wikilink.ReplaceAllStringFunc(source[prev:], repl))
 	return b.String()
 }
 
@@ -103,11 +111,17 @@ func rewriteWikilinks(source string) string {
 // decodes it.
 func noteLink(m string) string {
 	g := wikilink.FindStringSubmatch(m)
-	target, alias := strings.TrimSpace(g[1]), strings.TrimSpace(g[2])
-	if alias == "" {
-		alias = target
+	return "[" + wikilinkLabel(m) + "](" + NoteLinkScheme + url.PathEscape(strings.TrimSpace(g[1])) + ")"
+}
+
+// wikilinkLabel is the text one matched wikilink displays: its alias, or its
+// target when it has none.
+func wikilinkLabel(m string) string {
+	g := wikilink.FindStringSubmatch(m)
+	if alias := strings.TrimSpace(g[2]); alias != "" {
+		return alias
 	}
-	return "[" + alias + "](" + NoteLinkScheme + url.PathEscape(target) + ")"
+	return strings.TrimSpace(g[1])
 }
 
 // srcSegment is a half-open byte range of a note's source.
@@ -961,16 +975,52 @@ func hitGroupVaults(hits []Hit) string {
 	return strings.Join(names, ", ")
 }
 
-// snippet trims a chunk to a short preview for the search results list. The cut
-// is by rune, so a multibyte character can't be split into invalid UTF-8.
-func snippet(s string) string {
-	const maxRunes = 240
-	s = strings.TrimSpace(s)
-	r := []rune(s)
-	if len(r) <= maxRunes {
-		return s
+// snippetHTML renders a hit's chunk as Markdown for the search results list,
+// through the same pipeline — and the same escaped-raw-HTML safety — as a note
+// preview. A chunk is a mid-note fragment, so a table may arrive without its
+// header and a list mid-item; goldmark renders what it can.
+//
+// Two deliberate departures from the note render, because a hit card is a
+// preview and not the note:
+//
+//   - [[wikilinks]] flatten to their label. Nothing in a results list should
+//     navigate but the card's own source link, and a wikilink whose target is
+//     gone would be dead.
+//   - image embeds become a small chip naming them. Resolving one needs the
+//     hit's own vault, but the vault-file route serves the page's vault only,
+//     so a cross-vault hit's image would 404 — and a page of result cards each
+//     fetching images costs far more than a preview is worth.
+//
+// The chunk is rendered whole rather than cut to a preview length first: a cut
+// can land inside a fence or a table and break the render. The card clamps its
+// height in CSS instead (see .g-hit-text).
+func snippetHTML(chunk string) string {
+	chunk = strings.TrimSpace(chunk)
+	if chunk == "" {
+		return ""
 	}
-	return strings.TrimSpace(string(r[:maxRunes])) + "…"
+	var buf bytes.Buffer
+	if err := md.Convert([]byte(flattenWikilinks(chunk)), &buf); err != nil {
+		// Fall back to the raw chunk rather than dropping the hit.
+		return "<pre>" + html.EscapeString(chunk) + "</pre>"
+	}
+	return chipImages(renderCallouts(buf.String()))
+}
+
+// chipImages replaces every image embed in a rendered snippet with a chip
+// carrying its alt text (or its src) — see snippetHTML for why a hit card shows
+// an image's name instead of loading it. Both come from the rendered tag, so
+// they are already escaped.
+func chipImages(rendered string) string {
+	return imageTag.ReplaceAllStringFunc(rendered, func(tag string) string {
+		label := "image"
+		if g := imageAlt.FindStringSubmatch(tag); g != nil && g[1] != "" {
+			label = g[1]
+		} else if g := imageSrc.FindStringSubmatch(tag); g != nil && g[1] != "" {
+			label = g[1]
+		}
+		return `<span class="g-hit-img"><sl-icon name="image"></sl-icon>` + label + `</span>`
+	})
 }
 
 func script() string {
@@ -1401,7 +1451,7 @@ var styleBlock = `<style>
 #app-grimoire .g-bubble-user{align-self:flex-end;background:var(--mass-accent-fill);color:var(--mass-fill-text);padding:0.5rem 0.85rem;border-radius:0.9rem 0.9rem 0.2rem 0.9rem;max-width:75%;font-size:0.88rem;word-break:break-word;margin-bottom:0.85rem;cursor:context-menu}
 #app-grimoire .g-hit{border:1px solid var(--mass-border);border-radius:0.45rem;padding:0.6rem 0.7rem;background:var(--mass-bg-panel);margin-top:0.5rem}
 #app-grimoire .g-hit-src{font-size:0.72rem;color:var(--mass-accent);margin-bottom:0.25rem}
-#app-grimoire .g-hit-text{font-size:0.8rem;color:var(--mass-text);white-space:pre-wrap;word-break:break-word}
+/* .g-hit-text is rendered Markdown; its rules live with the other Markdown ones. */
 /* A vault a cross-vault search couldn't reach, named under its results. */
 #app-grimoire .g-hit-warning{font-size:0.72rem;margin-top:0.5rem}
 /* One embedding model's block, when a search spanned two: folded by default,
@@ -1718,6 +1768,27 @@ var styleBlock = `<style>
    below body text so a broken embed reads as a margin note, not as content. */
 #app-grimoire .markdown-body .g-img-missing{display:inline-flex;align-items:center;gap:0.35rem;max-width:100%;padding:0.1rem 0.5rem;border:1px solid color-mix(in srgb,var(--mass-warning) 40%,transparent);border-radius:999px;background:var(--mass-warning-soft);color:var(--mass-warning);font-size:0.78rem;overflow-wrap:anywhere}
 #app-grimoire .markdown-body .g-img-missing sl-icon{flex-shrink:0;font-size:0.9rem}
+
+/* A search hit's snippet: the chunk rendered as Markdown. It carries
+   .markdown-body too, so code, tables and callouts look as they do in a note;
+   these rules come after that block to win the ties and compact the scale — a
+   chunk starting with "# Title" must read as a snippet, not tower over its card.
+   The card clamps to --g-hit-clamp, and the fade sits a fixed distance from the
+   top: a snippet shorter than the clamp makes the box short enough to clip the
+   fade away entirely, so only a truncated one fades out. */
+#app-grimoire .g-hit-text{--g-hit-clamp:11rem;position:relative;max-height:var(--g-hit-clamp);overflow:hidden;font-size:0.8rem;line-height:1.55;word-break:break-word}
+#app-grimoire .g-hit-text::after{content:"";position:absolute;left:0;right:0;top:calc(var(--g-hit-clamp) - 1.6rem);height:1.6rem;background:linear-gradient(to bottom,transparent,var(--mass-bg-panel));pointer-events:none}
+#app-grimoire .g-hit-text h1,#app-grimoire .g-hit-text h2,#app-grimoire .g-hit-text h3,#app-grimoire .g-hit-text h4,#app-grimoire .g-hit-text h5,#app-grimoire .g-hit-text h6{font-size:0.85rem;font-weight:600;line-height:1.35;margin:0.5em 0 0.25em}
+#app-grimoire .g-hit-text p,#app-grimoire .g-hit-text ul,#app-grimoire .g-hit-text ol,#app-grimoire .g-hit-text pre,#app-grimoire .g-hit-text table,#app-grimoire .g-hit-text blockquote,#app-grimoire .g-hit-text .g-callout{margin:0.4em 0}
+#app-grimoire .g-hit-text ul,#app-grimoire .g-hit-text ol{padding-left:1.2em}
+#app-grimoire .g-hit-text pre{padding:0.45rem 0.6rem;font-size:0.72rem}
+#app-grimoire .g-hit-text table{font-size:0.75rem}
+#app-grimoire .g-hit-text th,#app-grimoire .g-hit-text td{padding:0.2rem 0.45rem}
+#app-grimoire .g-hit-text>*:first-child{margin-top:0}
+#app-grimoire .g-hit-text>*:last-child{margin-bottom:0}
+/* An image embed in a snippet, named rather than loaded (see snippetHTML). */
+#app-grimoire .g-hit-text .g-hit-img{display:inline-flex;align-items:center;gap:0.3rem;max-width:100%;padding:0.05rem 0.45rem;border:1px solid var(--mass-border);border-radius:999px;background:var(--mass-bg-hover);color:var(--mass-text-muted);font-size:0.72rem;overflow-wrap:anywhere}
+#app-grimoire .g-hit-text .g-hit-img sl-icon{flex-shrink:0;font-size:0.85rem}
 </style>`
 
 // RenderPage returns the grimoire HTML fragment (without layout wrapper).
