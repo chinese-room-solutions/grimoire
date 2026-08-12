@@ -317,6 +317,61 @@ func TestUISmoke(t *testing.T) {
 		})
 	})
 
+	// Back/forward retrace where the user has BEEN, not the tab strip. Both notes
+	// share the one reusable preview tab, so stepping back has to reopen the
+	// earlier note in that same tab — the case a strip-order step got wrong,
+	// landing on whatever happened to sit to the left.
+	t.Run("BackForwardWalksHistory", func(t *testing.T) {
+		_, d := boot(t, map[string]string{
+			"a.md": "# A\n\nnote a\n",
+			"b.md": "# B\n\nnote b\n",
+		})
+		defer failShot(t, d)
+
+		openSessionsTab(t, d) // the blank session tab: the anchor behind both notes.
+		waitActiveTab(t, d, "New session")
+		openFilesTab(t, d)
+		// Single clicks, so both notes land in the SAME preview tab in turn.
+		clickReady(t, d, `#g-files .g-tree-note[data-note="a.md"]`)
+		waitTextContains(t, d, "#g-preview-body", "note a")
+		clickReady(t, d, `#g-files .g-tree-note[data-note="b.md"]`)
+		waitTextContains(t, d, "#g-preview-body", "note b")
+		if got := countTabs(t, d); got != 2 {
+			t.Fatalf("%d tabs open, want 2 (the session plus one preview)", got)
+		}
+
+		// The arrow goes back to note a — rebound into the preview tab, not pinned.
+		clickReady(t, d, "#g-preview-back")
+		waitActiveTab(t, d, "a")
+		waitTextContains(t, d, "#g-preview-body", "note a")
+		waitVisible(t, d, ".g-tab-active.g-tab-preview")
+
+		// Back again reaches the session the notes were opened from.
+		mouseNav(t, d, 3)
+		waitActiveTab(t, d, "New session")
+		waitNotVisible(t, d, "#g-preview")
+
+		// Forward retraces the same two steps.
+		mouseNav(t, d, 4)
+		waitActiveTab(t, d, "a")
+		waitTextContains(t, d, "#g-preview-body", "note a")
+		mouseNav(t, d, 4)
+		waitActiveTab(t, d, "b")
+		waitTextContains(t, d, "#g-preview-body", "note b")
+		// Nothing ahead now, so the forward arrow is disabled.
+		poll(t, "the forward arrow to disable at the end of the history", func() (bool, string) {
+			ok, err := d.evalBool("document.getElementById('g-preview-fwd').hasAttribute('disabled')")
+			if err != nil {
+				return false, err.Error()
+			}
+			return ok, "still enabled"
+		})
+		if got := countTabs(t, d); got != 2 {
+			t.Fatalf("the walk left %d tabs, want 2 — it must reuse the preview tab", got)
+		}
+		assertNoConsoleErrors(t, d)
+	})
+
 	t.Run("GraphOverlayOpensCloses", func(t *testing.T) {
 		_, d := boot(t, map[string]string{"a.md": "# A\n", "b.md": "# B\n"})
 		defer failShot(t, d)
@@ -645,6 +700,32 @@ func clickTabTitled(t *testing.T, d *driver, title string) {
 			}
 		}
 		return fmt.Errorf("no tab titled %q", title)
+	})
+}
+
+// waitActiveTab polls until the focused workspace tab's title is exactly want.
+func waitActiveTab(t *testing.T, d *driver, want string) {
+	t.Helper()
+	const script = `var el = document.querySelector('#g-tabstrip-tabs .g-tab-active .g-tab-title');
+return el ? el.textContent : "";`
+	poll(t, fmt.Sprintf("the active tab to be titled %q", want), func() (bool, string) {
+		out, err := d.exec(script)
+		if err != nil {
+			return false, err.Error()
+		}
+		got, _ := out.(string)
+		return got == want, "active tab: " + got
+	})
+}
+
+// mouseNav fires the mouse's back (3) / forward (4) side button. WebDriver can't
+// press those, so the event is synthesized onto window — the same listener the
+// real button reaches.
+func mouseNav(t *testing.T, d *driver, button int) {
+	t.Helper()
+	pollErr(t, fmt.Sprintf("firing mouse button %d", button), func() error {
+		_, err := d.exec("window.dispatchEvent(new MouseEvent('mouseup', { button: arguments[0] }));", button)
+		return err
 	})
 }
 

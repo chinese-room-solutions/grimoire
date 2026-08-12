@@ -1879,6 +1879,17 @@
     var tabCache = {};      // id -> { scrollTop, editorText?, editorDirty? }
     var tabSeq = 0;         // monotonic id source.
 
+    // ── Focus history ──
+    // Back/forward walk where the user HAS BEEN, not the strip order (Ctrl+Tab
+    // keeps that meaning). An entry names the ITEM, not just the tab, because the
+    // reusable preview tab rebinds in place: stepping back to a note that tab has
+    // since left must reopen it there, IDE-style. In-memory only — a reload seeds
+    // the stack with the restored focused tab.
+    var hist = [];       // [{ id, kind, ref, title }], oldest first.
+    var histAt = -1;     // cursor into hist; -1 before the first visit.
+    var walking = false; // set while a step refocuses, so it isn't re-recorded.
+    var HIST_MAX = 100;
+
     // Show "› Section" in the title after a section jump; clear it once the
     // heading scrolls out of view (so the title never claims a section you left).
     function setSection(headEl) {
@@ -2067,9 +2078,76 @@
       // ref/title), so the strip label and saved state would otherwise go stale.
       if (id !== focusedID) saveFocusedCache();
       focusedID = id;
+      // focus() is the choke point every user-driven open funnels through, so
+      // recording here covers tree/session/strip/breadcrumb/graph/new-tab alike.
+      if (!walking) recordVisit(findTab(id));
       render();
       renderStrip();
+      updateNavButtons();
       saveTabs();
+    }
+
+    // recordVisit appends a location as the newest history entry, dropping any
+    // forward entries (a fresh move forks the branch). Revisiting the location
+    // the cursor already names isn't a move — the forward branch survives.
+    function recordVisit(t) {
+      if (!t) return;
+      var e = { id: t.id, kind: t.kind, ref: t.ref, title: t.title };
+      if (histAt >= 0 && sameLoc(hist[histAt], e)) { hist[histAt].title = e.title; return; }
+      hist.length = histAt + 1;
+      hist.push(e);
+      if (hist.length > HIST_MAX) hist.shift();
+      histAt = hist.length - 1;
+    }
+    function sameLoc(a, b) { return a.id === b.id && tabKey(a.kind, a.ref) === tabKey(b.kind, b.ref); }
+
+    // resolveEntry answers how (or whether) an entry can be revisited: "focus"
+    // when its tab still holds that item, "rebind" when the tab is the reusable
+    // preview one that has since moved on (reopening the item in it is the IDE's
+    // back), null when the location is gone — a pinned tab retitled by a rename,
+    // or a tab that was closed.
+    function resolveEntry(e) {
+      var t = findTab(e.id);
+      if (!t || t.kind !== e.kind) return null;
+      if (tabKey(t.kind, t.ref) === tabKey(e.kind, e.ref)) return "focus";
+      return t.preview ? "rebind" : null;
+    }
+    function findStep(dir) {
+      for (var i = histAt + dir; i >= 0 && i < hist.length; i += dir) {
+        if (resolveEntry(hist[i])) return i;
+      }
+      return -1;
+    }
+    // stepHistory walks to the nearest revisitable entry in `dir` and lands on it
+    // through the ordinary focus()/render() path, so leaving an edited note (and
+    // every other switch side effect) behaves as it does for any tab change.
+    function stepHistory(dir) {
+      var at = findStep(dir);
+      if (at < 0) return;
+      var e = hist[at];
+      if (resolveEntry(e) === "rebind") rebindTab(findTab(e.id), e.ref, e.title); // stays ephemeral.
+      histAt = at;
+      walking = true;
+      try { focus(e.id); } finally { walking = false; }
+    }
+    // pruneHistory drops the entries of closed tabs. Keying on the tab id is
+    // enough: the preview tab keeps its id across rebinds, so every entry worth
+    // resurrecting survives, and a closed tab's entries are dead ends by
+    // definition. The cursor slides to the nearest surviving older entry.
+    function pruneHistory(drop) {
+      var kept = [], at = -1;
+      for (var i = 0; i < hist.length; i++) {
+        if (drop[hist[i].id]) continue;
+        kept.push(hist[i]);
+        if (i <= histAt) at = kept.length - 1;
+      }
+      hist = kept;
+      histAt = at;
+    }
+    // The arrows grey out when the walk has nowhere to go.
+    function updateNavButtons() {
+      if (back) back.toggleAttribute("disabled", findStep(-1) < 0);
+      if (fwd) fwd.toggleAttribute("disabled", findStep(1) < 0);
     }
 
     function close(id) {
@@ -2097,12 +2175,15 @@
         return false;
       });
       ensureNotEmpty(); // there's always at least one tab (a blank session).
+      pruneHistory(drop);
       if (losingFocus) {
         var keep = focusFallbackID !== null && findTab(focusFallbackID);
         focusedID = (keep || tabs[0]).id;
+        recordVisit(focusedTab()); // the fallback is where we now are.
         render();
       }
       renderStrip();
+      updateNavButtons();
       saveTabs();
       closeNoteKernels(closedNotes);
     }
@@ -2244,16 +2325,21 @@
         if (tabKey(t.kind, t.ref) === key) { if (title) t.title = title; return t; } // already open.
         if (t.preview && !preview) preview = t;
       }
-      if (preview) { // reuse the kind's preview tab: rebind it to this item.
-        delete tabCache[preview.id];
-        preview.ref = ref;
-        preview.title = title;
-        preview.pendingHeading = "";
-        return preview;
-      }
+      if (preview) { rebindTab(preview, ref, title); return preview; }
       var tab = { id: ++tabSeq, kind: kind, ref: ref, title: title, preview: true };
       tabs.push(tab);
       return tab;
+    }
+
+    // rebindTab points an existing tab at another item in place, keeping its id
+    // (and its provisional/pinned status). Two callers: the preview tab taking
+    // over a new item, and a history step reopening an item that tab has left.
+    // The cached scroll/unsaved text belong to the old item, so they go.
+    function rebindTab(t, ref, title) {
+      delete tabCache[t.id];
+      t.ref = ref;
+      t.title = title;
+      t.pendingHeading = "";
     }
 
     // pin makes a tab permanent (no longer the reusable preview tab). Idempotent;
@@ -2491,8 +2577,10 @@
         ensureNotEmpty();
         focusedID = tabs[0].id;
       }).finally(function () {
+        recordVisit(focusedTab()); // an anchor for back; the history itself is in-memory.
         renderStrip();
         render();
+        updateNavButtons();
       });
     }
 
@@ -2666,8 +2754,11 @@
       // (the turn already rendered into the conversation): set state directly.
       var t = open("session", { id: id, url: url, title: title }, title);
       if (t.id !== focusedID) { saveFocusedCache(); focusedID = t.id; }
-      renderStrip(); saveTabs();
+      recordVisit(t);
+      renderStrip(); updateNavButtons(); saveTabs();
     }
+    // stepFocus cycles the focus by STRIP ORDER — what Ctrl+Tab means. Back and
+    // forward are a different move entirely (see stepHistory).
     function stepFocus(delta) {
       if (!tabs.length) return;
       var idx = 0;
@@ -2759,16 +2850,15 @@
       }
     });
 
-    // The preview's back/forward arrows step between open tabs (muscle memory).
-    if (back) back.addEventListener("click", function () { stepFocus(-1); });
-    if (fwd) fwd.addEventListener("click", function () { stepFocus(1); });
+    // The preview's back/forward arrows walk the focus history, not the strip.
+    if (back) back.addEventListener("click", function () { stepHistory(-1); });
+    if (fwd) fwd.addEventListener("click", function () { stepHistory(1); });
 
-    // Mouse back (button 3) / forward (button 4) focus the previous / next tab.
+    // Mouse back (button 3) / forward (button 4) walk the same history.
     window.addEventListener("mouseup", function (e) {
       if (e.button !== 3 && e.button !== 4) return;
-      if (!tabs.length) return;
       e.preventDefault();
-      stepFocus(e.button === 3 ? -1 : 1);
+      stepHistory(e.button === 3 ? -1 : 1);
     });
 
     // The preview × closes the focused tab (a note tab). suppressClose guards the
