@@ -274,27 +274,30 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 			<!-- Search tuning bar, peer of the graph head. Sits above the stream so it
 			     shows only for the session view (the preview/graph overlays cover it).
 			     The sliders write their signals directly; the next search picks them up
-			     (no live re-run, so the session history stays clean). -->
+			     (no live re-run, so the session history stays clean). The controls are
+			     seeded from the vault's persisted tuning (initSearchParams in
+			     grimoire.js saves a change back). -->
+			{{ search := st.Search.orDefaults() }}
 			<div class="g-search-head">
 				<span class="g-search-title">Search</span>
 				<div class="g-graph-controls">
 					<label class="g-graph-ctl">
 						<span class="g-muted g-ctl-tip" title="How many matching notes to return. Higher shows more, including weaker matches.">Results</span>
-						<input type="range" id="g-search-k" class="g-range" min="1" max="30" step="1" value="10"
-							data-on:input="$gSearchK = evt.target.value"/>
+						<input type="range" id="g-search-k" class="g-range" min="1" max="30" step="1" value={ strconv.Itoa(search.K) }
+							data-on:input="$gSearchK = Number(evt.target.value)"/>
 						<span class="g-muted g-graph-ctl-val" data-text="$gSearchK"></span>
 					</label>
 					<label class="g-graph-ctl">
 						<span class="g-muted g-ctl-tip" title="Minimum closeness a note must have to the query. Higher = stricter, fewer but more relevant results.">Min relevance</span>
-						<input type="range" id="g-search-minsim" class="g-range" min="0" max="0.95" step="0.05" value="0.35"
-							data-on:input="$gSearchMinSim = evt.target.value"/>
+						<input type="range" id="g-search-minsim" class="g-range" min="0" max="0.95" step="0.05" value={ strconv.FormatFloat(search.MinSim, 'f', -1, 64) }
+							data-on:input="$gSearchMinSim = Number(evt.target.value)"/>
 						<span class="g-muted g-graph-ctl-val" data-text="$gSearchMinSim"></span>
 					</label>
 					<!-- Search covers every vault by default; this narrows it to the one
 					     this page has open. -->
 					<label class="g-graph-ctl">
 						<span class="g-muted g-ctl-tip" title="Search only the vault this window has open. Off, search covers every vault Grimoire knows about.">This vault only</span>
-						<input type="checkbox" id="g-search-this-vault" data-bind="gSearchThisVault"/>
+						<input type="checkbox" id="g-search-this-vault" data-bind="gSearchThisVault" checked?={ search.ThisVault }/>
 					</label>
 				</div>
 			</div>

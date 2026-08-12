@@ -5,12 +5,15 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
 )
@@ -213,15 +216,152 @@ func TestMultiVault(t *testing.T) {
 			{d.vaults["beta"], "beta.md"},
 			{d.vaults["alpha"], "alpha.md"}, // and back, so neither is just the default.
 		} {
-			page := d.baseURL + "?vault=" + url.QueryEscape(tc.vault)
-			if err := sess.navigate(page); err != nil {
-				t.Fatalf("navigating to %s: %v", page, err)
-			}
-			waitReady(t, sess)
+			openVault(t, sess, d, tc.vault)
 			openFilesTab(t, sess)
 			waitVisible(t, sess, fmt.Sprintf(`#g-files .g-tree-note[data-note=%q]`, tc.note))
 		}
 	})
+
+	// The search tuning bar belongs to the vault, like the open tabs: switching
+	// vaults is a page load, and the tuning has to survive it — without leaking
+	// into the vault next door.
+	t.Run("SearchTuningPersistsPerVault", func(t *testing.T) {
+		cdBin := findChromedriver(t)
+		chrome := findChrome(t, cdBin)
+		cdURL := startChromedriver(t, cdBin)
+		d := startServerVaults(t, multiVaultNotes)
+		alpha, beta := d.vaults["alpha"], d.vaults["beta"]
+
+		sess, err := newSession(cdURL, chrome, filepath.Join(t.TempDir(), "chrome-profile"))
+		if err != nil {
+			t.Fatalf("opening browser session: %v", err)
+		}
+		t.Cleanup(sess.quit)
+		defer failShot(t, sess)
+
+		openVault(t, sess, d, alpha)
+		openSessionsTab(t, sess) // leave the Vaults graph view: it covers the tuning bar.
+		setRange(t, sess, "g-search-k", "23")
+		setRange(t, sess, "g-search-minsim", "0.6")
+		clickReady(t, sess, "#g-search-this-vault")
+
+		// The save is debounced, so wait for it to land — read the page the daemon
+		// would serve rather than reloading the browser, which would cancel a save
+		// still in flight.
+		pollErr(t, "the tuning to reach the vault's store", func() error {
+			return pageSeedsTuning(d.baseURL, alpha, `value="23"`, `value="0.6"`, "checked")
+		})
+
+		// Switching to the other vault: its own tuning, untouched by alpha's.
+		openVault(t, sess, d, beta)
+		openSessionsTab(t, sess)
+		assertTuning(t, sess, "10", "0.35", false)
+		if err := pageSeedsTuning(d.baseURL, beta, `value="10"`, `value="0.35"`, `data-bind="gSearchThisVault">`); err != nil {
+			t.Fatalf("beta's stored tuning is not the default: %v", err)
+		}
+
+		// And back: alpha still shows what was set, thumbs and tick included.
+		openVault(t, sess, d, alpha)
+		openSessionsTab(t, sess)
+		assertTuning(t, sess, "23", "0.6", true)
+		assertNoConsoleErrors(t, sess)
+	})
+}
+
+// openVault loads the page for one vault and waits for the app shell.
+func openVault(t *testing.T, d *driver, srv *daemon, vault string) {
+	t.Helper()
+	page := srv.baseURL + "?vault=" + url.QueryEscape(vault)
+	if err := d.navigate(page); err != nil {
+		t.Fatalf("navigating to %s: %v", page, err)
+	}
+	waitReady(t, d)
+}
+
+// setRange moves a range input to a value and fires the input event a drag
+// would, which is what the page listens on.
+func setRange(t *testing.T, d *driver, id, value string) {
+	t.Helper()
+	pollErr(t, "setting the "+id+" slider", func() error {
+		_, err := d.exec(
+			"var el = document.getElementById(arguments[0]);"+
+				"el.value = arguments[1];"+
+				"el.dispatchEvent(new Event('input', { bubbles: true }));", id, value)
+		return err
+	})
+}
+
+// assertTuning checks the whole bar as the user sees it: each slider's thumb
+// (the control's value), the readout beside it (the signal), and the tick box.
+func assertTuning(t *testing.T, d *driver, k, minSim string, thisVault bool) {
+	t.Helper()
+	for _, tc := range []struct{ id, want string }{
+		{"g-search-k", k},
+		{"g-search-minsim", minSim},
+	} {
+		got, err := d.evalString("document.getElementById('" + tc.id + "').value")
+		if err != nil {
+			t.Fatalf("reading %s: %v", tc.id, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%s is %q, want %q", tc.id, got, tc.want)
+		}
+	}
+	readouts, err := d.evalString(
+		"Array.prototype.map.call(document.querySelectorAll('.g-search-head .g-graph-ctl-val')," +
+			"function (e) { return e.textContent; }).join(',')")
+	if err != nil {
+		t.Fatalf("reading the tuning readouts: %v", err)
+	}
+	if want := k + "," + minSim; readouts != want {
+		t.Fatalf("the tuning readouts show %q, want %q", readouts, want)
+	}
+	ticked, err := d.evalBool("!!document.getElementById('g-search-this-vault').checked")
+	if err != nil {
+		t.Fatalf("reading the this-vault box: %v", err)
+	}
+	if ticked != thisVault {
+		t.Fatalf("this vault only is %v, want %v", ticked, thisVault)
+	}
+}
+
+// pageSeedsTuning fetches the page the daemon serves for a vault and reports
+// whether the tuning bar's markup carries the wanted values.
+func pageSeedsTuning(baseURL, vault string, wants ...string) error {
+	hc := &http.Client{Timeout: 5 * time.Second}
+	resp, err := hc.Get(baseURL + "?vault=" + url.QueryEscape(vault))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	bar := searchHeadMarkup(string(body))
+	if bar == "" {
+		return fmt.Errorf("the page for %s has no search tuning bar", vault)
+	}
+	for _, want := range wants {
+		if !strings.Contains(bar, want) {
+			return fmt.Errorf("the tuning bar for %s lacks %s: %s", vault, want, bar)
+		}
+	}
+	return nil
+}
+
+// searchHeadMarkup cuts the search tuning bar out of a rendered page, so an
+// assertion can't match a value that belongs to some other control.
+func searchHeadMarkup(page string) string {
+	start := strings.Index(page, `<div class="g-search-head">`)
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(page[start:], `<div id="g-stream"`)
+	if end < 0 {
+		return page[start:]
+	}
+	return page[start : start+end]
 }
 
 // searchJSON runs one `grimoire --json search` for searchTerm against the

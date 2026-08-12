@@ -721,6 +721,9 @@ type State struct {
 	// TrashEnabled seeds the Settings trash switch: deletes move to the vault's
 	// trash (restorable) rather than being permanent.
 	TrashEnabled bool
+	// Search seeds the search tuning bar with the vault's persisted values (the
+	// zero value renders the defaults).
+	Search SearchParams
 	// Recents are the vaults Grimoire knows about, shown as quick-pick rows in the
 	// empty state (ignored when HasVault is true).
 	Recents []VaultRef
@@ -730,6 +733,75 @@ type State struct {
 	// Version is the running build's version, shown at the foot of the settings
 	// menu. Rendered verbatim (a "dev" build says dev); empty drops the line.
 	Version string
+}
+
+// SearchParams is the search tuning bar's state: how many results to return, the
+// minimum relevance a hit needs, and whether search stays in this page's vault.
+// It persists per vault in the UI-state store — the JS writes this shape, and
+// ParseSearchParams reads it back to seed the page.
+type SearchParams struct {
+	K         int     `json:"k"`
+	MinSim    float64 `json:"minSim"`
+	ThisVault bool    `json:"thisVault"`
+}
+
+// The sliders' ranges, mirrored from the Results and Min relevance controls in
+// grimoire.templ: a stored value outside them would put the thumb somewhere the
+// control cannot express. Keep the two in step.
+const (
+	searchKMin      = 1
+	searchKMax      = 30
+	searchMinSimMax = 0.95
+)
+
+// defaultSearchParams is the tuning a vault starts with. The minimum-similarity
+// default mirrors app.SearchFloor, which owns it — spelled out here because this
+// package stays free of internal/app (the setup binary renders it too).
+func defaultSearchParams() SearchParams {
+	return SearchParams{K: 10, MinSim: 0.35}
+}
+
+// ParseSearchParams reads a persisted tuning blob. Anything missing, unparsable,
+// or out of the sliders' range falls back to the default, so neither an older
+// blob nor a corrupt one can wedge the page. The fields are decoded through
+// pointers because zero is a value the controls can hold: an absent minimum
+// relevance means the default, a stored 0 means no floor at all.
+func ParseSearchParams(blob string) SearchParams {
+	p := defaultSearchParams()
+	var stored struct {
+		K         *int     `json:"k"`
+		MinSim    *float64 `json:"minSim"`
+		ThisVault *bool    `json:"thisVault"`
+	}
+	if err := json.Unmarshal([]byte(blob), &stored); err != nil {
+		return p
+	}
+	if stored.K != nil {
+		p.K = *stored.K
+	}
+	if stored.MinSim != nil {
+		p.MinSim = *stored.MinSim
+	}
+	if stored.ThisVault != nil {
+		p.ThisVault = *stored.ThisVault
+	}
+	return p.orDefaults()
+}
+
+// orDefaults defaults the zero SearchParams (a State the caller left unset) and
+// pulls any out-of-range field back to its default.
+func (p SearchParams) orDefaults() SearchParams {
+	d := defaultSearchParams()
+	if p == (SearchParams{}) {
+		return d
+	}
+	if p.K < searchKMin || p.K > searchKMax {
+		p.K = d.K
+	}
+	if p.MinSim < 0 || p.MinSim > searchMinSimMax {
+		p.MinSim = d.MinSim
+	}
+	return p
 }
 
 // VaultRef is one vault in the empty-state picker: its display name (the folder's
@@ -780,6 +852,7 @@ type ConnState struct {
 // data-attr:loading expression). The Vault-tab string signals are seeded with their
 // saved values so the model selects and vault input show the current choice.
 func initialSignals(st State) string {
+	search := st.Search.orDefaults()
 	sig := map[string]any{
 		// The vault this page is for, as an absolute path. Datastar sends the whole
 		// signal store with every request, so every action the page fires carries it
@@ -797,12 +870,10 @@ func initialSignals(st State) string {
 		"gGraphMinSim":  0.5,
 		// Search tuning, surfaced as the session view's top-panel sliders. Search
 		// covers every vault unless gSearchThisVault narrows it to this page's.
-		// The minimum-similarity default mirrors app.SearchFloor, which owns it —
-		// spelled out here because this package stays free of internal/app (the
-		// setup binary renders it too). Keep the two in step.
-		"gSearchK":         10,
-		"gSearchMinSim":    0.35,
-		"gSearchThisVault": false,
+		// The values persist per vault, so a page load restores what was set.
+		"gSearchK":         search.K,
+		"gSearchMinSim":    search.MinSim,
+		"gSearchThisVault": search.ThisVault,
 		"gModel":           st.EmbedModel,
 		"gConvertModel":    st.ConvertModel,
 		// gRunKernel/gRunVersion carry a block's per-run {kernel=FAMILY}{version=VER}

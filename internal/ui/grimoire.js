@@ -619,6 +619,32 @@
     });
   }
 
+  // The search tuning bar (results, minimum relevance, this vault only) persists
+  // per vault in the UI-state store, so switching vaults — a page load — keeps
+  // what was set. The controls are Datastar signals, not data-bind inputs, so the
+  // values are read off the DOM (as the graph's params() does). Saves are
+  // debounced: a slider drag fires an input per pixel.
+  var SEARCH_PARAMS_URL = "api/ui-state/search";
+  function initSearchParams() {
+    var k = getEl("g-search-k"), minSim = getEl("g-search-minsim"), thisVault = getEl("g-search-this-vault");
+    if (!k || !minSim || !thisVault) return;
+    var timer = null;
+    function save() {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () {
+        timer = null;
+        fetch(apiURL(SEARCH_PARAMS_URL), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ k: Number(k.value), minSim: Number(minSim.value), thisVault: !!thisVault.checked }),
+        }).catch(function () { /* persistence is best-effort. */ });
+      }, 400);
+    }
+    k.addEventListener("input", save);
+    minSim.addEventListener("input", save);
+    thisVault.addEventListener("change", save);
+  }
+
   function initSearch() {
     var input = getEl("g-query-input");
     var search = getEl("g-search-btn");
@@ -4584,6 +4610,7 @@
     extensions.init();
     initTrashSwitch();
     initSearch();
+    initSearchParams();
     initSidebarCollapse();
     initSidebarTabs();
     calmHoverWhileScrolling("g-sessions");

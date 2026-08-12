@@ -875,3 +875,62 @@ func TestExtensionRowRemoveShapes(t *testing.T) {
 	require.Contains(t, kernel, `data-g-version="1.0.0"`)
 	require.NotContains(t, kernel, "data-g-activate")
 }
+
+// TestParseSearchParams covers what a persisted search-tuning blob can be: absent
+// (a fresh vault), written before the field existed, corrupt, or outside the
+// sliders' range. None of them may leave the bar showing a value its controls
+// cannot express.
+func TestParseSearchParams(t *testing.T) {
+	def := SearchParams{K: 10, MinSim: 0.35}
+	tests := []struct {
+		name string
+		blob string
+		want SearchParams
+	}{
+		{"nothing stored", "", def},
+		{"an older blob without the field", `{}`, def},
+		{"a partial blob keeps the other defaults", `{"thisVault":true}`, SearchParams{K: 10, MinSim: 0.35, ThisVault: true}},
+		{"a stored tuning", `{"k":23,"minSim":0.6,"thisVault":true}`, SearchParams{K: 23, MinSim: 0.6, ThisVault: true}},
+		{"corrupt json", `{"k":`, def},
+		{"a wrongly typed field", `{"k":"23"}`, def},
+		{"k below the slider", `{"k":0,"minSim":0.6}`, SearchParams{K: 10, MinSim: 0.6}},
+		{"k above the slider", `{"k":9000,"minSim":0.6}`, SearchParams{K: 10, MinSim: 0.6}},
+		{"a negative minimum relevance", `{"k":5,"minSim":-1}`, SearchParams{K: 5, MinSim: 0.35}},
+		{"a minimum relevance above the slider", `{"k":5,"minSim":2}`, SearchParams{K: 5, MinSim: 0.35}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, ParseSearchParams(tc.blob))
+		})
+	}
+}
+
+// TestRenderFullPageSeedsSearchParams pins both halves of the seeding the tuning
+// bar needs: the signals (what the readout shows and a search sends) and the
+// controls' own attributes (where the thumb sits, whether the box is ticked).
+func TestRenderFullPageSeedsSearchParams(t *testing.T) {
+	t.Run("an unset state renders the defaults", func(t *testing.T) {
+		signals := initialSignals(State{})
+		require.Contains(t, signals, `"gSearchK":10`)
+		require.Contains(t, signals, `"gSearchMinSim":0.35`)
+		require.Contains(t, signals, `"gSearchThisVault":false`)
+
+		page := RenderFullPage("dark", "info", State{})
+		require.Contains(t, page, `id="g-search-k" class="g-range" min="1" max="30" step="1" value="10"`)
+		require.Contains(t, page, `id="g-search-minsim" class="g-range" min="0" max="0.95" step="0.05" value="0.35"`)
+		require.Contains(t, page, `id="g-search-this-vault" data-bind="gSearchThisVault">`)
+	})
+
+	t.Run("stored values reach the signals and the controls", func(t *testing.T) {
+		st := State{Search: SearchParams{K: 23, MinSim: 0.6, ThisVault: true}}
+		signals := initialSignals(st)
+		require.Contains(t, signals, `"gSearchK":23`)
+		require.Contains(t, signals, `"gSearchMinSim":0.6`)
+		require.Contains(t, signals, `"gSearchThisVault":true`)
+
+		page := RenderFullPage("dark", "info", st)
+		require.Contains(t, page, `id="g-search-k" class="g-range" min="1" max="30" step="1" value="23"`)
+		require.Contains(t, page, `id="g-search-minsim" class="g-range" min="0" max="0.95" step="0.05" value="0.6"`)
+		require.Contains(t, page, `id="g-search-this-vault" data-bind="gSearchThisVault" checked>`)
+	})
+}
