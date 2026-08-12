@@ -259,29 +259,76 @@ func TestCLISearchHeadsEachModelGroup(t *testing.T) {
 	}
 }
 
-// Search is the one verb that runs without a vault: with none named and none
-// ever opened it covers every vault the daemon knows, so it must not be turned
-// away at the door. Every other verb still needs one.
-func TestCLISearchNeedsNoVault(t *testing.T) {
-	isolateVaultDirs(t) // no last-used vault anywhere.
-	require.False(t, requiresVault("search"))
-	require.True(t, needsVault("search"), "--vault still narrows it")
-	for _, verb := range []string{"note", "vault", "resolve", "reindex", "import"} {
-		require.True(t, requiresVault(verb), verb)
+// TestVaultUseFor pins which commands demand --vault. The two-token entries are
+// what makes `vault tree` (one vault) and `vault list` (all of them) differ.
+func TestVaultUseFor(t *testing.T) {
+	tests := []struct {
+		args []string
+		want vaultUse
+	}{
+		{[]string{"search", "q"}, vaultOptional},
+		{[]string{"note", "get", "a.md"}, vaultRequired},
+		{[]string{"note", "create", "a.md", "--content", "x"}, vaultRequired},
+		{[]string{"folder", "delete", "f"}, vaultRequired},
+		{[]string{"trash", "empty"}, vaultRequired},
+		{[]string{"resolve", "A"}, vaultRequired},
+		{[]string{"import", "a.docx"}, vaultRequired},
+		{[]string{"reindex", "--force"}, vaultRequired},
+		{[]string{"vault", "tree"}, vaultRequired},
+		{[]string{"vault", "list"}, vaultNone},
+		{[]string{"vault", "current"}, vaultNone},
+		{[]string{"vault", "forget", "/v"}, vaultNone},
+		{[]string{"kernel", "list"}, vaultNone},
+		{[]string{"theme", "install", "theme-x"}, vaultNone},
+		{[]string{"skill", "show"}, vaultNone},
+		{[]string{"screenshot"}, vaultNone},
+		{[]string{"serve"}, vaultNone},
+		{[]string{"note"}, vaultNone},  // a group verb alone: its own usage error.
+		{[]string{"bogus"}, vaultNone}, // unknown: dispatch says so.
 	}
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			require.Equal(t, tt.want, vaultUseFor(tt.args))
+		})
+	}
+}
 
-	// Through the real entry point, which is where the gate lives. `search --help`
-	// stops short of the daemon but only after the vault has been resolved, so it
-	// shows the resolution let it through; a vault-bound verb is still turned away.
+// A vault-scoped verb with no --vault is turned away at exit 2, naming the fix —
+// the CLI never falls back to the last-used vault, which the app can repoint
+// under a running script. search is the exception: with no vault named it covers
+// every vault, so it runs on a machine that has never opened one.
+func TestCLIVaultFlagIsRequired(t *testing.T) {
+	isolateVaultDirs(t) // a last-used vault on this host must not rescue anything.
+
 	var out, errBuf bytes.Buffer
-	require.Equal(t, exitOK, runCLIWith([]string{"search", "--help"}, &out, &errBuf))
-	require.Contains(t, out.String(), "search QUERY")
+	require.Equal(t, exitUsage, runCLIWith([]string{"note", "get", "a.md"}, &out, &errBuf))
+	require.Contains(t, errBuf.String(), "error: --vault is required")
+	require.Contains(t, errBuf.String(), "grimoire vault list")
+	require.Empty(t, out.String())
+
+	// --help still answers without one: that is where a reader learns about it.
+	out.Reset()
+	errBuf.Reset()
+	require.Equal(t, exitOK, runCLIWith([]string{"note", "get", "--help"}, &out, &errBuf))
+	require.Contains(t, out.String(), "--vault PATH (required)")
 	require.Empty(t, errBuf.String())
 
 	out.Reset()
 	errBuf.Reset()
-	require.Equal(t, exitUsage, runCLIWith([]string{"note", "get", "a.md"}, &out, &errBuf))
-	require.Contains(t, errBuf.String(), "no vault")
+	require.Equal(t, exitOK, runCLIWith([]string{"search", "--help"}, &out, &errBuf))
+	require.Contains(t, out.String(), "search QUERY")
+	require.Empty(t, errBuf.String())
+}
+
+// The guard sits at dispatch, so it turns a verb away before any request goes
+// out — a stub backend with no routes would answer, and must not be reached.
+func TestCLIVaultGuardStopsBeforeTheBackend(t *testing.T) {
+	b := newCLIBackend(t, nil)
+	e, out, errBuf := b.env(t, false)
+	e.vault = ""
+	require.Equal(t, exitUsage, e.dispatch([]string{"note", "create", "a.md", "--content", "x"}))
+	require.Contains(t, errBuf.String(), "--vault is required")
+	require.Empty(t, out.String())
 }
 
 func TestCLINoteWriteExitCodes(t *testing.T) {

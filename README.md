@@ -56,7 +56,7 @@ reindexing), so the agent never needs direct filesystem access, and what it
 writes becomes part of the shared memory you see in the app.
 
 ```sh
-grimoire [--vault PATH] [--json] <command> [args]
+grimoire --vault PATH [--json] <command> [args]
 ```
 
 ### Commands
@@ -138,16 +138,24 @@ come from the
 vault it lives in; `--vault /abs/path` narrows it to one. Vaults sharing an
 embedding model are ranked as one corpus (their similarities are on one scale);
 vaults on another model form their own group, listed after it — `-k` caps each
-group, and across groups the order is presentational. Every other command acts on a single vault: the one `--vault`
-names, else the **last-used** one (the vault the app opened most recently). A
-`--vault` on a read never moves that default, so an agent looking around other
-vaults can't change which one the app reopens.
+group, and across groups the order is presentational.
+
+Every command that acts on a single vault — `note`, `folder`, `trash`, `import`,
+`reindex`, `resolve`, `vault tree` — **requires `--vault`**; without it the CLI
+exits `2` rather than guessing. There is no last-used fallback: that pointer
+follows the app's window, so a vault switched there would silently redirect a
+running script's next write. `--vault` never moves the pointer either, so an
+agent working across vaults can't change which one the app reopens. The
+app-level verbs (`vault list|current|forget`, `kernel`, `theme`, `skill`,
+`screenshot`, `serve`) take no vault at all.
 
 `grimoire vault list` prints the vaults Grimoire knows about with their state —
 whether the folder is still on disk, how much of it is indexed, and which model
-indexed it — with a `*` on the current one. `grimoire vault forget PATH` drops
-one from that list and stops serving it; nothing on disk is touched, so opening
-the path again brings it back.
+indexed it — with a `*` on the one the app has open; it's where the `--vault`
+paths come from. `grimoire vault current` reports that same vault: what the app
+reopens, not a default for the CLI. `grimoire vault forget PATH` drops one from
+the list and stops serving it; nothing on disk is touched, so opening the path
+again brings it back.
 
 **One daemon serves every vault**, and each request names the vault it acts on.
 If none is running, the CLI **spawns a headless daemon on demand** (no window),
@@ -166,7 +174,7 @@ Pass `--json` for the raw API shape, for piping into `jq` or another program.
 `--json` and `--vault` are global flags: they go **before** the verb
 (`grimoire --json vault list`). A verb's own flags may trail its arguments
 (`grimoire search "index rebuild" -k 5`), but a trailing global flag is a usage
-error (exit `2`).
+error (exit `2`) — as is a vault-scoped verb with no `--vault`.
 
 Exit codes let a script branch on the outcome kind:
 

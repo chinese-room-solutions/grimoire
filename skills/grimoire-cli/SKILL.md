@@ -12,15 +12,22 @@ and indexing. **Never touch vault files directly** — a filesystem write skips 
 three.
 
 ```sh
-grimoire [--vault PATH] [--json] <command> [args]
+grimoire --vault PATH [--json] <command> [args]
 grimoire <command> --help      # synopsis + detail for any command
 ```
 
 `--vault` and `--json` are global: they go **before** the verb. A verb's own
 flags may trail its arguments (`grimoire search "q" -k 5`).
 
-`search` covers **every** vault; `--vault` narrows it to one. Every other verb
-acts on a single vault: the one `--vault` names, else the last-used one.
+**`--vault PATH` is required by every vault-scoped command** — `note`, `folder`,
+`trash`, `import`, `reindex`, `resolve`, `vault tree`. There is no fallback:
+omitting it is a usage error (exit 2), because the vault a bare command would
+have guessed is the one the app has open, and the user can repoint that while
+your script runs. `grimoire vault list` gives you the paths.
+
+`search` is the exception: it covers **every** vault, and `--vault` narrows it
+to one. `vault list`, `vault current`, `vault forget PATH`, `kernel *`,
+`theme *` and `skill *` are app-level and take no vault.
 
 ## Indexing is automatic — don't reindex
 
@@ -59,22 +66,23 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
 - `resolve TARGET` — a wikilink or bare name (`"My Note"`, `"My Note|alias"`,
   with or without `.md`) to a real path. Use it before assuming a path; exit 3
   if nothing matches.
-- `vault tree` — the folder/note tree. `vault current` — which vault a command
-  without `--vault` acts on. `--vault` targets another vault for that one
-  command and leaves that default alone, so reading around other vaults never
-  moves what the app reopens.
+- `vault tree` — the folder/note tree of the `--vault` you name.
+- `vault current` — the vault the **app** has open (what it reopens next). It is
+  not a default for the CLI: no command falls back to it, and passing `--vault`
+  never moves it, so working across vaults can't change what the app reopens.
 - `vault list` — every known vault as a row: `NAME PATH AVAILABLE CHUNKS
-  LAST-SYNC MODEL`, with `*` on the current one. `AVAILABLE no` means the folder
-  is gone from disk (moved, deleted, unmounted) — it stays listed so it can be
-  forgotten, but nothing can be read from it. `CHUNKS -` means the daemon hasn't
-  opened that vault, not that its index is empty. `--json` returns the same rows
-  under a `vaults` key.
-- `vault forget PATH` — drops a vault from that list, stops serving it, and
-  takes it out of cross-vault search. **Not a delete**: the folder, its notes,
-  and its index all stay on disk, and opening the path again restores
-  everything. Forgetting the current vault repoints the default at another known
-  one; a path Grimoire doesn't know is a no-op. Use it to tidy the list, never to
-  remove notes.
+  LAST-SYNC MODEL`, with `*` on the one the app has open. This is where the
+  `--vault` paths come from. `AVAILABLE no` means the folder is gone from disk
+  (moved, deleted, unmounted) — it stays listed so it can be forgotten, but
+  nothing can be read from it. `CHUNKS -` means the daemon hasn't opened that
+  vault, not that its index is empty. `--json` returns the same rows under a
+  `vaults` key.
+- `vault forget PATH` — drops the vault at PATH (an argument, not `--vault`)
+  from that list, stops serving it, and takes it out of cross-vault search.
+  **Not a delete**: the folder, its notes, and its index all stay on disk, and
+  opening the path again restores everything. Forgetting the vault the app has
+  open repoints it at another known one; a path Grimoire doesn't know is a
+  no-op. Use it to tidy the list, never to remove notes.
 
 ## Editing
 
@@ -137,15 +145,15 @@ Parse the JSON, never the tables.
 ## Examples
 
 ```sh
+grimoire vault list                           # the vault paths --vault takes
 grimoire search "vector index rebuild" -k 5   # every vault
 grimoire --vault ~/notes search "rrf"         # one vault
-grimoire resolve "Meeting Notes"
-grimoire note get projects/ideas.md
-grimoire note edit projects/ideas.md --old "TODO: bench" --new "Benchmarked: 45ms"
-grimoire note create archive/2026/log.md --content "# Log"
-grimoire --json vault tree
-grimoire vault list                           # which vaults exist, and their state
-grimoire import notes.docx paper.pdf          # pdf needs the convert model
-grimoire reindex --force                      # only after a model change
+grimoire --vault ~/notes resolve "Meeting Notes"
+grimoire --vault ~/notes note get projects/ideas.md
+grimoire --vault ~/notes note edit projects/ideas.md --old "TODO: bench" --new "Benchmarked: 45ms"
+grimoire --vault ~/notes note create archive/2026/log.md --content "# Log"
+grimoire --vault ~/notes --json vault tree
+grimoire --vault ~/notes import notes.docx paper.pdf   # pdf needs the convert model
+grimoire --vault ~/notes reindex --force      # only after a model change
 grimoire kernel install grimoire-kernel-go    # make ```go blocks runnable
 ```

@@ -114,6 +114,33 @@ func TestMultiVault(t *testing.T) {
 		}
 	})
 
+	// A vault-scoped verb without --vault is refused, so a note can never land in
+	// whichever vault happened to be open last.
+	t.Run("VaultScopedVerbsRequireTheFlag", func(t *testing.T) {
+		d := startServerVaults(t, multiVaultNotes)
+
+		_, errOut, code := cliExit(t, bin, d.env, "note", "create", "stray.md", "--content", "nowhere\n")
+		if code != exitUsage {
+			t.Fatalf("note create without --vault exited %d, want %d: %s", code, exitUsage, errOut)
+		}
+		if !strings.Contains(errOut, "--vault is required") {
+			t.Fatalf("the error does not name the fix: %q", errOut)
+		}
+		for _, vault := range d.vaults {
+			if _, err := os.Stat(filepath.Join(vault, "stray.md")); !os.IsNotExist(err) {
+				t.Fatalf("the refused note landed in %s: %v", vault, err)
+			}
+		}
+
+		// The verbs that span or manage vaults are not gated: vault list runs, and
+		// search is let through to the daemon (it may still be opening its indexes,
+		// so only the usage gate is asserted here).
+		runCLI(t, bin, d.env, "vault", "list")
+		if _, _, code := cliExit(t, bin, d.env, "search", searchTerm); code == exitUsage {
+			t.Fatal("search was turned away for want of --vault")
+		}
+	})
+
 	t.Run("VaultListAndForget", func(t *testing.T) {
 		gw := startStubGateway(t)
 		d := startServerVaults(t, multiVaultNotes, withGateway(gw.url, gw.model))
@@ -272,5 +299,6 @@ func sameVault(a, b string) bool {
 // The CLI's exit codes, as scripts (and these tests) branch on them.
 const (
 	exitOK       = 0
+	exitUsage    = 2
 	exitNotFound = 3
 )
