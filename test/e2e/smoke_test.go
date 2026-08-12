@@ -118,6 +118,29 @@ func TestUISmoke(t *testing.T) {
 		waitTextContains(t, d, "#g-preview-body", marker)
 	})
 
+	t.Run("OpeningAnotherNoteWhileEditingReadsIt", func(t *testing.T) {
+		// Two notes with the same rendered shape: the server morphs one into the
+		// other by rewriting text nodes, with no element added or removed. Edit
+		// mode used to be dropped off that DOM churn, so here it stayed open and
+		// the new note rendered hidden behind it — an empty-looking tab.
+		_, d := boot(t, map[string]string{
+			"first.md":  "# First\n\nfirst note body\n",
+			"second.md": "# Second\n\nsecond note body\n",
+		})
+		defer failShot(t, d)
+
+		openFilesTab(t, d)
+		clickReady(t, d, `#g-files .g-tree-note[data-note="first.md"]`)
+		waitTextContains(t, d, "#g-preview-body", "first note body")
+		clickReady(t, d, "#g-edit-toggle")
+		waitVisible(t, d, "#g-editor-text")
+
+		clickReady(t, d, `#g-files .g-tree-note[data-note="second.md"]`)
+		waitNotVisible(t, d, "#g-editor-text")
+		waitVisible(t, d, "#g-preview-body")
+		waitTextContains(t, d, "#g-preview-body", "second note body")
+	})
+
 	t.Run("CreateNoteFromTree", func(t *testing.T) {
 		srv, d := boot(t, map[string]string{"existing.md": "# Existing\n"})
 		defer failShot(t, d)

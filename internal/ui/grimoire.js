@@ -2035,6 +2035,7 @@
       // edit + run-save affordances so it's a peek-before-restore, not an edit.
       var preview = getEl("g-preview");
       if (preview) preview.classList.toggle("g-preview-readonly", (t.ref || "").indexOf(".trash/") === 0);
+      if (editorAPI) editorAPI.closeUnless(t.ref); // a different note opens for reading.
       trigger.click(); // server fills #g-preview-body.
       var c = tabCache[t.id];
       scrollGen += 1;
@@ -4014,13 +4015,14 @@
     var dirty = getEl("g-editor-dirty");
     if (!toggle || !editor || !body || !text) return;
     var editing = false, baseline = "";
-    var restoring = false; // true while reopening with cached text (don't auto-exit).
+    var editingPath = ""; // the note the open editor belongs to.
 
     function enter(withText) {
       var raw = getEl("g-raw-body");
       baseline = raw ? raw.value : "";
       text.value = typeof withText === "string" ? withText : baseline;
       editing = true;
+      editingPath = getSignal("gPreviewPath");
       // Editing commits the note's preview tab to a permanent one (IDE-style), so a
       // single-click elsewhere doesn't evict the note you're working in.
       if (nav) nav.pinFocused();
@@ -4061,20 +4063,16 @@
       if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) { e.preventDefault(); save(); }
       if (e.key === "Escape") { e.preventDefault(); exit(); }
     });
-    // Opening a different note while editing exits edit mode (the body re-renders).
-    // A programmatic restore (re-render then reopen with cached text) sets the
-    // `restoring` guard so this observer doesn't immediately exit it.
-    new MutationObserver(function () { if (editing && !restoring) exit(); })
-      .observe(body, { childList: true });
-
-    // Reopen the editor with cached unsaved text after a note tab is refocused
-    // (the body has just re-rendered). Best-effort: skipped if elements are gone.
     editorAPI = {
-      restore: function (cachedText) {
-        restoring = true;
-        enter(cachedText);
-        requestAnimationFrame(function () { restoring = false; });
-      },
+      // closeUnless leaves edit mode when the panel is loading a different note.
+      // render() calls it on every note load, because watching the body for a
+      // re-render doesn't see one: Datastar morphs two same-shaped notes by
+      // rewriting text nodes only, with no childList mutation, so the editor
+      // stayed open over the new note — whose body renders behind it, hidden.
+      closeUnless: function (path) { if (editing && path !== editingPath) exit(); },
+      // Reopen the editor with cached unsaved text after a note tab is refocused
+      // (the body has just re-rendered). Best-effort: skipped if elements are gone.
+      restore: function (cachedText) { enter(cachedText); },
     };
   }
 
