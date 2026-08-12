@@ -1781,7 +1781,13 @@ var styleBlock = `<style>
 #app-grimoire .g-hit-text h1,#app-grimoire .g-hit-text h2,#app-grimoire .g-hit-text h3,#app-grimoire .g-hit-text h4,#app-grimoire .g-hit-text h5,#app-grimoire .g-hit-text h6{font-size:0.85rem;font-weight:600;line-height:1.35;margin:0.5em 0 0.25em}
 #app-grimoire .g-hit-text p,#app-grimoire .g-hit-text ul,#app-grimoire .g-hit-text ol,#app-grimoire .g-hit-text pre,#app-grimoire .g-hit-text table,#app-grimoire .g-hit-text blockquote,#app-grimoire .g-hit-text .g-callout{margin:0.4em 0}
 #app-grimoire .g-hit-text ul,#app-grimoire .g-hit-text ol{padding-left:1.2em}
-#app-grimoire .g-hit-text pre{padding:0.45rem 0.6rem;font-size:0.72rem}
+/* The card is already panel-coloured, so the panel background code and pre get
+   from .markdown-body vanishes here. The hover surface sits one step off the
+   panel in every theme (the image chip uses it too), where the base ground
+   would flip dark instead of staying a shade apart. */
+#app-grimoire .g-hit-text code{background:var(--mass-bg-hover)}
+#app-grimoire .g-hit-text pre{padding:0.45rem 0.6rem;font-size:0.72rem;background:var(--mass-bg-hover)}
+#app-grimoire .g-hit-text pre code{background:none}
 #app-grimoire .g-hit-text table{font-size:0.75rem}
 #app-grimoire .g-hit-text th,#app-grimoire .g-hit-text td{padding:0.2rem 0.45rem}
 #app-grimoire .g-hit-text>*:first-child{margin-top:0}
