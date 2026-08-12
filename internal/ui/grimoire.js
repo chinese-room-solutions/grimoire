@@ -1958,7 +1958,13 @@
     var vaultGraph = false; // the applied mode; render() and the strip follow it.
     function vaultTabActive() {
       var group = getEl("g-tabs");
-      return !!(group && group.activeTab && group.activeTab.panel === "vaults");
+      if (group && group.activeTab) return group.activeTab.panel === "vaults";
+      // The group hasn't upgraded/rendered yet (a fast reload can get here before
+      // Shoelace's first update), so activeTab is unset. Predict where it will
+      // land: the saved sidebar tab, else the first tab — Vaults.
+      var saved = null;
+      try { saved = sessionStorage.getItem(TAB_KEY); } catch (e) { /* opaque storage */ }
+      return SIDEBAR_PANELS[saved] ? saved === "vaults" : true;
     }
     // syncVaultGraph re-applies the rule after a sidebar tab change. It only acts
     // when the mode actually flips, so Files↔Sessions stays what it has always
@@ -4587,15 +4593,19 @@
   // group think the tab is already active and skip the panel sync.
   var SIDEBAR_PANELS = { vaults: true, sessions: true, files: true };
   function restoreActiveTab() {
-    var name;
-    try { name = sessionStorage.getItem(TAB_KEY); } catch (e) { return Promise.resolve(); }
-    // Anything that isn't a sidebar panel is a stale value ("graph" moved to the
-    // main panel); leave the group on its default rather than showing nothing.
-    if (!SIDEBAR_PANELS[name]) return Promise.resolve();
     var group = getEl("g-tabs");
-    if (!group || typeof group.show !== "function") return Promise.resolve();
+    if (!group) return Promise.resolve();
+    // Always wait out the group's first render, even when there is nothing to
+    // show(): the caller reads group.activeTab next (the Vaults-graph rule), and
+    // on a fast reload that property is unset until this promise settles.
     var ready = group.updateComplete && group.updateComplete.then
       ? group.updateComplete : Promise.resolve();
+    var name;
+    try { name = sessionStorage.getItem(TAB_KEY); } catch (e) { return ready; }
+    // Anything that isn't a sidebar panel is a stale value ("graph" moved to the
+    // main panel); leave the group on its default rather than showing nothing.
+    if (!SIDEBAR_PANELS[name]) return ready;
+    if (typeof group.show !== "function") return ready;
     return ready.then(function () {
       group.show(name);
       return group.updateComplete || Promise.resolve(); // wait for the switch to render.
