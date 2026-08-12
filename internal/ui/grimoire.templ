@@ -115,7 +115,7 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 		<!-- Body: sidebar + main, side by side. The shared bottom bar (icons + input)
 		     sits below this, full width. -->
 		<div id="g-body" class="flex" style="flex:1;min-height:0">
-		<!-- ── Sidebar: tabbed (Sessions / Files), resizable, MASS-style ── -->
+		<!-- ── Sidebar: tabbed (Vaults / Files / Sessions), resizable, MASS-style ── -->
 		<aside id="g-sidebar" class="g-sidebar flex flex-col flex-shrink-0">
 			<div class="g-side-head flex items-center gap-2">
 				<!-- The book is a Home button. The clickable/hover target is the wrapping
@@ -132,8 +132,8 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 
 			<sl-tab-group id="g-tabs" class="g-tabs flex flex-col flex-1" style="min-height:0">
 				<sl-tab slot="nav" panel="vaults">Vaults</sl-tab>
-				<sl-tab slot="nav" panel="sessions">Sessions</sl-tab>
 				<sl-tab slot="nav" panel="files">Files</sl-tab>
+				<sl-tab slot="nav" panel="sessions">Sessions</sl-tab>
 
 				<!-- Vaults tab: every vault the daemon knows, with an Add button. It is
 				     the only vault-management surface (the Vault settings menu keeps just
@@ -156,26 +156,6 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 							</sl-input>
 						</div>
 						<div id="g-vaults" class="g-vaults" data-init="@get('api/vaults/render')"></div>
-					</div>
-				</sl-tab-panel>
-
-				<!-- Sessions tab: new-session button + the session history list. -->
-				<sl-tab-panel name="sessions" class="g-tab-panel">
-					<div class="g-sessions-section flex flex-col" style="height:100%">
-						<sl-button id="g-new-session" class="g-new-session" size="small" variant="primary" style="width:100%">
-							<sl-icon slot="prefix" name="plus-lg"></sl-icon>
-							New session
-						</sl-button>
-						<sl-input id="g-session-filter" size="small" clearable autocomplete="off" placeholder="Filter sessions (any word order)…">
-							<sl-icon slot="prefix" name="search"></sl-icon>
-						</sl-input>
-						<div id="g-sessions" class="g-sessions g-sessions-tab" if st.HasVault { data-init="@get('api/sessions/render')" }></div>
-						<!-- Multi-select action bar, pinned below the list (shown by JS). -->
-						<div id="g-sessions-actions" class="g-actions">
-							<span class="g-actions-count"></span>
-							<sl-button class="g-actions-del" size="small" variant="danger" pill>Delete</sl-button>
-							<sl-icon-button class="g-actions-clear" name="x-lg" title="Clear selection"></sl-icon-button>
-						</div>
 					</div>
 				</sl-tab-panel>
 
@@ -238,6 +218,26 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 							<sl-button id="g-files-trash-empty" size="small" variant="default" pill>Empty trash</sl-button>
 						</div>
 						<input type="file" id="g-files-input" accept=".md,.markdown,.txt,.html,.htm,.docx,.odt,.pdf" multiple style="display:none"/>
+					</div>
+				</sl-tab-panel>
+
+				<!-- Sessions tab: new-session button + the session history list. -->
+				<sl-tab-panel name="sessions" class="g-tab-panel">
+					<div class="g-sessions-section flex flex-col" style="height:100%">
+						<sl-button id="g-new-session" class="g-new-session" size="small" variant="primary" style="width:100%">
+							<sl-icon slot="prefix" name="plus-lg"></sl-icon>
+							New session
+						</sl-button>
+						<sl-input id="g-session-filter" size="small" clearable autocomplete="off" placeholder="Filter sessions (any word order)…">
+							<sl-icon slot="prefix" name="search"></sl-icon>
+						</sl-input>
+						<div id="g-sessions" class="g-sessions g-sessions-tab" if st.HasVault { data-init="@get('api/sessions/render')" }></div>
+						<!-- Multi-select action bar, pinned below the list (shown by JS). -->
+						<div id="g-sessions-actions" class="g-actions">
+							<span class="g-actions-count"></span>
+							<sl-button class="g-actions-del" size="small" variant="danger" pill>Delete</sl-button>
+							<sl-icon-button class="g-actions-clear" name="x-lg" title="Clear selection"></sl-icon-button>
+						</div>
 					</div>
 				</sl-tab-panel>
 

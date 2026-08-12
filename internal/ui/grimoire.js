@@ -4481,7 +4481,7 @@
 
   // Tab persistence: remember the active sidebar tab across a reload (F5) so the
   // page comes back where it was instead of defaulting to Sessions. The sidebar
-  // tabs (Sessions/Files/Vault) are pure navigators — switching them never touches
+  // tabs (Vaults/Files/Sessions) are pure navigators — switching them never touches
   // the main panel; they just open things into the workspace tabs.
   var TAB_KEY = "grimoire.tab";
   function saveActiveTab(name) {
