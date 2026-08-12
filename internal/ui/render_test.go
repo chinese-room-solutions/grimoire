@@ -666,23 +666,33 @@ func TestRenderNoteImagePaths(t *testing.T) {
 			contains: []string{`src="` + VaultFileRoute + `attachments/a%20b.png"`},
 		},
 		{
-			name:     "an escape attempt resolves nowhere and is never routed",
+			// The path is named in the chip, but never emitted as a URL.
+			name:     "an escape attempt is broken, not a path out of the vault",
 			notePath: "notes/n.md",
 			in:       "![](../../../etc/passwd)",
-			absent:   []string{VaultFileRoute},
+			contains: []string{`class="g-img-missing"`, "../../../etc/passwd"},
+			absent:   []string{"<img", VaultFileRoute},
 		},
 		{
-			name:     "a missing file is not routed",
+			name:     "a missing file is marked broken and names the path",
 			notePath: "notes/n.md",
 			in:       "![](assets/gone.png)",
-			absent:   []string{VaultFileRoute},
+			contains: []string{`class="g-img-missing"`, `title="Missing image: assets/gone.png"`, ">assets/gone.png<"},
+			absent:   []string{"<img", VaultFileRoute},
+		},
+		{
+			name:     "the alt text labels a broken embed",
+			notePath: "notes/n.md",
+			in:       "![a diagram](assets/gone.png)",
+			contains: []string{`title="Missing image: assets/gone.png"`, ">a diagram<"},
+			absent:   []string{"<img"},
 		},
 		{
 			name:     "external and data srcs are never checked",
 			notePath: "notes/n.md",
 			in:       "![](https://x/a.png) ![](http://x/b.png) ![](data:image/png;base64,AAAA)",
 			contains: []string{`src="https://x/a.png"`, `src="http://x/b.png"`, `src="data:image/png;base64,AAAA"`},
-			absent:   []string{VaultFileRoute},
+			absent:   []string{"g-img-missing", VaultFileRoute},
 		},
 	}
 	for _, tc := range tests {

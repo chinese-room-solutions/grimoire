@@ -476,17 +476,21 @@ func runResultPanelHTML(blockID string, res RunResult) string {
 // preview. The web layer mounts a handler at this path.
 const VaultFileRoute = "vault-file/"
 
-// imageTag matches a rendered image element and imageSrc its src attribute. Raw
-// HTML in a note is escaped, so every <img> here is one the renderer emitted.
+// imageTag matches a rendered image element, and imageSrc/imageAlt its src and
+// alt attributes. The whole tag is matched because a broken embed is replaced
+// outright, not just re-pointed. Raw HTML in a note is escaped, so every <img>
+// here is one the renderer emitted.
 var (
 	imageTag = regexp.MustCompile(`<img\b[^>]*>`)
 	imageSrc = regexp.MustCompile(`\bsrc="([^"]*)"`)
+	imageAlt = regexp.MustCompile(`\balt="([^"]*)"`)
 )
 
 // resolveImageSrcs points a rendered note's relative image sources at the
 // vault-file route, resolving each against the note at notePath (see
-// vaultRelImage). Absolute URLs (http(s), data:, the note scheme, a leading
-// slash) are neither resolved nor checked.
+// vaultRelImage), and replaces an embed whose file isn't there with a warning
+// chip. Absolute URLs (http(s), data:, the note scheme, a leading slash) are
+// neither resolved nor checked.
 func resolveImageSrcs(rendered, notePath string, exists func(rel string) bool) string {
 	return imageTag.ReplaceAllStringFunc(rendered, func(tag string) string {
 		g := imageSrc.FindStringSubmatch(tag)
@@ -501,9 +505,7 @@ func resolveImageSrcs(rendered, notePath string, exists func(rel string) bool) s
 		}
 		rel, ok := vaultRelImage(src, notePath, exists)
 		if !ok {
-			// No file in the vault answers to this src. Leave the tag as written
-			// rather than routing a path that isn't there.
-			return tag
+			return missingImage(tag, src)
 		}
 		return imageSrc.ReplaceAllLiteralString(tag, `src="`+VaultFileRoute+escapePath(rel)+`"`)
 	})
@@ -554,6 +556,21 @@ func escapePath(rel string) string {
 		segs[i] = url.PathEscape(seg)
 	}
 	return html.EscapeString(strings.Join(segs, "/"))
+}
+
+// missingImage replaces an embed whose file isn't in the vault with a warning
+// chip naming the missing path — a browser's broken-image glyph says only that
+// something failed, not what, and an SVG that isn't there shows nothing at all.
+// The alt text labels the chip when the note gave one (goldmark has already
+// escaped it); the path is always on the title, for the alt-less case and for
+// checking what the preview actually looked for.
+func missingImage(tag, src string) string {
+	label := html.EscapeString(src)
+	if g := imageAlt.FindStringSubmatch(tag); g != nil && g[1] != "" {
+		label = g[1]
+	}
+	return `<span class="g-img-missing" title="Missing image: ` + html.EscapeString(src) + `">` +
+		`<sl-icon name="image"></sl-icon>` + label + `</span>`
 }
 
 // isAbsoluteURL reports whether a src needs no vault rewrite: an external/data URL
@@ -1613,6 +1630,11 @@ var styleBlock = `<style>
 #app-grimoire .markdown-body table{border-collapse:collapse;margin:0.6em 0}
 #app-grimoire .markdown-body th,#app-grimoire .markdown-body td{border:1px solid var(--mass-border);padding:0.35rem 0.6rem;text-align:left}
 #app-grimoire .markdown-body img{max-width:100%}
+/* A missing image embed, rendered in place of the <img>: a subdued warning chip
+   carrying the alt text (or the path), with the missing path on hover. Sized
+   below body text so a broken embed reads as a margin note, not as content. */
+#app-grimoire .markdown-body .g-img-missing{display:inline-flex;align-items:center;gap:0.35rem;max-width:100%;padding:0.1rem 0.5rem;border:1px solid color-mix(in srgb,var(--mass-warning) 40%,transparent);border-radius:999px;background:var(--mass-warning-soft);color:var(--mass-warning);font-size:0.78rem;overflow-wrap:anywhere}
+#app-grimoire .markdown-body .g-img-missing sl-icon{flex-shrink:0;font-size:0.9rem}
 </style>`
 
 // RenderPage returns the grimoire HTML fragment (without layout wrapper).
