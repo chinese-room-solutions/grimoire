@@ -575,6 +575,19 @@ func (s *Service) VaultFile(rel string) (string, error) {
 	return s.vaultPath(rel)
 }
 
+// VaultFileExists reports whether a vault-relative path names a file in the
+// vault, so the renderer can tell where a note's image embed resolves and
+// whether it resolves at all. A path escaping the vault, a directory, and a
+// missing file are all "no".
+func (s *Service) VaultFileExists(rel string) bool {
+	clean, err := s.vaultPath(rel)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(clean)
+	return err == nil && !info.IsDir()
+}
+
 // OpenFile opens a vault file with the OS-registered default application (e.g. a
 // linked .go source in the user's editor), for relative links in a note that
 // don't point at another note. The path must resolve inside the vault and to a

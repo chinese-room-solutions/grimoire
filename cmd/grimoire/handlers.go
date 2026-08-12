@@ -75,10 +75,12 @@ func writeVaultError(w http.ResponseWriter, err error, logger zerolog.Logger) {
 }
 
 // noteRenderer wires the render layer to one vault: which kernel a runnable
-// block would use, and that block's cached last run.
+// block would use, that block's cached last run, and whether a referenced file
+// is in the vault.
 func noteRenderer(svc *app.Service) ui.NoteRenderer {
 	return ui.NoteRenderer{
-		Kernel: svc.KernelInfo,
+		Kernel:     svc.KernelInfo,
+		FileExists: svc.VaultFileExists,
 		RunResult: func(notePath, code string) (ui.RunResult, bool) {
 			res, ok := svc.RunResultFor(notePath, code)
 			if !ok {

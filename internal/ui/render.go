@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"html"
 	"net/url"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -229,7 +231,8 @@ func renderBody(nr NoteRenderer, source, notePath string) string {
 		// Fall back to the raw text rather than failing the preview.
 		return "<pre>" + strings.ReplaceAll(source, "<", "&lt;") + "</pre>"
 	}
-	return wrapCodeBlocksWithRuns(nr, resolveImageSrcs(renderCallouts(buf.String())), overrides, sources, notePath)
+	rendered := resolveImageSrcs(renderCallouts(buf.String()), notePath, nr.FileExists)
+	return wrapCodeBlocksWithRuns(nr, rendered, overrides, sources, notePath)
 }
 
 // blockFence is a block's per-block kernel override, recovered from its fence
@@ -327,6 +330,12 @@ type NoteRenderer struct {
 	// note re-hydrates its saved output without the render layer depending on the
 	// run-result store.
 	RunResult func(notePath, code string) (RunResult, bool)
+	// FileExists, when set, reports whether a vault-relative path names a file in
+	// the vault. It decides where an image embed's relative src lands (the note's
+	// own directory or the vault root) and whether it lands anywhere at all. With
+	// no probe the renderer can't tell, so it reads the src's own form and never
+	// marks an embed broken.
+	FileExists func(rel string) bool
 }
 
 // RunResult is a block's persisted last run, mirrored from the app/runs layer so
@@ -467,22 +476,84 @@ func runResultPanelHTML(blockID string, res RunResult) string {
 // preview. The web layer mounts a handler at this path.
 const VaultFileRoute = "vault-file/"
 
-// imageSrc matches an <img src="…"> attribute in rendered HTML.
-var imageSrc = regexp.MustCompile(`(<img[^>]*\bsrc=")([^"]*)(")`)
+// imageTag matches a rendered image element and imageSrc its src attribute. Raw
+// HTML in a note is escaped, so every <img> here is one the renderer emitted.
+var (
+	imageTag = regexp.MustCompile(`<img\b[^>]*>`)
+	imageSrc = regexp.MustCompile(`\bsrc="([^"]*)"`)
+)
 
-// resolveImageSrcs rewrites a rendered note's relative image sources to point at
-// the vault-file route, so an ![](attachments/x.png) (a vault-relative path)
-// loads from the vault. Absolute URLs (http(s), data:, the note scheme, a leading
-// slash) are left as-is.
-func resolveImageSrcs(html string) string {
-	return imageSrc.ReplaceAllStringFunc(html, func(m string) string {
-		g := imageSrc.FindStringSubmatch(m)
-		src := g[2]
-		if src == "" || isAbsoluteURL(src) {
-			return m
+// resolveImageSrcs points a rendered note's relative image sources at the
+// vault-file route, resolving each against the note at notePath (see
+// vaultRelImage). Absolute URLs (http(s), data:, the note scheme, a leading
+// slash) are neither resolved nor checked.
+func resolveImageSrcs(rendered, notePath string, exists func(rel string) bool) string {
+	return imageTag.ReplaceAllStringFunc(rendered, func(tag string) string {
+		g := imageSrc.FindStringSubmatch(tag)
+		if g == nil || g[1] == "" || isAbsoluteURL(g[1]) {
+			return tag
 		}
-		return g[1] + VaultFileRoute + src + g[3]
+		// goldmark percent-encodes the destination; resolution and the existence
+		// probe work on real path bytes, so decode first and re-encode after.
+		src := g[1]
+		if dec, err := url.PathUnescape(src); err == nil {
+			src = dec
+		}
+		rel, ok := vaultRelImage(src, notePath, exists)
+		if !ok {
+			// No file in the vault answers to this src. Leave the tag as written
+			// rather than routing a path that isn't there.
+			return tag
+		}
+		return imageSrc.ReplaceAllLiteralString(tag, `src="`+VaultFileRoute+escapePath(rel)+`"`)
 	})
+}
+
+// vaultRelImage resolves an image src to a vault-relative path the way Obsidian
+// does: relative to the note's own directory first (what every Markdown editor
+// writes), then relative to the vault root (what vault-rooted Obsidian embeds
+// rely on). Without an existence probe there is nothing to choose between the
+// two, so the src's own form decides — an explicit ./ or ../ is note-relative,
+// a bare path keeps its vault-relative reading. ok is false when the src names
+// no file inside the vault.
+func vaultRelImage(src, notePath string, exists func(rel string) bool) (string, bool) {
+	noteRel, noteOK := inVault(path.Join(path.Dir(filepath.ToSlash(notePath)), src))
+	vaultRel, vaultOK := inVault(src)
+	if exists == nil {
+		if strings.HasPrefix(src, "./") || strings.HasPrefix(src, "../") {
+			return noteRel, noteOK
+		}
+		return vaultRel, vaultOK
+	}
+	if noteOK && exists(noteRel) {
+		return noteRel, true
+	}
+	if vaultOK && exists(vaultRel) {
+		return vaultRel, true
+	}
+	return "", false
+}
+
+// inVault cleans a slash-separated path and reports whether it still names
+// something under the vault root. A src that climbs past the root or is rooted
+// itself doesn't, and is never emitted as a URL — it is a broken embed.
+func inVault(p string) (string, bool) {
+	clean := path.Clean(p)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
+		return "", false
+	}
+	return clean, true
+}
+
+// escapePath percent-encodes a vault-relative path for the vault-file URL,
+// segment by segment so the separators survive, then escapes it for the HTML
+// attribute it goes into.
+func escapePath(rel string) string {
+	segs := strings.Split(rel, "/")
+	for i, seg := range segs {
+		segs[i] = url.PathEscape(seg)
+	}
+	return html.EscapeString(strings.Join(segs, "/"))
 }
 
 // isAbsoluteURL reports whether a src needs no vault rewrite: an external/data URL

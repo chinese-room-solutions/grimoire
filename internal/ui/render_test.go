@@ -587,6 +587,8 @@ func TestPropIcon(t *testing.T) {
 }
 
 func TestResolveImageSrcs(t *testing.T) {
+	// Without a probe (the zero NoteRenderer) nothing is checked and nothing is
+	// marked broken: the src's own form decides where it points.
 	tests := []struct {
 		name, in, want string
 	}{
@@ -602,7 +604,96 @@ func TestResolveImageSrcs(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, resolveImageSrcs(tc.in))
+			require.Equal(t, tc.want, resolveImageSrcs(tc.in, "", nil))
+		})
+	}
+}
+
+// TestRenderNoteImagePaths pins the resolution order a Markdown image embed
+// follows: the note's own directory first (what an editor writes), then the
+// vault root (what a vault-rooted Obsidian embed relies on), then broken.
+func TestRenderNoteImagePaths(t *testing.T) {
+	// The vault the probe answers for: a note in a subfolder, one image beside
+	// it, one in a vault-root folder, one in a sibling folder.
+	vault := map[string]bool{
+		"notes/local.png":     true,
+		"assets/shared.svg":   true,
+		"notes/img/deep.png":  true,
+		"attachments/a b.png": true,
+	}
+	exists := func(rel string) bool { return vault[rel] }
+	nr := NoteRenderer{FileExists: exists}
+
+	tests := []struct {
+		name, notePath, in string
+		contains           []string
+		absent             []string
+	}{
+		{
+			name:     "vault-relative src that exists stays vault-relative",
+			notePath: "notes/n.md",
+			in:       "![](assets/shared.svg)",
+			contains: []string{`src="` + VaultFileRoute + `assets/shared.svg"`},
+		},
+		{
+			name:     "note-relative ../ resolves against the note's directory",
+			notePath: "notes/img/n.md",
+			in:       "![](../../assets/shared.svg)",
+			contains: []string{`src="` + VaultFileRoute + `assets/shared.svg"`},
+		},
+		{
+			name:     "./ form resolves against the note's directory",
+			notePath: "notes/n.md",
+			in:       "![](./local.png)",
+			contains: []string{`src="` + VaultFileRoute + `notes/local.png"`},
+		},
+		{
+			name:     "a bare src beside the note wins over the vault root",
+			notePath: "notes/n.md",
+			in:       "![](local.png)",
+			contains: []string{`src="` + VaultFileRoute + `notes/local.png"`},
+		},
+		{
+			name:     "a nested note reaches a sibling directory",
+			notePath: "notes/n.md",
+			in:       "![](img/deep.png)",
+			contains: []string{`src="` + VaultFileRoute + `notes/img/deep.png"`},
+		},
+		{
+			name:     "spaces in the path survive the round trip",
+			notePath: "n.md",
+			in:       "![](<attachments/a b.png>)",
+			contains: []string{`src="` + VaultFileRoute + `attachments/a%20b.png"`},
+		},
+		{
+			name:     "an escape attempt resolves nowhere and is never routed",
+			notePath: "notes/n.md",
+			in:       "![](../../../etc/passwd)",
+			absent:   []string{VaultFileRoute},
+		},
+		{
+			name:     "a missing file is not routed",
+			notePath: "notes/n.md",
+			in:       "![](assets/gone.png)",
+			absent:   []string{VaultFileRoute},
+		},
+		{
+			name:     "external and data srcs are never checked",
+			notePath: "notes/n.md",
+			in:       "![](https://x/a.png) ![](http://x/b.png) ![](data:image/png;base64,AAAA)",
+			contains: []string{`src="https://x/a.png"`, `src="http://x/b.png"`, `src="data:image/png;base64,AAAA"`},
+			absent:   []string{VaultFileRoute},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out := RenderNoteBody(nr, tc.in, tc.notePath)
+			for _, want := range tc.contains {
+				require.Contains(t, out, want)
+			}
+			for _, no := range tc.absent {
+				require.NotContains(t, out, no)
+			}
 		})
 	}
 }
