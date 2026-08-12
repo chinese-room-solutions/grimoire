@@ -255,8 +255,8 @@ func TestMultiVault(t *testing.T) {
 		// Switching to the other vault: its own tuning, untouched by alpha's.
 		openVault(t, sess, d, beta)
 		openSessionsTab(t, sess)
-		assertTuning(t, sess, "10", "0.35", false)
-		if err := pageSeedsTuning(d.baseURL, beta, `value="10"`, `value="0.35"`, `data-bind="gSearchThisVault">`); err != nil {
+		assertTuning(t, sess, "10", "0.2", false)
+		if err := pageSeedsTuning(d.baseURL, beta, `value="10"`, `value="0.2"`, `data-bind="gSearchThisVault">`); err != nil {
 			t.Fatalf("beta's stored tuning is not the default: %v", err)
 		}
 

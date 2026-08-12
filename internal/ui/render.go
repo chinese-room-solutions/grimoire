@@ -772,7 +772,7 @@ const (
 // default mirrors app.SearchFloor, which owns it — spelled out here because this
 // package stays free of internal/app (the setup binary renders it too).
 func defaultSearchParams() SearchParams {
-	return SearchParams{K: 10, MinSim: 0.35}
+	return SearchParams{K: 10, MinSim: 0.20}
 }
 
 // ParseSearchParams reads a persisted tuning blob. Anything missing, unparsable,

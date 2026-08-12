@@ -395,15 +395,21 @@ func (s *Service) indexer(ctx context.Context) (*index.Indexer, error) {
 // Both values are tuned against eval/. Qwen3-0.6B scores correct paraphrase
 // matches at cosine 0.40–0.50, so the old floor of 0.50 emptied the vector leg
 // on exactly the queries that need it and search fell back to BM25 over OR'd
-// tokens. 0.35 is only a junk guard against an all-weak vector set; the
+// tokens. The floor is only a junk guard against an all-weak vector set; the
 // relative band does the real filtering. The band itself was 0.88, tight enough
 // that a query whose best hit was already weak kept just one or two hits.
+//
+// A short query scores the whole corpus low: an abbreviation matched its own
+// note at 0.25–0.35, under the floor of 0.35 that a sentence-length query never
+// reaches down to, so the vector leg was empty and only BM25 answered — which
+// finds a glossary mention rather than the note that explains the thing. Hence
+// 0.20, together with store.Band's floor under the leg's best few.
 //
 // They are exported because a cross-vault search over vaults sharing one model
 // applies the band itself, across their merged vector legs (see SearchLegsVec).
 const (
 	SearchTopRatio = 0.75
-	SearchFloor    = 0.35
+	SearchFloor    = 0.20
 )
 
 // Search embeds the query (with the model's query instruction) and runs the

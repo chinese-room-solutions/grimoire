@@ -932,7 +932,7 @@ func TestExtensionRowRemoveShapes(t *testing.T) {
 // sliders' range. None of them may leave the bar showing a value its controls
 // cannot express.
 func TestParseSearchParams(t *testing.T) {
-	def := SearchParams{K: 10, MinSim: 0.35}
+	def := SearchParams{K: 10, MinSim: 0.20}
 	tests := []struct {
 		name string
 		blob string
@@ -940,14 +940,14 @@ func TestParseSearchParams(t *testing.T) {
 	}{
 		{"nothing stored", "", def},
 		{"an older blob without the field", `{}`, def},
-		{"a partial blob keeps the other defaults", `{"thisVault":true}`, SearchParams{K: 10, MinSim: 0.35, ThisVault: true}},
+		{"a partial blob keeps the other defaults", `{"thisVault":true}`, SearchParams{K: 10, MinSim: 0.20, ThisVault: true}},
 		{"a stored tuning", `{"k":23,"minSim":0.6,"thisVault":true}`, SearchParams{K: 23, MinSim: 0.6, ThisVault: true}},
 		{"corrupt json", `{"k":`, def},
 		{"a wrongly typed field", `{"k":"23"}`, def},
 		{"k below the slider", `{"k":0,"minSim":0.6}`, SearchParams{K: 10, MinSim: 0.6}},
 		{"k above the slider", `{"k":9000,"minSim":0.6}`, SearchParams{K: 10, MinSim: 0.6}},
-		{"a negative minimum relevance", `{"k":5,"minSim":-1}`, SearchParams{K: 5, MinSim: 0.35}},
-		{"a minimum relevance above the slider", `{"k":5,"minSim":2}`, SearchParams{K: 5, MinSim: 0.35}},
+		{"a negative minimum relevance", `{"k":5,"minSim":-1}`, SearchParams{K: 5, MinSim: 0.20}},
+		{"a minimum relevance above the slider", `{"k":5,"minSim":2}`, SearchParams{K: 5, MinSim: 0.20}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -963,12 +963,12 @@ func TestRenderFullPageSeedsSearchParams(t *testing.T) {
 	t.Run("an unset state renders the defaults", func(t *testing.T) {
 		signals := initialSignals(State{})
 		require.Contains(t, signals, `"gSearchK":10`)
-		require.Contains(t, signals, `"gSearchMinSim":0.35`)
+		require.Contains(t, signals, `"gSearchMinSim":0.2`)
 		require.Contains(t, signals, `"gSearchThisVault":false`)
 
 		page := RenderFullPage("dark", "info", State{})
 		require.Contains(t, page, `id="g-search-k" class="g-range" min="1" max="30" step="1" value="10"`)
-		require.Contains(t, page, `id="g-search-minsim" class="g-range" min="0" max="0.95" step="0.05" value="0.35"`)
+		require.Contains(t, page, `id="g-search-minsim" class="g-range" min="0" max="0.95" step="0.05" value="0.2"`)
 		require.Contains(t, page, `id="g-search-this-vault" data-bind="gSearchThisVault">`)
 	})
 
