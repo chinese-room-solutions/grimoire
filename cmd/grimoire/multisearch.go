@@ -367,16 +367,7 @@ func groupVectorLeg(
 		}
 		return vec[i].ID < vec[j].ID
 	})
-	if len(vec) == 0 {
-		return nil
-	}
-	cutoff := store.BandCutoff(vec[0].Similarity, opts)
-	for i, h := range vec {
-		if h.Similarity < cutoff {
-			return vec[:i]
-		}
-	}
-	return vec
+	return store.Band(vec, func(h vaultHit) float64 { return h.Similarity }, opts)
 }
 
 // groupKeywordLeg merges the group's keyword legs by position: every vault's

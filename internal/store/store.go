@@ -357,7 +357,8 @@ func (s *Store) Search(query string, qvec []float32, opts SearchOptions) ([]Hit,
 
 	var vecHits []scored
 	if len(qvec) > 0 {
-		vecHits = band(s.vectorLeg(qvec, searchPool(k), opts.MinSim), opts)
+		vecHits = Band(s.vectorLeg(qvec, searchPool(k), opts.MinSim),
+			func(c scored) float64 { return c.sim }, opts)
 	}
 	ftsHits, err := s.keywordLeg(query, searchPool(k))
 	if err != nil {
@@ -488,15 +489,29 @@ func BandCutoff(best float64, opts SearchOptions) float64 {
 	return max(best*opts.TopRatio, opts.MinSim)
 }
 
-// band keeps the leading candidates at or above the band cutoff. The input is
-// sorted by descending similarity, so the survivors are a prefix.
-func band(candidates []scored, opts SearchOptions) []scored {
+// bandFloor is how many of the vector leg's best candidates survive the band
+// whatever their similarity. A short query — an abbreviation, a bare
+// identifier — scores every note low and flat, so the cutoff can land above the
+// very hits it is meant to keep; measured against eval/, the note answering
+// "HPA" or "SLO" sits at vector rank 2 or 3 and was banded out. Fusion ranks,
+// it does not average, and the keyword tie-break already protects an exact
+// match, so admitting three weak candidates costs little and recovers the
+// query's whole semantic leg.
+const bandFloor = 3
+
+// Band keeps the candidates the relevance band admits: those at or above
+// BandCutoff, plus the leading bandFloor whatever their similarity. The input
+// must be sorted by descending similarity, so the survivors are a prefix.
+//
+// It is generic and exported because a cross-vault search bands the merged
+// vector legs of several stores itself, and both sides must cut the same way.
+func Band[T any](candidates []T, sim func(T) float64, opts SearchOptions) []T {
 	if len(candidates) == 0 {
 		return nil
 	}
-	cutoff := BandCutoff(candidates[0].sim, opts)
+	cutoff := BandCutoff(sim(candidates[0]), opts)
 	for i, c := range candidates {
-		if c.sim < cutoff {
+		if sim(c) < cutoff && i >= bandFloor {
 			return candidates[:i]
 		}
 	}

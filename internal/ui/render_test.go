@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -26,28 +25,80 @@ func TestSourceLabel(t *testing.T) {
 	}
 }
 
-func TestSnippet(t *testing.T) {
+func TestSnippetHTML(t *testing.T) {
 	tests := []struct {
 		name, in string
-		want     string // exact result, when short enough to spell out
+		contains []string
+		absent   []string
 	}{
-		{name: "short text is trimmed, not cut", in: "  short  ", want: "short"},
-		{name: "long ascii", in: strings.Repeat("x", 500)},
-		{name: "long multibyte", in: strings.Repeat("€", 500)},
-		// A cut landing mid-character: 239 ascii runes then a 3-byte rune spanning
-		// the old 240-byte boundary.
-		{name: "cut lands inside a rune", in: strings.Repeat("a", 239) + strings.Repeat("€", 20)},
+		{name: "empty chunk renders nothing", in: "   "},
+		{
+			name:     "inline markup renders",
+			in:       "some **bold** and `code`",
+			contains: []string{"<strong>bold</strong>", "<code>code</code>"},
+			absent:   []string{"**bold**"},
+		},
+		{
+			name:     "a table renders as a table",
+			in:       "| page | title |\n| --- | --- |\n| 1 | Intro |",
+			contains: []string{"<table>", "<th>page</th>", "<td>Intro</td>"},
+			absent:   []string{"| page |"},
+		},
+		{
+			name:     "a fenced block is highlighted",
+			in:       "```go\nfunc main() {}\n```",
+			contains: []string{`<pre class="chroma" data-lang="go">`, "main"},
+		},
+		// A chunk is a mid-note fragment: no cut is applied, so a long one arrives
+		// whole and the card clamps it in CSS.
+		{
+			name:     "a long chunk is not truncated",
+			in:       strings.Repeat("word ", 300),
+			contains: []string{strings.TrimSpace(strings.Repeat("word ", 300))},
+			absent:   []string{"…"},
+		},
+		{
+			name:     "raw HTML is dropped, not run",
+			in:       "hi <script>alert(1)</script>",
+			contains: []string{"hi "},
+			absent:   []string{"<script>", "</script>"},
+		},
+		{
+			name:     "wikilinks flatten to their label",
+			in:       "see [[Some Note|the note]] and [[Other]]",
+			contains: []string{"the note", "Other"},
+			absent:   []string{NoteLinkScheme, "[[", "<a "},
+		},
+		{
+			name:     "a wikilink inside code stays literal",
+			in:       "`[[nodiscard]]`",
+			contains: []string{"[[nodiscard]]"},
+		},
+		{
+			name:     "an image downgrades to a labelled chip",
+			in:       "![a diagram](attachments/pic.png)",
+			contains: []string{`<span class="g-hit-img">`, "a diagram"},
+			absent:   []string{"<img", VaultFileRoute},
+		},
+		{
+			name:     "an alt-less image falls back to its src",
+			in:       "![](attachments/pic.png)",
+			contains: []string{`<span class="g-hit-img">`, "attachments/pic.png"},
+			absent:   []string{"<img"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			out := snippet(tc.in)
-			require.True(t, utf8.ValidString(out), "a snippet never splits a rune")
-			if tc.want != "" {
-				require.Equal(t, tc.want, out)
-				return
+			out := snippetHTML(tc.in)
+			for _, want := range tc.contains {
+				require.Contains(t, out, want)
 			}
-			require.True(t, strings.HasSuffix(out, "…"))
-			require.LessOrEqual(t, utf8.RuneCountInString(out), 241) // 240 runes + the ellipsis.
+			for _, miss := range tc.absent {
+				require.NotContains(t, out, miss)
+			}
+			if len(tc.contains) == 0 {
+				require.Empty(t, out)
+			}
 		})
 	}
 }
@@ -881,7 +932,7 @@ func TestExtensionRowRemoveShapes(t *testing.T) {
 // sliders' range. None of them may leave the bar showing a value its controls
 // cannot express.
 func TestParseSearchParams(t *testing.T) {
-	def := SearchParams{K: 10, MinSim: 0.35}
+	def := SearchParams{K: 10, MinSim: 0.20}
 	tests := []struct {
 		name string
 		blob string
@@ -889,14 +940,14 @@ func TestParseSearchParams(t *testing.T) {
 	}{
 		{"nothing stored", "", def},
 		{"an older blob without the field", `{}`, def},
-		{"a partial blob keeps the other defaults", `{"thisVault":true}`, SearchParams{K: 10, MinSim: 0.35, ThisVault: true}},
+		{"a partial blob keeps the other defaults", `{"thisVault":true}`, SearchParams{K: 10, MinSim: 0.20, ThisVault: true}},
 		{"a stored tuning", `{"k":23,"minSim":0.6,"thisVault":true}`, SearchParams{K: 23, MinSim: 0.6, ThisVault: true}},
 		{"corrupt json", `{"k":`, def},
 		{"a wrongly typed field", `{"k":"23"}`, def},
 		{"k below the slider", `{"k":0,"minSim":0.6}`, SearchParams{K: 10, MinSim: 0.6}},
 		{"k above the slider", `{"k":9000,"minSim":0.6}`, SearchParams{K: 10, MinSim: 0.6}},
-		{"a negative minimum relevance", `{"k":5,"minSim":-1}`, SearchParams{K: 5, MinSim: 0.35}},
-		{"a minimum relevance above the slider", `{"k":5,"minSim":2}`, SearchParams{K: 5, MinSim: 0.35}},
+		{"a negative minimum relevance", `{"k":5,"minSim":-1}`, SearchParams{K: 5, MinSim: 0.20}},
+		{"a minimum relevance above the slider", `{"k":5,"minSim":2}`, SearchParams{K: 5, MinSim: 0.20}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -912,12 +963,12 @@ func TestRenderFullPageSeedsSearchParams(t *testing.T) {
 	t.Run("an unset state renders the defaults", func(t *testing.T) {
 		signals := initialSignals(State{})
 		require.Contains(t, signals, `"gSearchK":10`)
-		require.Contains(t, signals, `"gSearchMinSim":0.35`)
+		require.Contains(t, signals, `"gSearchMinSim":0.2`)
 		require.Contains(t, signals, `"gSearchThisVault":false`)
 
 		page := RenderFullPage("dark", "info", State{})
 		require.Contains(t, page, `id="g-search-k" class="g-range" min="1" max="30" step="1" value="10"`)
-		require.Contains(t, page, `id="g-search-minsim" class="g-range" min="0" max="0.95" step="0.05" value="0.35"`)
+		require.Contains(t, page, `id="g-search-minsim" class="g-range" min="0" max="0.95" step="0.05" value="0.2"`)
 		require.Contains(t, page, `id="g-search-this-vault" data-bind="gSearchThisVault">`)
 	})
 

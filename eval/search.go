@@ -47,7 +47,7 @@ func (s *searcher) legs(query string, qvec []float32) ([]store.Hit, error) {
 		return nil, err
 	}
 	if s.o.band {
-		vec = bandCut(vec, opts)
+		vec = store.Band(vec, func(h store.Hit) float64 { return h.Similarity }, opts)
 	}
 	if s.o.ownKeywordLeg() {
 		if fts, err = s.keywordLeg(query, searchPool(s.o.poolK)); err != nil {
@@ -55,22 +55,6 @@ func (s *searcher) legs(query string, qvec []float32) ([]store.Hit, error) {
 		}
 	}
 	return fuse(vec, fts, s.o), nil
-}
-
-// bandCut keeps the leading vector hits at or above the relevance band, the way
-// store.Search does internally. The leg is sorted by descending similarity, so
-// the survivors are a prefix and their ranks are unchanged.
-func bandCut(vec []store.Hit, opts store.SearchOptions) []store.Hit {
-	if len(vec) == 0 {
-		return nil
-	}
-	cut := store.BandCutoff(vec[0].Similarity, opts)
-	for i, h := range vec {
-		if h.Similarity < cut {
-			return vec[:i]
-		}
-	}
-	return vec
 }
 
 // searchPool mirrors the store's per-leg candidate pool for a K-result search.

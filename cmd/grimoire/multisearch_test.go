@@ -267,11 +267,14 @@ func TestFuseGroup(t *testing.T) {
 		{
 			name: "the band is measured against the best hit in the group",
 			results: map[string]legs{
-				"/vaults/strong": {vec: []store.Hit{vec("s1.md", 1, 0.90), vec("s2.md", 2, 0.85)}},
-				"/vaults/weak":   {vec: []store.Hit{vec("w1.md", 1, 0.60), vec("w2.md", 2, 0.55)}},
+				"/vaults/strong": {vec: []store.Hit{
+					vec("s1.md", 1, 0.90), vec("s2.md", 2, 0.85), vec("s3.md", 3, 0.84),
+				}},
+				"/vaults/weak": {vec: []store.Hit{vec("w1.md", 1, 0.60), vec("w2.md", 2, 0.55)}},
 			},
 			// 0.90·0.88 = 0.792: the weak vault's own best is not the group's.
-			want: []string{"strong/s1.md", "strong/s2.md"},
+			// The strong vault fills the band's floor, so no weak hit rides in.
+			want: []string{"strong/s1.md", "strong/s2.md", "strong/s3.md"},
 		},
 		{
 			name: "the keyword legs interleave by position",

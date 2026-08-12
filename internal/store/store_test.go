@@ -304,7 +304,7 @@ func TestSearch_ReportsPerLegRanks(t *testing.T) {
 		{Path: "vec-only.md", Index: 0, Text: "generic prose", DocHash: "h", Vector: vec(0.99, 0.14106736)},
 	}))
 
-	hits, err := s.Search("ULID", vec(1, 0), SearchOptions{K: 5, TopRatio: 0.88})
+	hits, err := s.Search("ULID", vec(1, 0), SearchOptions{K: 5, MinSim: 0.1, TopRatio: 0.88})
 	require.NoError(t, err)
 	byPath := make(map[string]Hit, len(hits))
 	for _, h := range hits {
@@ -319,7 +319,7 @@ func TestSearch_ReportsPerLegRanks(t *testing.T) {
 	}{
 		{"both.md", 1, 2},      // both legs: vector rank 1 (sim 1.0), keyword runner-up.
 		{"vec-only.md", 2, 0},  // vector only: no keyword match.
-		{"ulid-spec.md", 0, 1}, // keyword only: banded out of the vector leg.
+		{"ulid-spec.md", 0, 1}, // keyword only: under the floor, so never in the vector leg.
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
@@ -332,9 +332,15 @@ func TestSearch_ReportsPerLegRanks(t *testing.T) {
 
 func TestSearch_BandFiltersVectorLeg(t *testing.T) {
 	s := openTemp(t, 2)
-	require.NoError(t, s.ReplaceNote("top.md", []Chunk{
-		{Path: "top.md", Index: 0, Text: "best", DocHash: "h", Vector: vec(1, 0)},
-	}))
+	// Three notes near the top fill the band's floor, so the tail is cut by the
+	// band itself rather than surviving as one of the leg's leading few.
+	for i, sim := range []float64{1, 0.95, 0.92} {
+		path := fmt.Sprintf("top%d.md", i)
+		require.NoError(t, s.ReplaceNote(path, []Chunk{
+			{Path: path, Index: 0, Text: "best", DocHash: "h",
+				Vector: vec(float32(sim), float32(math.Sqrt(1-sim*sim)))},
+		}))
+	}
 	require.NoError(t, s.ReplaceNote("tail.md", []Chunk{
 		{Path: "tail.md", Index: 0, Text: "weak", DocHash: "h", Vector: vec(0.6, 0.8)},
 	}))
@@ -342,8 +348,8 @@ func TestSearch_BandFiltersVectorLeg(t *testing.T) {
 	// tail.md's 0.6 similarity is below 0.88 * 1.0: banded out.
 	hits, err := s.Search("", vec(1, 0), SearchOptions{K: 5, TopRatio: 0.88})
 	require.NoError(t, err)
-	require.Len(t, hits, 1)
-	require.Equal(t, "top.md", hits[0].Path)
+	require.Len(t, hits, 3)
+	require.Equal(t, "top0.md", hits[0].Path)
 }
 
 // TestSearch_BandSemantics ports the app-layer relevance-filter table: hits
@@ -370,7 +376,11 @@ func TestSearch_BandSemantics(t *testing.T) {
 		{"floor drops a lone weak top", []float64{0.40, 0.39}, 0.50, 0},
 		{"single strong hit", []float64{0.90}, 0.50, 1},
 		{"higher floor tightens the cut", []float64{0.80, 0.74}, 0.75, 1},
-		{"low floor still respects the band", []float64{0.90, 0.60}, 0.20, 1},
+		{"the band still cuts past the floor's few", []float64{0.90, 0.60, 0.55, 0.50, 0.45}, 0.20, 3},
+		// A short query scores everything low: without the floor under the leg's
+		// best few, a cutoff of 0.40*0.88 would leave the vector leg with one hit.
+		{"the leg's best few survive a band that would empty it",
+			[]float64{0.40, 0.30, 0.28, 0.10}, 0.05, 3},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

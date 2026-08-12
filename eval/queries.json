@@ -330,5 +330,157 @@
       "kubernetes/operators.md": 1,
       "go/concurrency.md": 1
     }
+  },
+  {
+    "id": "q31",
+    "query": "HPA",
+    "kind": "abbreviation",
+    "relevant": {
+      "kubernetes/autoscaling.md": 3,
+      "kubernetes/deployments.md": 2,
+      "databases/postgres-on-kubernetes.md": 1,
+      "reference/abbreviations.md": 1
+    }
+  },
+  {
+    "id": "q32",
+    "query": "HPA scaling on custom metrics",
+    "kind": "abbreviation",
+    "relevant": {
+      "kubernetes/autoscaling.md": 3,
+      "kubernetes/deployments.md": 1,
+      "homelab/monitoring.md": 1,
+      "reference/abbreviations.md": 1
+    }
+  },
+  {
+    "id": "q33",
+    "query": "SLO",
+    "kind": "abbreviation",
+    "relevant": {
+      "sre/service-level-objectives.md": 3,
+      "homelab/monitoring.md": 1,
+      "reference/abbreviations.md": 1
+    }
+  },
+  {
+    "id": "q34",
+    "query": "SLI vs SLO",
+    "kind": "abbreviation",
+    "relevant": {
+      "sre/service-level-objectives.md": 3,
+      "homelab/monitoring.md": 1,
+      "reference/abbreviations.md": 1
+    }
+  },
+  {
+    "id": "q35",
+    "query": "CQRS",
+    "kind": "abbreviation",
+    "relevant": {
+      "databases/command-query-separation.md": 3,
+      "reference/abbreviations.md": 1
+    }
+  },
+  {
+    "id": "q36",
+    "query": "mTLS",
+    "kind": "abbreviation",
+    "relevant": {
+      "networking/mutual-tls.md": 3,
+      "networking/tls.md": 2,
+      "kubernetes/rbac-and-service-accounts.md": 1,
+      "reference/abbreviations.md": 1
+    }
+  },
+  {
+    "id": "q37",
+    "query": "CDC",
+    "kind": "abbreviation",
+    "relevant": {
+      "databases/change-data-capture.md": 3,
+      "databases/postgres-replication.md": 1,
+      "reference/abbreviations.md": 1
+    }
+  },
+  {
+    "id": "q38",
+    "query": "CDC to keep a search index up to date",
+    "kind": "abbreviation",
+    "relevant": {
+      "databases/change-data-capture.md": 3,
+      "ml/vector-search.md": 1,
+      "ml/embeddings.md": 1,
+      "databases/postgres-replication.md": 1
+    }
+  },
+  {
+    "id": "q39",
+    "query": "PVC",
+    "kind": "abbreviation",
+    "relevant": {
+      "kubernetes/persistent-volumes.md": 3,
+      "databases/postgres-on-kubernetes.md": 1,
+      "reference/abbreviations.md": 1
+    }
+  },
+  {
+    "id": "q40",
+    "query": "log structured merge tree",
+    "kind": "abbreviation",
+    "relevant": {
+      "databases/lsm-trees.md": 3,
+      "databases/btree-indexes.md": 1,
+      "reference/abbreviations.md": 1
+    }
+  },
+  {
+    "id": "q41",
+    "query": "uninterruptible power supply",
+    "kind": "abbreviation",
+    "relevant": {
+      "homelab/ups-and-power.md": 3,
+      "homelab/backups.md": 1,
+      "reference/abbreviations.md": 1
+    }
+  },
+  {
+    "id": "q42",
+    "query": "profile guided optimization in go",
+    "kind": "abbreviation",
+    "relevant": {
+      "go/pgo.md": 3,
+      "go/testing.md": 1,
+      "reference/abbreviations.md": 1
+    }
+  },
+  {
+    "id": "q43",
+    "query": "maximum transmission unit",
+    "kind": "abbreviation",
+    "relevant": {
+      "networking/wireguard.md": 3,
+      "reference/abbreviations.md": 1
+    }
+  },
+  {
+    "id": "q44",
+    "query": "recovery point objective",
+    "kind": "abbreviation",
+    "relevant": {
+      "homelab/backups.md": 3,
+      "databases/postgres-on-kubernetes.md": 2,
+      "databases/postgres-replication.md": 1,
+      "reference/abbreviations.md": 1
+    }
+  },
+  {
+    "id": "q45",
+    "query": "what does CQRS stand for",
+    "kind": "abbreviation",
+    "relevant": {
+      "reference/abbreviations.md": 3,
+      "databases/command-query-separation.md": 2
+    }
   }
 ]
