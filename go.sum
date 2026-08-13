@@ -27,8 +27,8 @@ github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK3
 github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
 github.com/chinese-room-solutions/llama-cpp-openai-client-go v0.1.0 h1:l8zlQDe7ADne/LRN5fLjVf6UdjwASCJQU2AqHGOoUN8=
 github.com/chinese-room-solutions/llama-cpp-openai-client-go v0.1.0/go.mod h1:/BvEQM03chhcPcG+RKGTeP4im8cLF3YG2VHdM9G4ljg=
-github.com/chinese-room-solutions/mass-sdk v0.2.1 h1:2O/yTK0YcNW5/tW9kXUX5L8Eqff8+TAnWb6li+QSpag=
-github.com/chinese-room-solutions/mass-sdk v0.2.1/go.mod h1:VM0+xi//xUdaktkbkMKTqqw9cmhMKZY6MWsfeq2Ba7w=
+github.com/chinese-room-solutions/mass-sdk v0.2.2 h1:HvZF7Tl3DdYZphVZTOrUi5R0pRcZqEkVfLozwPliDTo=
+github.com/chinese-room-solutions/mass-sdk v0.2.2/go.mod h1:VM0+xi//xUdaktkbkMKTqqw9cmhMKZY6MWsfeq2Ba7w=
 github.com/chinese-room-solutions/pdf v0.0.0-20260714203006-68e8f72db629 h1:XkX+Ljb0XqRA/UCzgYyaY7Qu4+q+b24mnETQGBiKxyw=
 github.com/chinese-room-solutions/pdf v0.0.0-20260714203006-68e8f72db629/go.mod h1:KJI4E+wkR0HgPLZQuzmt8n6mohzX+/dUHwu5UM8WVRo=
 github.com/cli/browser v1.3.0 h1:LejqCrpWr+1pRqmEPDGnTZOjsMe7sehifLynZJuqJpo=
