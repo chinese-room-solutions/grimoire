@@ -25,6 +25,10 @@ type collected struct {
 	installDir string
 	dataDir    string
 	perUser    bool
+	// relaunch is the app's self-update path (--relaunch): wait for the running
+	// build's files to become replaceable, then start the app again once staged.
+	// Never set by the wizard — see main's flag.
+	relaunch bool
 }
 
 // prefill is the seed for the form's fields.

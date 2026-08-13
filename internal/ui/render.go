@@ -747,6 +747,10 @@ type State struct {
 	// Version is the running build's version, shown at the foot of the settings
 	// menu. Rendered verbatim (a "dev" build says dev); empty drops the line.
 	Version string
+	// UpdateAvailable is the newer release's tag when the daemon's update check
+	// found one, else empty. It turns the version line into the install
+	// affordance and raises the one-off toast on page load.
+	UpdateAvailable string
 }
 
 // SearchParams is the search tuning bar's state: how many results to return, the
@@ -1093,6 +1097,12 @@ var styleBlock = `<style>
    a long version can't widen the 220px menu. */
 #app-grimoire .g-version{display:flex;align-items:baseline;justify-content:space-between;gap:0.5rem;font-size:0.72rem;color:var(--mass-text-faint)}
 #app-grimoire .g-version-value{color:var(--mass-text-muted);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:right;overflow-wrap:anywhere}
+/* The update affordance under the version line — a full-width row, since the
+   220px menu leaves no room beside the version value. */
+#app-grimoire .g-update-line{display:flex;align-items:center;gap:0.35rem;width:100%;margin-top:0.3rem;padding:0.25rem 0.4rem;border:1px solid var(--mass-accent);border-radius:var(--mass-radius,4px);background:none;color:var(--mass-accent);font:inherit;font-size:0.72rem;text-align:left;cursor:pointer}
+#app-grimoire .g-update-line:hover{background:var(--mass-bg-hover)}
+#app-grimoire .g-update-line[disabled]{opacity:0.6;cursor:default}
+#app-grimoire .g-update-line sl-icon{flex-shrink:0;font-size:0.85rem}
 
 /* Sidebar */
 /* position:relative so the collapsed sidebar's floated header (book + expand
@@ -1824,7 +1834,7 @@ func settingsMenu(logLevel, theme string, st State) string {
 		uikit.LogLevelSelect(logLevel),
 		trashSwitch(st.TrashEnabled),
 		uikit.ConnectionSection(st.Conn.Endpoint, st.Conn.HasToken, st.Conn.CACert),
-		versionLine(st.Version),
+		versionLine(st.Version, st.UpdateAvailable),
 	)
 }
 
@@ -1832,12 +1842,24 @@ func settingsMenu(logLevel, theme string, st State) string {
 // one faint label/value row, not a section of its own — the menu is 220px wide.
 // The value is shown exactly as the build stamped it ("dev" without ldflags,
 // otherwise a git describe). An unset version drops the line.
-func versionLine(version string) string {
+//
+// When a newer release is known, an install affordance follows on its own row:
+// the 220px budget has no room to hang it off the version value, and this is the
+// only place in the UI the update can be started from. initUpdate (grimoire.js)
+// binds it.
+func versionLine(version, available string) string {
 	if version == "" {
 		return ""
 	}
-	return fmt.Sprintf(`<div class="g-version"><span>Version</span><span class="g-version-value">%s</span></div>`,
+	line := fmt.Sprintf(`<div class="g-version"><span>Version</span><span class="g-version-value">%s</span></div>`,
 		html.EscapeString(version))
+	if available == "" {
+		return line
+	}
+	return line + fmt.Sprintf(
+		`<button type="button" id="g-update-btn" class="g-update-line" data-g-version="%s">`+
+			`<sl-icon name="arrow-up-circle"></sl-icon><span>%s available — install</span></button>`,
+		html.EscapeString(available), html.EscapeString(available))
 }
 
 // trashSwitch is the soft-delete control in the settings menu: on, a delete

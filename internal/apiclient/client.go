@@ -321,6 +321,38 @@ func (c *Client) ThemeRemove(ctx context.Context, name string) (grimoireapi.Them
 	return out, err
 }
 
+// UpdateStatus is the daemon's self-update state, read off /ping: the build it
+// runs, and the newer release its startup check found (empty when it is current,
+// is a dev build, or couldn't reach the release repository).
+type UpdateStatus struct {
+	Version   string `json:"version"`
+	Available string `json:"available"`
+}
+
+// UpdateStatus reports the running build and any newer release available. It is
+// vault-independent — the daemon, not a vault, is what gets updated.
+func (c *Client) UpdateStatus(ctx context.Context) (UpdateStatus, error) {
+	var out UpdateStatus
+	err := c.getJSON(ctx, "/ping", nil, &out)
+	return out, err
+}
+
+// UpdateApplyResult reports an update the daemon has started installing.
+type UpdateApplyResult struct {
+	Status  string `json:"status"`
+	Version string `json:"version"`
+}
+
+// UpdateApply installs the available release: the daemon downloads the matching
+// installer, starts it over the recorded install, and retires itself. A 409 says
+// there is nothing to install, or that this install can't be updated in place
+// (installed by hand, or system-wide and needing admin rights).
+func (c *Client) UpdateApply(ctx context.Context) (UpdateApplyResult, error) {
+	var out UpdateApplyResult
+	err := c.sendJSON(ctx, http.MethodPost, "/update/apply", nil, &out)
+	return out, err
+}
+
 // KernelRemove removes an installed kernel version from the shared kernels
 // dir. Builtins and vault-dir kernels are refused (400); not installed is 404.
 func (c *Client) KernelRemove(ctx context.Context, family, version string) (grimoireapi.KernelRemoveResult, error) {

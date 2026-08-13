@@ -189,6 +189,17 @@ with the verbs. Needs no vault, so it works on a fresh install.`},
 Capture the app window to a PNG. Needs a running GUI window — it fails under a
 headless backend.`},
 
+	{"update", "update [--apply]", "check for a newer Grimoire, or install it", vaultNone, `
+Report whether a newer Grimoire release is available. The daemon checks once at
+startup, so this reads that answer rather than going to the network.
+
+--apply installs it: the daemon downloads the matching installer, runs it over
+the recorded install, and exits — the app starts itself again once the new build
+is staged. It exits 4 when there is nothing to install, when this Grimoire was
+not placed by the Grimoire installer, or when the install is system-wide and
+needs administrator rights (run the installer yourself for those last two). A
+build from source ("dev") never has an update.`},
+
 	{"serve", "serve [--idle-timeout D]", "run the backend headless", vaultNone, `
 Run the Grimoire backend headless, without the GUI. One daemon serves every
 vault — each command names the vault it acts on — so there is nothing to bind:

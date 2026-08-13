@@ -68,7 +68,7 @@ func TestPageHandlerSeedsConnection(t *testing.T) {
 	reg := newTestRegistry(t) // no vault known → empty state.
 
 	rec := httptest.NewRecorder()
-	pageHandler(reg, t.TempDir(), store, client, zerolog.Nop())(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	pageHandler(reg, testControl(), t.TempDir(), store, client, zerolog.Nop())(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 
 	body := rec.Body.String()
 	require.Contains(t, body, "https://gw.example.com")
@@ -86,7 +86,7 @@ func TestPageHandlerResolvesTheVault(t *testing.T) {
 	store, err := connstore.LoadFrom(filepath.Join(t.TempDir(), "auth.json"))
 	require.NoError(t, err)
 	client := app.NewGatewayClient(openai.New(openai.Options{BaseURL: "http://127.0.0.1:9"}))
-	page := pageHandler(reg, t.TempDir(), store, client, zerolog.Nop())
+	page := pageHandler(reg, testControl(), t.TempDir(), store, client, zerolog.Nop())
 
 	render := func(target string) string {
 		rec := httptest.NewRecorder()

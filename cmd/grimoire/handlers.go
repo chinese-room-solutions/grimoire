@@ -106,7 +106,7 @@ func grimoireRoutes(reg *vaultRegistry, api *grimoireapi.API, ctl *daemonControl
 	// over its control channel.
 	mountClientChannel(mux, ctl.bridge, ctl, logger)
 
-	mux.HandleFunc("GET /{$}", pageHandler(reg, appDir, store, client, logger))
+	mux.HandleFunc("GET /{$}", pageHandler(reg, ctl, appDir, store, client, logger))
 
 	// Vault management is vault-independent — the Vaults tab and the empty-state
 	// picker both work with nothing open — so it hangs off the registry rather
@@ -205,10 +205,12 @@ func grimoireRoutes(reg *vaultRegistry, api *grimoireapi.API, ctl *daemonControl
 // the one a bare launch reopens. With no vault to render (none known, or its
 // folder is gone) the page is the "open a vault" empty state, listing the vaults
 // Grimoire knows about. Both states seed the settings menu's MASS connection
-// fields from the live client + store, and its version line from the build stamp.
-func pageHandler(reg *vaultRegistry, appDir string, store *connstore.Store, client *app.GatewayClient, logger zerolog.Logger) http.HandlerFunc {
+// fields from the live client + store, and its version line from the build stamp
+// — plus the install affordance when the update check has found a newer release.
+func pageHandler(reg *vaultRegistry, ctl *daemonControl, appDir string, store *connstore.Store, client *app.GatewayClient, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cfg := masgui.LoadConfig(appDir)
+		update := ctl.update.get()
 		svc := pageService(reg, r, logger)
 		endpoint := client.BaseURL()
 		conn, _ := store.GetConn(endpoint)
@@ -220,9 +222,10 @@ func pageHandler(reg *vaultRegistry, appDir string, store *connstore.Store, clie
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if svc == nil {
 			_, _ = io.WriteString(w, ui.RenderFullPage(cfg.Theme, cfg.LogLevel, ui.State{
-				Conn:    connState,
-				Recents: knownVaultRefs(logger),
-				Version: version,
+				Conn:            connState,
+				Recents:         knownVaultRefs(logger),
+				Version:         version,
+				UpdateAvailable: update,
 			}))
 			return
 		}
@@ -257,6 +260,7 @@ func pageHandler(reg *vaultRegistry, appDir string, store *connstore.Store, clie
 			Search:                searchParams(svc, logger),
 			Conn:                  connState,
 			Version:               version,
+			UpdateAvailable:       update,
 		}))
 	}
 }

@@ -32,6 +32,10 @@ import (
 const (
 	opPickFolder = "pick-folder"
 	opScreenshot = "screenshot"
+	// opUpdateRestarting tells the window an update is being installed and it is
+	// about to be replaced: it says so and closes itself. Unlike the others it
+	// reports no result — the window is gone by the time one could arrive.
+	opUpdateRestarting = "update-restarting"
 )
 
 // SSE event names on the channel.
@@ -58,9 +62,10 @@ var (
 // bridgeRequest is an `op` event's payload: which native operation to run, and
 // the id the window echoes back with the result.
 type bridgeRequest struct {
-	ID    string `json:"id"`
-	Op    string `json:"op"`
-	Title string `json:"title,omitempty"` // pick-folder's dialog title.
+	ID      string `json:"id"`
+	Op      string `json:"op"`
+	Title   string `json:"title,omitempty"`   // pick-folder's dialog title.
+	Version string `json:"version,omitempty"` // update-restarting's incoming release tag.
 }
 
 // bridgeResult is what the window POSTs once an op finishes. OK is the
@@ -192,6 +197,24 @@ func (b *clientBridge) setTheme(base string) {
 	if conn != nil {
 		conn.trySend(clientEvent{name: eventTheme, data: base})
 	}
+}
+
+// notifyUpdateRestarting tells the attached window that tag is being installed
+// and it is about to be closed. Nothing is waited for: the window's job is to
+// say so and quit, and the daemon is retiring right behind it. With no window
+// attached (a headless serve, a browser client) there is simply nobody to tell.
+func (b *clientBridge) notifyUpdateRestarting(tag string) {
+	b.mu.Lock()
+	conn := b.attached
+	b.mu.Unlock()
+	if conn == nil {
+		return
+	}
+	data, err := json.Marshal(bridgeRequest{Op: opUpdateRestarting, Version: tag})
+	if err != nil {
+		return // a two-field struct cannot fail to marshal.
+	}
+	conn.trySend(clientEvent{name: eventOp, data: string(data)})
 }
 
 // PickFolder runs the window's native folder dialog. With no window attached it

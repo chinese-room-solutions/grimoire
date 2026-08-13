@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/chinese-room-solutions/mass-sdk/webview"
@@ -34,9 +35,13 @@ const (
 // the goroutine returns when the window closes and cancels ctx.
 func runClientChannel(ctx context.Context, wv webview.WindowInterface, port int, logger zerolog.Logger) {
 	logger = logger.With().Str("component", "client-channel").Logger()
+	// An update is replacing this very build: the daemon we just lost is meant to
+	// be gone, so reconnecting would only spawn yesterday's process again (the
+	// window's next attach launches one). The flag ends the loop instead.
+	var updating atomic.Bool
 	backoff := channelRetryMin
-	for ctx.Err() == nil {
-		attached, err := streamClientChannel(ctx, wv, port, logger)
+	for ctx.Err() == nil && !updating.Load() {
+		attached, err := streamClientChannel(ctx, wv, port, &updating, logger)
 		if attached {
 			backoff = channelRetryMin // a working connection earns a fast retry.
 		}
@@ -58,7 +63,7 @@ func runClientChannel(ctx context.Context, wv webview.WindowInterface, port int,
 // events until it ends. attached reports whether the stream was established at
 // all, which tells the caller whether to back off further.
 func streamClientChannel(
-	ctx context.Context, wv webview.WindowInterface, port int, logger zerolog.Logger,
+	ctx context.Context, wv webview.WindowInterface, port int, updating *atomic.Bool, logger zerolog.Logger,
 ) (attached bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, daemonURL(port, "/api/client/channel"), nil)
 	if err != nil {
@@ -84,7 +89,7 @@ func streamClientChannel(
 		switch {
 		case line == "":
 			if name != "" {
-				dispatchClientEvent(ctx, wv, port, clientEvent{name: name, data: data}, logger)
+				dispatchClientEvent(ctx, wv, port, clientEvent{name: name, data: data}, updating, logger)
 			}
 			name, data = "", ""
 		case strings.HasPrefix(line, "event:"):
@@ -101,7 +106,8 @@ func streamClientChannel(
 // must keep reading meanwhile; the goroutine ends when the op does (at the
 // latest when the window closes and ctx cancels its result POST).
 func dispatchClientEvent(
-	ctx context.Context, wv webview.WindowInterface, port int, ev clientEvent, logger zerolog.Logger,
+	ctx context.Context, wv webview.WindowInterface, port int, ev clientEvent,
+	updating *atomic.Bool, logger zerolog.Logger,
 ) {
 	switch ev.name {
 	case eventTheme:
@@ -114,6 +120,11 @@ func dispatchClientEvent(
 			logger.Warn().Err(err).Msg("decoding a native operation request")
 			return
 		}
+		if req.Op == opUpdateRestarting {
+			updating.Store(true)
+			go closeForUpdate(wv, req.Version, logger)
+			return
+		}
 		go func() {
 			res := runClientOp(wv, req)
 			if err := postClientResult(ctx, port, res); err != nil && ctx.Err() == nil {
@@ -123,6 +134,23 @@ func dispatchClientEvent(
 	default:
 		logger.Debug().Str("event", ev.name).Msg("ignoring an unknown channel event")
 	}
+}
+
+// updateNoticeGrace is how long the "restarting" toast is left on screen before
+// the window goes. It only has to outlast a paint — the installer is already
+// waiting on this process to exit, so every extra second is a second the user
+// spends looking at a dead window.
+const updateNoticeGrace = 1500 * time.Millisecond
+
+// closeForUpdate shows the page the sticky "updating" notice and then quits the
+// window, which is what lets the installer replace this build's files. Terminate
+// unwinds runGUI on the main thread, so the daemon's own shutdown and this exit
+// happen together — and the installer starts the new build once both are gone.
+func closeForUpdate(wv webview.WindowInterface, tag string, logger zerolog.Logger) {
+	logger.Info().Str("version", tag).Msg("an update is being installed; closing the window")
+	evalCall(wv, logger, "gUpdateRestarting", tag)
+	time.Sleep(updateNoticeGrace)
+	wv.Terminate()
 }
 
 // runClientOp performs one native operation on the window. Both webview calls

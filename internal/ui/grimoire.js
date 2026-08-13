@@ -619,6 +619,52 @@
     });
   }
 
+  // initUpdate wires the settings menu's "vX.Y.Z available — install" row (only
+  // rendered when the daemon's check found a newer release) and announces the
+  // update once per page load. The announcement is a toast rather than a modal —
+  // nothing is broken — with the install offered right in it; the menu row is
+  // the affordance that remains after the toast clears.
+  //
+  // A successful apply says nothing more — the daemon pushes update-restarting
+  // down the window's control channel a moment later, and gUpdateRestarting
+  // below takes over. Only a refusal (409: not installed by the installer, or a
+  // system-wide install needing admin) has anything left to report.
+  function initUpdate() {
+    var btn = getEl("g-update-btn");
+    if (!btn) return;
+    var tag = btn.getAttribute("data-g-version") || "";
+
+    function apply() {
+      btn.disabled = true;
+      fetch("api/v1/update/apply", { method: "POST" }).then(function (r) {
+        if (r.ok) return null; // the restart notice takes it from here.
+        return r.text().then(function (t) {
+          btn.disabled = false;
+          window.massToast(window.massErrorText(t) || "Update failed (HTTP " + r.status + ").",
+            { variant: "danger" });
+        });
+      }, function () {
+        btn.disabled = false;
+        window.massToast("Couldn't start the update: the app isn't responding.", { variant: "danger" });
+      });
+    }
+
+    // 15s rather than the 6s default: the toast carries the action, and the
+    // default is short enough to vanish mid-reach.
+    window.massToast("Grimoire " + tag + " is available",
+      { duration: 15000, action: { label: "Install", onClick: apply } });
+    btn.addEventListener("click", apply);
+  }
+
+  // The window process calls this over the webview bridge when the daemon says an
+  // update is being installed: the app is about to be replaced and the window
+  // closed behind this notice. Sticky (duration Infinity) — the window goes away
+  // before any timeout would matter, and a notice that vanished first would leave
+  // the closing window unexplained.
+  window.gUpdateRestarting = function (tag) {
+    window.massToast("Updating Grimoire to " + tag + " — restarting…", { duration: Infinity });
+  };
+
   // The search tuning bar (results, minimum relevance, this vault only) persists
   // per vault in the UI-state store, so switching vaults — a page load — keeps
   // what was set. The controls are Datastar signals, not data-bind inputs, so the
@@ -4716,6 +4762,7 @@
     themePicker.init();
     extensions.init();
     initTrashSwitch();
+    initUpdate();
     initSearch();
     initSearchParams();
     initSidebarCollapse();

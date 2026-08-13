@@ -75,6 +75,11 @@ const DefaultRegistryURL = "https://raw.githubusercontent.com/chinese-room-solut
 // (one themes dir, both apps), so their index is MASS's, not grimoire-registry.
 const DefaultThemeRegistryURL = "https://raw.githubusercontent.com/chinese-room-solutions/mass-registry/main/index.yml"
 
+// DefaultUpdateURL is the repository Grimoire's own releases come from: the
+// self-update check reads its /releases/latest redirect for the newest tag and
+// downloads that release's installer asset. Overridden by update_url.
+const DefaultUpdateURL = "https://github.com/chinese-room-solutions/grimoire"
+
 // App is the app-level (vault-independent) config Grimoire owns, stored as
 // grimoire.json under the app dir (vaultdir.AppDir) — next to the SDK's shared
 // config.json, the same mechanism that makes theme and log level app-wide.
@@ -85,6 +90,9 @@ type App struct {
 	// ThemeRegistryURL overrides where installable theme packages are
 	// discovered. Empty means DefaultThemeRegistryURL (the mass-registry).
 	ThemeRegistryURL string `json:"theme_registry_url,omitempty"`
+	// UpdateURL overrides the release repository the self-update check reads.
+	// Empty means DefaultUpdateURL (Grimoire's own repository).
+	UpdateURL string `json:"update_url,omitempty"`
 }
 
 // RegistryURLOrDefault resolves the configured kernel registry index URL,
@@ -103,6 +111,15 @@ func (a App) ThemeRegistryURLOrDefault() string {
 		return a.ThemeRegistryURL
 	}
 	return DefaultThemeRegistryURL
+}
+
+// UpdateURLOrDefault resolves the configured release repository URL, falling
+// back to Grimoire's own.
+func (a App) UpdateURLOrDefault() string {
+	if a.UpdateURL != "" {
+		return a.UpdateURL
+	}
+	return DefaultUpdateURL
 }
 
 // LoadApp reads the app-level config from dir (vaultdir.AppDir), returning a
