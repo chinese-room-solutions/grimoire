@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/chinese-room-solutions/grimoire/internal/ui"
+	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 )
@@ -49,6 +50,15 @@ func (e searchEnv) search(t *testing.T, pageVault string, thisVaultOnly bool) st
 	return rec.Body.String()
 }
 
+// canonVault is the identity key hits are recorded under; it case-folds on
+// macOS/Windows, so assertions on recorded vaults compare through it.
+func canonVault(t *testing.T, path string) string {
+	t.Helper()
+	c, err := vaultdir.Canonical(path)
+	require.NoError(t, err)
+	return c
+}
+
 // The GUI's default is the same as everywhere else: one query, every vault, each
 // hit labelled with the vault it came from. Ticking "this vault only" narrows it
 // to the page's.
@@ -61,7 +71,7 @@ func TestSearchHandler_SpansVaultsUnlessNarrowed(t *testing.T) {
 	require.Contains(t, body, "diary.md")
 	require.Contains(t, body, workName+" ›", "a hit says which vault it came from")
 	require.Contains(t, body, homeName+" ›")
-	require.Contains(t, body, `data-vault="`+env.home, "a foreign hit carries its vault, to navigate there")
+	require.Contains(t, body, `data-vault="`+canonVault(t, env.home), "a foreign hit carries its vault, to navigate there")
 
 	narrowed := env.search(t, env.work, true)
 	require.Contains(t, narrowed, "specs/alpha.md")
@@ -93,7 +103,7 @@ func TestSearchHandler_FoldsAndReplaysModelGroups(t *testing.T) {
 	for _, h := range turns[0].Hits {
 		models[h.Vault] = h.Model
 	}
-	require.Equal(t, map[string]string{work: "model-x", old: "model-y"}, models)
+	require.Equal(t, map[string]string{canonVault(t, work): "model-x", canonVault(t, old): "model-y"}, models)
 
 	var buf strings.Builder
 	require.NoError(t, ui.Conversation(toUITurns(turns, work)).Render(t.Context(), &buf))
@@ -117,5 +127,5 @@ func TestSearchHandler_RecordsEachHitsVault(t *testing.T) {
 	for _, h := range turns[0].Hits {
 		vaults[h.Vault] = h.Path
 	}
-	require.Equal(t, map[string]string{env.work: "specs/alpha.md", env.home: "diary.md"}, vaults)
+	require.Equal(t, map[string]string{canonVault(t, env.work): "specs/alpha.md", canonVault(t, env.home): "diary.md"}, vaults)
 }
