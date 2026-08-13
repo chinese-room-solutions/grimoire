@@ -66,13 +66,7 @@ func main() {
 		}
 		fmt.Printf("grimoire-pack: wrote %s\n", art)
 
-		// The container embeds a full copy of the installer, so the loose stub is
-		// now redundant — leaving it beside the .AppImage/.app only confuses the
-		// user about which to launch. Remove it (best-effort) so dist/ ships the
-		// one double-clickable artifact. Only reached on a successful build, so we
-		// never strip the intermediate without a working replacement.
-		if err := os.Remove(*out); err != nil {
-			fmt.Fprintf(os.Stderr, "grimoire-pack: note: could not remove intermediate %s: %v\n", *out, err)
-		}
+		// The raw installer stays beside the container: the release uploads it as
+		// its own asset — the one `curl | sh` (install.sh) fetches and execs.
 	}
 }

@@ -412,7 +412,7 @@ func TestMultiSearch_CoversEveryVault(t *testing.T) {
 	require.Empty(t, warnings)
 	require.Len(t, groups, 1, "one model, one group")
 	require.Equal(t, "model-x", groups[0].Model)
-	require.ElementsMatch(t, []string{work, home}, groups[0].Vaults)
+	require.ElementsMatch(t, []string{canonVault(t, work), canonVault(t, home)}, groups[0].Vaults)
 
 	hits := flatten(groups)
 	require.Len(t, hits, 2)
@@ -421,7 +421,7 @@ func TestMultiSearch_CoversEveryVault(t *testing.T) {
 		byVault[h.Vault] = h.Path
 		require.Equal(t, "model-x", h.Model)
 	}
-	require.Equal(t, map[string]string{work: "specs/alpha.md", home: "alpha-diary.md"}, byVault)
+	require.Equal(t, map[string]string{canonVault(t, work): "specs/alpha.md", canonVault(t, home): "alpha-diary.md"}, byVault)
 }
 
 // Two models are two corpora: each keeps its own ranking, so nothing is ordered
@@ -476,7 +476,7 @@ func TestMultiSearch_SkipsVaultsThatCannotAnswer(t *testing.T) {
 	require.NoError(t, err)
 	hits := flatten(groups)
 	require.Len(t, hits, 1)
-	require.Equal(t, good, hits[0].Vault)
+	require.Equal(t, canonVault(t, good), hits[0].Vault)
 	require.Len(t, warnings, 1)
 	require.Contains(t, warnings[0], "no embedding model")
 }
