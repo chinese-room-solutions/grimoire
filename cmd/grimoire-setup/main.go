@@ -26,6 +26,7 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/chinese-room-solutions/grimoire/internal/appspec"
 	"github.com/chinese-room-solutions/mass-sdk/install"
 	"github.com/chinese-room-solutions/mass-sdk/term"
 	"github.com/chinese-room-solutions/mass-sdk/tui"
@@ -34,13 +35,9 @@ import (
 // version is set at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-// appSpec is Grimoire's installer identity.
-var appSpec = install.AppSpec{
-	Name:        "grimoire",
-	DisplayName: "Grimoire",
-	ExeName:     "grimoire",
-	BundleID:    "solutions.chineseroom.grimoire",
-}
+// appSpec is Grimoire's installer identity, shared with the app: the daemon
+// reads the record this installer writes when it applies an update.
+var appSpec = appspec.Spec
 
 func main() {
 	var (
@@ -50,6 +47,10 @@ func main() {
 		installDir  = flag.String("install-dir", "", "Install directory (default: per-scope)")
 		scope       = flag.String("scope", "", "Install scope: user (no elevation) or system (machine-wide)")
 		perUser     = flag.Bool("user", false, "Shorthand for --scope user")
+		// The updater's flag, not the operator's: Grimoire's own self-update runs
+		// this installer over a live install and needs the app back afterwards.
+		relaunch = flag.Bool("relaunch", false,
+			"With --install: wait for the running app's files to be replaceable, then start it again afterwards")
 	)
 	flag.Parse()
 
@@ -77,6 +78,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, term.FailMark()+err.Error())
 			os.Exit(1)
 		}
+		c.relaunch = *relaunch
 		os.Exit(runInstall(c, tag, endPlain).code)
 	}
 

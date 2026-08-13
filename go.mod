@@ -61,3 +61,5 @@ require (
 )
 
 tool github.com/a-h/templ/cmd/templ
+
+replace github.com/chinese-room-solutions/mass-sdk => ../mass-sdk
