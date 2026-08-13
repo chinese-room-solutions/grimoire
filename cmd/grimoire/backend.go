@@ -166,7 +166,7 @@ func startBackend(logger zerolog.Logger, idleTimeout time.Duration) (*backend, e
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	ctl := newDaemonControl(version, bridge, server, logger)
+	ctl := newDaemonControl(version, bridge, server, sdkUpdater{}, appCfg.UpdateURLOrDefault(), logger)
 
 	// Routes are static: the daemon serves every vault, and each request names the
 	// one it acts on, so there is nothing to rebuild.
@@ -211,6 +211,11 @@ func startBackend(logger zerolog.Logger, idleTimeout time.Duration) (*backend, e
 	// listener is already up, and nothing here blocks the window.
 	warmCtx, stopWarm := context.WithCancel(context.Background())
 	go reg.warmup(warmCtx, warmupStagger)
+
+	// Ask once, at startup, whether a newer Grimoire has been published. It is
+	// never waited on and never fatal — offline is the ordinary case — and the
+	// answer only becomes visible if the user opens the settings menu.
+	go checkForUpdate(warmCtx, ctl.updater, &ctl.update, ctl.updateURL, version, logger)
 
 	logger.Info().Str("url", pageURL(port, "")).Str("gateway", endpoint).Msg("started grimoire daemon")
 

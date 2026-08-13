@@ -22,6 +22,7 @@ func mountAPI(mux *http.ServeMux, api *grimoireapi.API, ctl *daemonControl, logg
 	logger = logger.With().Str("component", "api").Logger()
 	mux.HandleFunc("GET /api/v1/ping", apiPingHandler(ctl, logger))
 	mux.HandleFunc("POST /api/v1/shutdown", apiShutdownHandler(ctl, logger))
+	mux.HandleFunc("POST /api/v1/update/apply", apiUpdateApplyHandler(ctl, logger))
 	mux.HandleFunc("GET /api/v1/search", apiSearchHandler(api, logger))
 	mux.HandleFunc("GET /api/v1/note", apiNoteHandler(api, logger))
 	mux.HandleFunc("GET /api/v1/vault", apiVaultHandler(api, logger))
