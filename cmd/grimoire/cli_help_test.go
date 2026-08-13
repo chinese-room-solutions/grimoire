@@ -85,7 +85,7 @@ func TestCommandListCoversEveryVerb(t *testing.T) {
 		"theme list", "theme install", "theme remove",
 		"trash list", "trash restore", "trash delete", "trash empty",
 		"skill show", "skill install",
-		"screenshot", "serve",
+		"screenshot", "update", "serve",
 	}
 	documented := make(map[string]bool, len(commands))
 	for _, c := range commands {

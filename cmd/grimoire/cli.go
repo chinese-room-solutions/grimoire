@@ -152,6 +152,8 @@ func (e *cliEnv) dispatch(args []string) int {
 		return e.runSkill(args[1:])
 	case "screenshot":
 		return e.runScreenshot(args[1:])
+	case "update":
+		return e.runUpdate(args[1:])
 	default:
 		e.usageErrf("unknown command %q", args[0])
 		return exitUsage

@@ -27,7 +27,7 @@ your script runs. `grimoire vault list` gives you the paths.
 
 `search` is the exception: it covers **every** vault, and `--vault` narrows it
 to one. `vault list`, `vault current`, `vault forget PATH`, `kernel *`,
-`theme *` and `skill *` are app-level and take no vault.
+`theme *`, `skill *` and `update` are app-level and take no vault.
 
 ## Indexing is automatic — don't reindex
 
@@ -133,6 +133,28 @@ NAME installs the newest one compatible with this Grimoire build (what `list`
 shows), and @VERSION picks any listed compatible version — an unknown or
 incompatible one exits 3.
 
+## Updating Grimoire
+
+`update` reports whether a newer Grimoire release is available (`v0.5.0
+available …`, or `up to date`). The daemon checks once when it starts, so this
+reads a stored answer — it costs nothing and never blocks on the network. A
+build from source reports itself as `dev` and never has an update.
+
+`update --apply` installs it: Grimoire downloads the matching installer, runs it
+over its own install, and **exits** — the app restarts itself once the new build
+is staged. Two consequences worth planning around:
+
+- It stops the daemon. Anything you had in flight ends; the next command starts
+  a fresh backend on the new build.
+- It exits 4 rather than installing when there is nothing to install, when this
+  Grimoire wasn't placed by the Grimoire installer (a hand-copied binary, a `go
+  run`), or when it lives in a machine-wide directory needing admin rights. The
+  message says which. Those last two are the user's to resolve by running the
+  installer themselves — don't try to work around them.
+
+**Applying an update is the user's decision.** Report that one is available;
+don't run `--apply` unless you were asked to.
+
 ## Exit codes
 
 `0` ok · `1` error · `2` usage · `3` not found · `4` conflict
@@ -156,4 +178,5 @@ grimoire --vault ~/notes --json vault tree
 grimoire --vault ~/notes import notes.docx paper.pdf   # pdf needs the convert model
 grimoire --vault ~/notes reindex --force      # only after a model change
 grimoire kernel install grimoire-kernel-go    # make ```go blocks runnable
+grimoire update                               # is a newer Grimoire out?
 ```
