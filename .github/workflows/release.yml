@@ -35,18 +35,27 @@ jobs:
         # version — stable names keep releases/latest/download/ links evergreen
         # (the website and READMEs hardcode them).
         include:
+          # `setup_asset` is the stable name of the RAW installer binary (the
+          # self-extracting grimoire-setup, not the double-clickable container) —
+          # install.sh's `curl | sh` path fetches and execs it, so it needs a
+          # container-free executable at an evergreen
+          # releases/latest/download URL. Windows has no container to strip (the
+          # console .exe is already the raw installer), so it needs no entry.
+          #
           # Pinned, not -latest: GUI deps are provisioned per-image, so a silent
           # image migration is a silent build change. The Linux binary itself is
           # built in a container, not on this image — see the build step.
           - os: ubuntu-24.04
             label: linux-amd64
             asset: grimoire_linux_amd64
+            setup_asset: grimoire-setup_linux_amd64
           - os: windows-latest
             label: windows-amd64
             asset: grimoire_windows_amd64
           - os: macos-15
             label: macos-arm64
             asset: grimoire_darwin_arm64
+            setup_asset: grimoire-setup_darwin_arm64
     steps:
       # Full history, not a shallow clone: `make package` stamps the version from
       # `git describe --tags`, which needs the tags present — including on
@@ -107,6 +116,8 @@ jobs:
         run: make build
       # Installer wizard (grimoire-setup): ditto-zipped .app on macOS, console
       # .exe on Windows. The bundlers self-fetch their tools, so no extra CI deps.
+      # The raw self-extracting installer stays beside the container; the Archive
+      # step uploads it for install.sh.
       - name: Package installer
         if: runner.os != 'Linux'
         run: make package
@@ -115,15 +126,20 @@ jobs:
         run: |
           name="${{ matrix.asset }}"
           setup="grimoire-setup_${name#grimoire_}"
+          # Stable name of the raw, container-free installer that install.sh
+          # fetches. Empty on Windows, whose .exe above is already container-free.
+          raw="${{ matrix.setup_asset }}"
           if [ "$RUNNER_OS" = "Windows" ]; then
             7z a "$name.zip" ./bin/grimoire.exe
             mv dist/grimoire-setup.exe "$setup.exe"
           elif [ "$RUNNER_OS" = "macOS" ]; then
             tar -czf "$name.tar.gz" -C bin grimoire
             mv dist/Grimoire-Setup.zip "$setup.zip"
+            mv dist/grimoire-setup "$raw"
           else
             tar -czf "$name.tar.gz" -C bin grimoire
             mv dist/*.AppImage "$setup.AppImage"
+            mv dist/grimoire-setup "$raw"
           fi
       - uses: actions/upload-artifact@v7
         with:

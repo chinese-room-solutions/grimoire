@@ -18,7 +18,16 @@ stay on your machine.
 
 ## Install
 
-Download the installer for your OS from the
+On macOS and Linux, one line fetches the installer and runs the wizard:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/chinese-room-solutions/grimoire/main/install.sh | sh
+```
+
+A curl-fetched file carries no quarantine flag, so macOS skips the Gatekeeper
+"Open Anyway" dance.
+
+Or download the installer for your OS from the
 [releases page](https://github.com/chinese-room-solutions/grimoire/releases)
 and run it — a short terminal wizard that stages the app and a launcher.
 
