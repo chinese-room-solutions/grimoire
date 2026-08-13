@@ -10,7 +10,7 @@ require (
 	github.com/a-h/templ v0.3.1020
 	github.com/alecthomas/chroma/v2 v2.2.0
 	github.com/chinese-room-solutions/llama-cpp-openai-client-go v0.1.0
-	github.com/chinese-room-solutions/mass-sdk v0.2.2
+	github.com/chinese-room-solutions/mass-sdk v0.3.2
 	github.com/chinese-room-solutions/pdf v0.0.0-20260714203006-68e8f72db629
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/klippa-app/go-pdfium v1.18.0
@@ -61,5 +61,3 @@ require (
 )
 
 tool github.com/a-h/templ/cmd/templ
-
-replace github.com/chinese-room-solutions/mass-sdk => ../mass-sdk
