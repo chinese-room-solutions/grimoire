@@ -2448,9 +2448,18 @@
         // import dropzone, which keys off the OS "Files" type).
         try { e.dataTransfer.setData("application/x-grimoire-tab", String(dragId)); } catch (err) { /* IE quirk. */ }
       });
-      strip.addEventListener("dragover", function (e) {
+      // lastTab is the strip's rightmost tab — the insertion target when the
+      // cursor is over the strip row's empty tail (or the "+" button) rather
+      // than a tab, so a drag past the end lands in the last place. The tabs
+      // container is content-sized, so that tail belongs to the parent row —
+      // dragover/drop listen there and see both it and the tabs (which bubble).
+      function lastTab() {
+        var all = strip.querySelectorAll("[data-tab]");
+        return all.length ? all[all.length - 1] : null;
+      }
+      strip.parentElement.addEventListener("dragover", function (e) {
         if (dragId === null) return;
-        var tabEl = e.target.closest("[data-tab]");
+        var tabEl = e.target.closest("[data-tab]") || lastTab();
         if (!tabEl || parseInt(tabEl.getAttribute("data-tab"), 10) === dragId) { clearDragMarks(); return; }
         e.preventDefault(); // allow drop.
         e.dataTransfer.dropEffect = "move";
@@ -2459,9 +2468,9 @@
         clearDragMarks();
         tabEl.classList.add(after ? "g-tab-drop-after" : "g-tab-drop-before");
       });
-      strip.addEventListener("drop", function (e) {
+      strip.parentElement.addEventListener("drop", function (e) {
         if (dragId === null) return;
-        var tabEl = e.target.closest("[data-tab]");
+        var tabEl = e.target.closest("[data-tab]") || lastTab();
         if (!tabEl) { clearDragMarks(); return; }
         e.preventDefault();
         var overId = parseInt(tabEl.getAttribute("data-tab"), 10);
