@@ -136,9 +136,10 @@ incompatible one exits 3.
 ## Updating Grimoire
 
 `update` reports whether a newer Grimoire release is available (`v0.5.0
-available …`, or `up to date`). The daemon checks once when it starts, so this
-reads a stored answer — it costs nothing and never blocks on the network. A
-build from source reports itself as `dev` and never has an update.
+available …`, or `up to date`). It asks the release repository there and then,
+so it needs the network and takes a moment; a repository it can't reach exits 1
+with the reason rather than claiming `up to date`. A build from source reports
+itself as `dev` and never has an update.
 
 `update --apply` installs it: Grimoire downloads the matching installer, runs it
 over its own install, and **exits** — the app restarts itself once the new build
