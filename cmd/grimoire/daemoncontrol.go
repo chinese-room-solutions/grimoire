@@ -71,16 +71,29 @@ func (d *daemonControl) stopGracefully() {
 	}
 }
 
-// apiPingHandler reports that the daemon is alive, which build it is, and
-// whether a newer one has been published. A client compares the version against
-// its own and restarts the daemon on a mismatch, so an upgraded binary never
-// drives yesterday's process; "available" is the update check's finding, empty
-// when the daemon is current (or hasn't managed to look).
+// apiPingHandler reports that the daemon is alive, which build it is, and what
+// its last update check found. A client compares the version against its own and
+// restarts the daemon on a mismatch, so an upgraded binary never drives
+// yesterday's process. The rest is the cached answer: free to ask for, but only
+// as fresh as "checked_at" says — apiUpdateCheckHandler is the live one.
 func apiPingHandler(ctl *daemonControl, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, map[string]string{
-			"version": ctl.update.Version, "available": ctl.update.Available(),
-		}, logger)
+		writeJSON(w, ctl.update.Status(), logger)
+	}
+}
+
+// apiUpdateCheckHandler asks the release repository now and answers the fresh
+// status. A check that couldn't reach the repository is not an HTTP failure: the
+// caller asked a question and gets the answer, with the reason in "error". A
+// status code would tell the user nothing they can act on, and would read the
+// same as "up to date" in the UI.
+func apiUpdateCheckHandler(ctl *daemonControl, logger zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		st, err := ctl.update.Check(r.Context())
+		if err != nil {
+			logger.Debug().Err(err).Msg("checking for a newer Grimoire release")
+		}
+		writeJSON(w, st, logger)
 	}
 }
 

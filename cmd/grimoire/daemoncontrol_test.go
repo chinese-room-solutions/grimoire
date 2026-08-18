@@ -86,8 +86,9 @@ func TestAPIShutdownAnswersThenStops(t *testing.T) {
 	require.Error(t, err)
 }
 
-// The ping body is the documented shape, so a client can read it without
-// guessing.
+// The ping body is the documented shape — the update status, whose "error" is
+// dropped when the last check succeeded — so a client can read it without
+// guessing. A daemon that has not checked yet still names its own build.
 func TestAPIPingBodyShape(t *testing.T) {
 	port, _ := controlServer(t, "9.9.9")
 
@@ -100,5 +101,7 @@ func TestAPIPingBodyShape(t *testing.T) {
 
 	var body map[string]string
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	require.Equal(t, map[string]string{"version": "9.9.9", "available": ""}, body)
+	require.Equal(t, "9.9.9", body["version"])
+	require.Empty(t, body["available"])
+	require.NotContains(t, body, "error")
 }

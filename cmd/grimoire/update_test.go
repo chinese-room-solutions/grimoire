@@ -70,7 +70,59 @@ func TestAPIPingReportsAnAvailableUpdate(t *testing.T) {
 	require.NoError(t, err)
 
 	body := getJSONBody(t, port, "/api/v1/ping")
-	require.Equal(t, map[string]string{"version": "v0.4.1", "available": "v0.5.0"}, body)
+	require.Equal(t, "v0.4.1", body["version"])
+	require.Equal(t, "v0.5.0", body["available"])
+	require.NotEmpty(t, body["checked_at"])
+	require.Empty(t, body["error"])
+}
+
+// The check route asks the repository there and then, so a window that rendered
+// before the startup check landed — or an app left running past a release — can
+// get a current answer on demand. A repository it can't reach still answers 200:
+// the sentence is the point, and a status code would read as "up to date".
+func TestAPIUpdateCheck(t *testing.T) {
+	tests := []struct {
+		name          string
+		baseURL       func(t *testing.T) string
+		wantAvailable string
+		wantErr       bool
+	}{
+		{
+			name:          "a newer release is reported",
+			baseURL:       func(t *testing.T) string { t.Helper(); return releaseServer(t, "v0.5.0") },
+			wantAvailable: "v0.5.0",
+		},
+		{
+			name:    "the running build is current",
+			baseURL: func(t *testing.T) string { t.Helper(); return releaseServer(t, "v0.4.1") },
+		},
+		{
+			name:    "an unreachable repository answers 200 with the reason",
+			baseURL: func(*testing.T) string { return "http://127.0.0.1:1/grimoire" },
+			wantErr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			port, _, _ := controlServerWith(t, "v0.4.1", tc.baseURL(t))
+
+			resp, err := daemonRequest(t.Context(), http.MethodPost, port, "/api/v1/update/check")
+			require.NoError(t, err)
+			defer func() { _ = resp.Body.Close() }()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+
+			var body map[string]string
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+			require.Equal(t, "v0.4.1", body["version"])
+			require.Equal(t, tc.wantAvailable, body["available"])
+			require.NotEmpty(t, body["checked_at"])
+			if tc.wantErr {
+				require.NotEmpty(t, body["error"])
+			} else {
+				require.Empty(t, body["error"])
+			}
+		})
+	}
 }
 
 // The apply refuses what it cannot do, and does what it can: it downloads the
