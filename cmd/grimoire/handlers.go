@@ -210,7 +210,7 @@ func grimoireRoutes(reg *vaultRegistry, api *grimoireapi.API, ctl *daemonControl
 func pageHandler(reg *vaultRegistry, ctl *daemonControl, appDir string, store *connstore.Store, client *app.GatewayClient, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cfg := masgui.LoadConfig(appDir)
-		update := ctl.update.get()
+		update := ctl.update.Available()
 		svc := pageService(reg, r, logger)
 		endpoint := client.BaseURL()
 		conn, _ := store.GetConn(endpoint)

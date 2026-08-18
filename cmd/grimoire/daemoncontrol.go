@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/chinese-room-solutions/mass-sdk/selfupdate"
 	"github.com/rs/zerolog"
 )
 
@@ -22,38 +22,35 @@ const shutdownGrace = 3 * time.Second
 // contexts — an open client channel would otherwise sit through the whole grace
 // window.
 type daemonControl struct {
-	version string
-	bridge  *clientBridge
-	server  *http.Server
-	logger  zerolog.Logger
+	bridge *clientBridge
+	server *http.Server
+	logger zerolog.Logger
 
-	// update is what the startup check found: the newer release's tag, or "".
-	// The apply handler reads it, and applies it through updater against
-	// updateURL. They live here because they are the process's own state, like
-	// the version above — no vault owns them.
-	update    updateState
-	updater   updateCheckerInterface
-	updateURL string
+	// update answers "is there a newer Grimoire?" — refreshed in the background
+	// by its own Run goroutine and on demand by the check route; applier installs
+	// what it finds. They live here because they are the process's own state, like
+	// the build version the checker carries — no vault owns them.
+	update  *selfupdate.Checker
+	applier selfupdate.Applier
 
 	closeOnce sync.Once
 	closing   chan struct{}
 }
 
 // newDaemonControl returns the control surface for a server that has not started
-// serving yet. updater/updateURL drive the self-update surface; a nil updater
-// leaves it inert (nothing is ever available, and an apply reports as much).
+// serving yet. version is the running build, updateURL the release repository,
+// and appDir where an update download is staged.
 func newDaemonControl(
 	version string, bridge *clientBridge, server *http.Server,
-	updater updateCheckerInterface, updateURL string, logger zerolog.Logger,
+	updateURL, appDir string, logger zerolog.Logger,
 ) *daemonControl {
 	return &daemonControl{
-		version:   version,
-		bridge:    bridge,
-		server:    server,
-		updater:   updater,
-		updateURL: updateURL,
-		logger:    logger,
-		closing:   make(chan struct{}),
+		bridge:  bridge,
+		server:  server,
+		logger:  logger,
+		update:  &selfupdate.Checker{Version: version, BaseURL: updateURL, Logger: logger},
+		applier: updateApplier(updateURL, appDir),
+		closing: make(chan struct{}),
 	}
 }
 
@@ -77,11 +74,13 @@ func (d *daemonControl) stopGracefully() {
 // apiPingHandler reports that the daemon is alive, which build it is, and
 // whether a newer one has been published. A client compares the version against
 // its own and restarts the daemon on a mismatch, so an upgraded binary never
-// drives yesterday's process; "available" is the self-update check's finding,
-// empty when the daemon is current (or hasn't managed to look).
+// drives yesterday's process; "available" is the update check's finding, empty
+// when the daemon is current (or hasn't managed to look).
 func apiPingHandler(ctl *daemonControl, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, map[string]string{"version": ctl.version, "available": ctl.update.get()}, logger)
+		writeJSON(w, map[string]string{
+			"version": ctl.update.Version, "available": ctl.update.Available(),
+		}, logger)
 	}
 }
 
@@ -92,15 +91,15 @@ func apiPingHandler(ctl *daemonControl, logger zerolog.Logger) http.HandlerFunc 
 // goroutine: Shutdown waits for this very handler.
 func apiUpdateApplyHandler(ctl *daemonControl, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tag := ctl.update.get()
-		if tag == "" || ctl.updater == nil {
+		tag := ctl.update.Available()
+		if tag == "" {
 			writeAPIError(w, http.StatusConflict, "no Grimoire update is available", logger)
 			return
 		}
 		logger.Info().Str("tag", tag).Msg("applying a Grimoire update")
-		if err := applyUpdate(r.Context(), ctl.updater, ctl.updateURL, tag); err != nil {
+		if err := ctl.applyUpdate(r.Context(), tag); err != nil {
 			status := http.StatusInternalServerError
-			if errors.Is(err, errNotInstalled) || errors.Is(err, errNeedsElevation) {
+			if selfupdate.IsRefusal(err) {
 				status = http.StatusConflict
 			} else {
 				logger.Warn().Err(err).Msg("applying the Grimoire update")

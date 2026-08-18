@@ -17,7 +17,7 @@ import (
 // tests that only need the routes mounted.
 func testControl() *daemonControl {
 	return newDaemonControl(version, newClientBridge("dark"),
-		&http.Server{ReadHeaderTimeout: time.Second}, nil, "", zerolog.Nop())
+		&http.Server{ReadHeaderTimeout: time.Second}, "", "", zerolog.Nop())
 }
 
 // controlServer runs the daemon's control routes on a real loopback listener,
@@ -26,7 +26,7 @@ func testControl() *daemonControl {
 // before the process it is stopping goes away.
 func controlServer(t *testing.T, buildVersion string) (port int, stopped <-chan struct{}) {
 	t.Helper()
-	port, _, stopped = controlServerWith(t, buildVersion, nil, "")
+	port, _, stopped = controlServerWith(t, buildVersion, "")
 	return port, stopped
 }
 
@@ -34,7 +34,7 @@ func controlServer(t *testing.T, buildVersion string) (port int, stopped <-chan 
 // and hands back the control block so a test can seed what the check would have
 // found.
 func controlServerWith(
-	t *testing.T, buildVersion string, updater updateCheckerInterface, updateURL string,
+	t *testing.T, buildVersion, updateURL string,
 ) (port int, ctl *daemonControl, stopped <-chan struct{}) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -42,7 +42,7 @@ func controlServerWith(
 
 	mux := http.NewServeMux()
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
-	ctl = newDaemonControl(buildVersion, newClientBridge("dark"), server, updater, updateURL, zerolog.Nop())
+	ctl = newDaemonControl(buildVersion, newClientBridge("dark"), server, updateURL, t.TempDir(), zerolog.Nop())
 	mountAPI(mux, nil, ctl, zerolog.Nop())
 
 	done := make(chan struct{})
