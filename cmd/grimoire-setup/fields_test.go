@@ -160,3 +160,30 @@ func TestUninstallTarget(t *testing.T) {
 		})
 	}
 }
+
+// --relaunch has to survive an elevated re-run: the child does the actual
+// install, so if the flag didn't ride along, a system-wide update would stage
+// the new build and never start it.
+func TestInstallArgsCarryRelaunch(t *testing.T) {
+	tests := []struct {
+		name     string
+		relaunch bool
+		want     []string
+	}{
+		{
+			name: "an operator's install doesn't relaunch",
+			want: []string{"--install", "--scope", "user", "--install-dir", "/apps/grimoire"},
+		},
+		{
+			name:     "a self-update's install does",
+			relaunch: true,
+			want:     []string{"--install", "--scope", "user", "--install-dir", "/apps/grimoire", "--relaunch"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := collected{scope: install.ScopeUser, installDir: "/apps/grimoire", relaunch: tc.relaunch}
+			require.Equal(t, tc.want, installArgs(c))
+		})
+	}
+}
