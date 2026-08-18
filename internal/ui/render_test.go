@@ -852,6 +852,37 @@ func TestRenderPageVersion(t *testing.T) {
 	}
 }
 
+// The update affordance is part of the version block whether or not a release
+// has been found: the page can render before the daemon's first check answers,
+// and the button is what lets the user ask again. Only the install row is
+// conditional, and it is rendered hidden rather than left out, so the script
+// that hydrates it has something to reveal.
+func TestRenderPageUpdateRow(t *testing.T) {
+	tests := []struct {
+		name       string
+		available  string
+		wantLabel  string
+		wantHidden bool
+	}{
+		{name: "nothing found yet", wantHidden: true},
+		{name: "a release is available", available: "v0.5.0", wantLabel: "v0.5.0 available — install"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			page := RenderPage("dark", "info", State{Version: "v0.4.1", UpdateAvailable: tc.available})
+
+			require.Contains(t, page, `id="g-update-check"`)
+			require.Contains(t, page, `id="g-update-status"`)
+			if tc.wantHidden {
+				require.Contains(t, page, `id="g-update-btn" class="g-update-line" hidden`)
+				return
+			}
+			require.Contains(t, page, `id="g-update-btn" class="g-update-line" data-g-version="v0.5.0"`)
+			require.Contains(t, page, tc.wantLabel)
+		})
+	}
+}
+
 // TestRenderFullPageExtensionsWindow pins the Extensions dialog's paging and
 // sizing contract, which is split between the page CSS and the page script:
 // each tab is two content-sized grid rows that only split the panel evenly when
