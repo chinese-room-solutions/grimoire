@@ -317,6 +317,61 @@ func TestUISmoke(t *testing.T) {
 		})
 	})
 
+	// Each tab's scroll position is per-tab client state: leaving a note and
+	// coming back must land on the line it was left on. The restore has to wait
+	// for the server's body patch — a scrollTop set before it lands is clamped by
+	// the other note still in the panel, then wiped when the patch replaces it.
+	t.Run("NoteScrollSurvivesATabSwitch", func(t *testing.T) {
+		long := func(tag string) string {
+			return "# " + tag + "\n\n" + strings.Repeat("filler paragraph for "+tag+".\n\n", 200) + "end of " + tag + "\n"
+		}
+		// Note b is short on purpose: the panel it leaves behind is too short to
+		// hold note a's position, which is what makes a too-early restore clamp.
+		_, d := boot(t, map[string]string{"a.md": long("alpha"), "b.md": "# bravo\n\nend of bravo\n"})
+		defer failShot(t, d)
+
+		openFilesTab(t, d)
+		// Double-click pins one permanent tab per note, so both stay open.
+		for _, note := range []string{"a.md", "b.md"} {
+			sel := fmt.Sprintf(`#g-files .g-tree-note[data-note=%q]`, note)
+			waitVisible(t, d, sel)
+			pollErr(t, "double-clicking "+note, func() error {
+				id, err := d.find(sel)
+				if err != nil {
+					return err
+				}
+				return d.doubleClick(id)
+			})
+			waitActiveTab(t, d, strings.TrimSuffix(note, ".md"))
+		}
+
+		const want = 600
+		clickTabTitled(t, d, "a")
+		waitTextContains(t, d, "#g-preview-body", "end of alpha")
+		poll(t, "note a to scroll down its body", func() (bool, string) {
+			got, err := d.exec(fmt.Sprintf(
+				"var b = document.getElementById('g-preview-body'); b.scrollTop = %d; return b.scrollTop;", want))
+			if err != nil {
+				return false, err.Error()
+			}
+			f, _ := got.(float64)
+			return int(f) == want, fmt.Sprintf("scrollTop=%v", got)
+		})
+
+		clickTabTitled(t, d, "b")
+		waitTextContains(t, d, "#g-preview-body", "end of bravo")
+		clickTabTitled(t, d, "a")
+		waitTextContains(t, d, "#g-preview-body", "end of alpha")
+		poll(t, "note a to come back at the line it was left on", func() (bool, string) {
+			got, err := d.exec("return document.getElementById('g-preview-body').scrollTop;")
+			if err != nil {
+				return false, err.Error()
+			}
+			f, _ := got.(float64)
+			return int(f) == want, fmt.Sprintf("scrollTop=%v, want %d", got, want)
+		})
+	})
+
 	// Back/forward retrace where the user has BEEN, not the tab strip. Both notes
 	// share the one reusable preview tab, so stepping back has to reopen the
 	// earlier note in that same tab — the case a strip-order step got wrong,
@@ -452,6 +507,65 @@ func TestUISmoke(t *testing.T) {
 		waitNotVisible(t, d, "#g-graph.g-graph-open")
 		waitVisible(t, d, ".g-tabstrip")
 		waitTextContains(t, d, "#g-conversation .g-turn .g-bubble-user", "what is in my notes")
+		assertNoConsoleErrors(t, d)
+	})
+
+	// A [[Note#Heading]] link opens the target note AND lands on that heading. The
+	// whole chain is under test: the renderer's href, the click handler splitting
+	// it, and the preview's scroll-to-heading — the breadcrumb only fills in once
+	// the heading has actually been found and scrolled to.
+	t.Run("HeadingWikilinkOpensTheSection", func(t *testing.T) {
+		// The target's file name and its title differ on purpose: a link written
+		// against the slug has to read as the note's own heading.
+		const link = `#g-preview-body a[href="grimoire-note:deploy-runbook#Rollback"]`
+		_, d := boot(t, map[string]string{
+			"index.md": "# Index\n\nsee [[deploy-runbook#Rollback]] when it breaks\n",
+			"deploy-runbook.md": "# Deploying and rolling back\n\n## Setup\n\nsetup body\n\n" +
+				"## Rollback\n\ndrain the node first\n",
+		})
+		defer failShot(t, d)
+
+		openFilesTab(t, d)
+		clickReady(t, d, `#g-files .g-tree-note[data-note="index.md"]`)
+		waitTextContains(t, d, "#g-preview-body", "when it breaks")
+		// The href carries the target as written, note and heading each escaped.
+		waitVisible(t, d, link)
+		// The label reads "title › heading" — the note's heading, not its file name.
+		waitTextContains(t, d, link, "Deploying and rolling back › Rollback")
+
+		clickReady(t, d, link)
+		waitTextContains(t, d, "#g-preview-body", "drain the node first")
+		waitTextContains(t, d, ".g-tab-active .g-tab-title", "deploy-runbook")
+		// The breadcrumb names the section, so the jump happened rather than
+		// leaving the reader at the top of the note.
+		waitTextContains(t, d, "#g-preview-section", "Rollback")
+		assertNoConsoleErrors(t, d)
+	})
+
+	// Opening a note while the Vaults tab's graph view covers the workspace has to
+	// leave that view, or the note lands in a tab nothing shows — the graph's own
+	// node click enters through the same nav method, so this is what makes the
+	// vault graph open notes like the Graph tab does. ?note= is the route that
+	// reaches it without picking a node off a canvas.
+	t.Run("OpeningANoteLeavesTheVaultsGraphView", func(t *testing.T) {
+		srv, d := boot(t, map[string]string{"a.md": "# A\n\nnote a\n"})
+		defer failShot(t, d)
+
+		// Vaults is the default sidebar tab, so the page opens on the graph view.
+		waitVisible(t, d, "#g-graph.g-graph-open")
+		waitNotVisible(t, d, ".g-tabstrip")
+
+		if err := d.navigate(srv.baseURL + "?note=a.md"); err != nil {
+			t.Fatalf("navigating with ?note=: %v", err)
+		}
+		waitReady(t, d)
+		// The graph view is gone, the workspace is back, and the note is readable.
+		waitNotVisible(t, d, "#g-graph.g-graph-open")
+		waitVisible(t, d, ".g-tabstrip")
+		waitTextContains(t, d, "#g-preview-body", "note a")
+		waitTextContains(t, d, ".g-tab-active .g-tab-title", "a")
+		// It lands on Files, where the tree lights the row it opened.
+		waitVisible(t, d, `#g-files .g-tree-note[data-note="a.md"].g-tree-note-active`)
 		assertNoConsoleErrors(t, d)
 	})
 

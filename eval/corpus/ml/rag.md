@@ -11,8 +11,8 @@ every disappointing system is a retrieval problem being blamed on the model.
 ## Pipeline
 
 1. **Ingest** — parse, clean, split into chunks, embed, index. Chunking notes in
-   [[embeddings]].
-2. **Retrieve** — hybrid lexical plus vector, fused. [[vector-search]].
+   [[embeddings#Chunking]].
+2. **Retrieve** — hybrid lexical plus vector, fused. [[vector-search#Fusion]].
 3. **Rerank** — cross-encoder over the top 50, keep the top 5-8.
 4. **Assemble** — the prompt with the passages, each labelled with its source.
 5. **Generate** — with an instruction to answer only from the passages and to say
@@ -89,4 +89,5 @@ If the corpus is small enough to fit in the context window, put it all in the
 context window. If the questions are always the same twenty, cache the answers.
 If the data is structured, write a query. RAG is for a large unstructured corpus
 and open-ended questions, and it is a lot of machinery to maintain for anything
-else. My own notes on building this for the vault start in [[2026-06-02]].
+else. My own notes on building this for the vault start in
+[[2026-06-02#Search prototype]].

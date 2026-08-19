@@ -36,7 +36,7 @@ config over a weekend — makes the primary retain segments until the disk fills
 and the database stops accepting writes. Monitor the lag in bytes, set
 `max_slot_wal_keep_size`, and drop slots that belong to systems that no longer
 exist. The same log that makes replication work is the one being pinned, see
-[[postgres-replication]].
+[[postgres-replication#Write-ahead log first]].
 
 ## The outbox, for when you need both
 

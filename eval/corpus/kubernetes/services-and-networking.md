@@ -33,7 +33,7 @@ it.
 Headless (`clusterIP: None`) is a fourth mode rather than a type: no virtual IP
 is allocated and DNS returns the backing Pod addresses directly. That is the
 mode a numbered workload needs so each replica is individually addressable; see
-[[statefulsets]].
+[[statefulsets#Ordinal identity]].
 
 ## DNS inside the cluster
 
@@ -42,7 +42,7 @@ because of the search path injected into `/etc/resolv.conf`, which is also the
 cause of the classic five-lookup latency on external hostnames — every query for
 `api.example.com` tries it against each search domain first unless you set
 `ndots: 1` in `dnsConfig` or use a trailing dot. Background on the protocol
-itself is in [[dns]].
+itself is in [[dns#Resolution path]].
 
 ## Traffic policies and session behaviour
 
@@ -53,8 +53,9 @@ with no local backend health-checks itself out of the load balancer pool.
 
 `sessionAffinity: ClientIP` is the only stickiness a Service offers, and it is
 crude — it hashes the source address with a configurable timeout. Anything
-smarter belongs at layer 7, which is the job of [[ingress]] or a service mesh.
-The general trade-off between these layers is in [[load-balancing]].
+smarter belongs at layer 7, which is the job of [[ingress#Anatomy]] or a service
+mesh. The general trade-off between these layers is in
+[[load-balancing#Layer 4 compared to layer 7]].
 
 ## Readiness and endpoint churn
 

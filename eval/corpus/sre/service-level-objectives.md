@@ -36,8 +36,8 @@ is too generous to tell you anything.
 A target of 99.9% over 30 days is 43 minutes of failure you are allowed to
 spend. That number is the useful artefact — not the target. It converts an
 argument about whether to ship into arithmetic: budget left, ship; budget gone,
-stop shipping and fix reliability. See [[release-process]] for where that
-decision lands in practice.
+stop shipping and fix reliability. See [[release-process#Progressive rollout]]
+for where that decision lands in practice.
 
 The corollary people skip: an unused budget is also a signal. A service that
 has burned nothing in six months is over-engineered relative to its target,
@@ -66,7 +66,7 @@ change I have made to an alerting setup; the rest of the monitoring stack is in
 Measure at the point closest to the user that you still control. The load
 balancer sees requests the application never got — a saturated backend that
 refuses connections is invisible from inside the process, see
-[[load-balancing]].
+[[load-balancing#Health checks]].
 
 Exclude what the user does not experience: health checks, synthetic probes,
 crawlers hammering an endpoint nobody else calls. Exclude nothing else,
@@ -81,4 +81,4 @@ malformed request is not the API's own fault.
 - A dependency's target does not add up with yours in any simple way. Three
   dependencies at 99.9% do not give you 99.7% unless every request touches all
   three and no retry helps — which is why the retry and timeout budget matters
-  more than the arithmetic; see [[http-services]].
+  more than the arithmetic; see [[http-services#Clients]].

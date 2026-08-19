@@ -175,7 +175,7 @@ jobs:
           generate_release_notes: true
           # Missing assets are a failed release, not a partial one.
           fail_on_unmatched_files: true
-          # Published by hand once the asset list looks right: the website and
-          # READMEs hardcode releases/latest/download/ links, so whatever goes
-          # live is instantly what every user downloads.
-          draft: true
+          # Publishes live on tag, same as the other MASS repos: a release is
+          # now a rollout trigger for self-updating installs, and the tag push
+          # is the deliberate act.
+          draft: false

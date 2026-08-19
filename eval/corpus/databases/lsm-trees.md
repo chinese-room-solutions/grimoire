@@ -21,7 +21,7 @@ The flush is sequential. Nothing is updated in place, ever: a delete writes a
 tombstone, an update writes a new version, and the truth is whichever entry is
 found in the newest file. That is why the write path is fast and predictable
 compared to a page-oriented engine that has to find and dirty a specific page,
-see [[btree-indexes]].
+see [[btree-indexes#Write cost]].
 
 ## The read path and why it is not slow
 
@@ -67,7 +67,7 @@ put an objective on read latency, see [[service-level-objectives]].
   the inputs, so a full disk can leave the engine unable to compact its way out.
 - Snapshots are cheap, because immutable files plus a manifest is exactly what a
   snapshot wants — hard-link the files, copy the manifest, and the backup is
-  consistent without stopping writes; see [[backups]].
+  consistent without stopping writes; see [[backups#Databases]].
 - Bulk load wants the ingest path that writes finished files directly and links
   them in, skipping the memtable entirely.
 

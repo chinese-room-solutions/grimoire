@@ -38,7 +38,8 @@ them. Thirty to sixty seconds each; a five-second sample is mostly noise.
 Exposing the profiling endpoint means exposing it on an internal listener, not
 on the public mux — registering `net/http/pprof` also registers handlers on
 `http.DefaultServeMux`, which is one careless `http.ListenAndServe(addr, nil)`
-away from being on the internet; see [[http-services]].
+away from being on the internet; see
+[[http-services#Server defaults are wrong]].
 
 ## Keeping it fresh
 
@@ -54,16 +55,16 @@ rebuild) converges after one round; the second iteration is not worth the
 ceremony.
 
 Measure it like any other change: a benchmark with `-count=10` and `benchstat`,
-not a single run and a feeling, see [[testing]]. Watch build time too — the
-extra inlining is not free and I have seen a large binary take a fifth longer to
-compile.
+not a single run and a feeling, see [[testing#Benchmarks]]. Watch build time too
+— the extra inlining is not free and I have seen a large binary take a fifth
+longer to compile.
 
 ## What it will not fix
 
-Allocation. PGO will not remove a single one. If the profile is dominated by
-the garbage collector, the fix is
-fewer allocations — reuse buffers, avoid the interface boxing that escapes,
-give the slice a capacity — and no amount of compiler information changes the
-number of objects the program asks for. Same for lock contention: see
-[[concurrency]] for the actual remedies. This is a last few percent tool, applied
-after the algorithmic work, and reaching for it first is a way to feel busy.
+Allocation. PGO will not remove a single one. If the profile is dominated by the
+garbage collector, the fix is fewer allocations — reuse buffers, avoid the
+interface boxing that escapes, give the slice a capacity — and no amount of
+compiler information changes the number of objects the program asks for. Same
+for lock contention: see [[concurrency#sync primitives]] for the actual
+remedies. This is a last few percent tool, applied after the algorithmic work,
+and reaching for it first is a way to feel busy.

@@ -63,7 +63,7 @@ The kubelet cannot fetch the image. `describe` gives the registry's actual error
 - `unauthorized` / `denied` — no pull secret, wrong pull secret, or a secret in
   the wrong namespace. `imagePullSecrets` must live beside the Pod, and the
   ServiceAccount can carry them so every Pod inherits them; see
-  [[rbac-and-service-accounts]].
+  [[rbac-and-service-accounts#Service accounts]].
 - `toomanyrequests` — Docker Hub anonymous rate limit. Authenticate or mirror.
 - No error at all, just a hang — the node cannot reach the registry. DNS or
   egress policy.

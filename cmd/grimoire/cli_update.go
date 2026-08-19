@@ -8,9 +8,9 @@ import (
 )
 
 // runUpdate handles `grimoire update [--apply]`: report whether a newer release
-// is available, and with --apply install it. The check itself ran at daemon
-// startup, so this reads an answer rather than asking for one — which is also
-// why it costs nothing to call.
+// is available, and with --apply install it. The report is a live check — the
+// daemon's cached answer can predate the release, or predate the daemon getting
+// online at all, and a stale "up to date" is worse than a slow one.
 func (e *cliEnv) runUpdate(args []string) int {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	apply := fs.Bool("apply", false, "install the available update and restart Grimoire")
@@ -29,7 +29,7 @@ func (e *cliEnv) runUpdate(args []string) int {
 	var st apiclient.UpdateStatus
 	err := e.doRead(context.Background(), func(ctx context.Context, c *apiclient.Client) error {
 		var callErr error
-		st, callErr = c.UpdateStatus(ctx)
+		st, callErr = c.UpdateCheck(ctx)
 		return callErr
 	})
 	if err != nil {
@@ -38,6 +38,13 @@ func (e *cliEnv) runUpdate(args []string) int {
 	if e.json {
 		e.writeJSON(e.out, st)
 		return exitOK
+	}
+	// A check that couldn't reach the release repository answers 200 with the
+	// reason: the daemon is fine, the question is unanswered. Say so and fail,
+	// rather than reporting an "up to date" nobody established.
+	if st.Err != "" {
+		e.errorf("could not check for updates: %s", st.Err)
+		return exitError
 	}
 	if st.Available == "" {
 		e.outf("grimoire %s — up to date\n", st.Version)

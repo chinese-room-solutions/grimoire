@@ -57,16 +57,17 @@ reports the right percentage and the wrong minutes.
 
 ## Things I got wrong
 
-- No self-test schedule for the first two years. A battery that has quietly
-  died reports "on line" forever and fails at the one moment it matters. Weekly
-  test, and alert on the result, not on the alarm beeper nobody hears; the
-  metrics go into the same place as everything else, see [[monitoring]].
+- No self-test schedule for the first two years. A battery that has quietly died
+  reports "on line" forever and fails at the one moment it matters. Weekly test,
+  and alert on the result, not on the alarm beeper nobody hears; the metrics go
+  into the same place as everything else, see
+  [[monitoring#Alerts worth having]].
 - Everything on one unit, including the two things whose job is to be
-  independent. The backup target now sits on a separate circuit — a UPS is not
-  a backup and a shared failure domain undoes both, see [[backups]].
+  independent. The backup target now sits on a separate circuit — a UPS is not a
+  backup and a shared failure domain undoes both, see [[backups#The rule]].
 - The laser printer plugged into the battery side. Its warm-up draw alone
   tripped an overload on the first power cut. Motor and heating loads belong on
   the surge-only outlets.
 - No power cycling plan for the cluster nodes after the fact: bringing a k3s
   node back before its storage is available produces ten minutes of confusing
-  Pod failures, see [[k3s-cluster]].
+  Pod failures, see [[k3s-cluster#Storage]].

@@ -10,6 +10,7 @@ import (
 
 	ui "github.com/chinese-room-solutions/grimoire/internal/ui"
 	"github.com/chinese-room-solutions/mass-sdk/install"
+	"github.com/chinese-room-solutions/mass-sdk/selfupdate"
 	"github.com/chinese-room-solutions/mass-sdk/term"
 	"github.com/chinese-room-solutions/mass-sdk/tui"
 )
@@ -77,7 +78,7 @@ func runInstall(c collected, tag string, mode endMode) actionOutcome {
 	// Windows its exe can't be overwritten until it has. Wait for the staged
 	// binary to become replaceable before touching it.
 	if c.relaunch {
-		waitReplaceable(appSpec.StagedExePath(c.installDir), replaceableWait)
+		selfupdate.WaitReplaceable(appSpec.StagedExePath(c.installDir), selfupdate.ReplaceableWait)
 	}
 
 	res, err := doInstall(c, tag, mode)
@@ -88,7 +89,7 @@ func runInstall(c collected, tag string, mode endMode) actionOutcome {
 	// Self-update: bring the app back up. A relaunch that fails is a warning —
 	// the new build is staged, and the user can start it themselves.
 	if c.relaunch {
-		if err := startApp(c.installDir); err != nil {
+		if err := selfupdate.StartApp(appSpec, c.installDir); err != nil {
 			fmt.Fprintln(os.Stderr, term.FailMark()+"could not restart Grimoire: "+err.Error())
 		}
 	}

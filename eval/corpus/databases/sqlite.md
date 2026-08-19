@@ -58,11 +58,11 @@ and be done with it.
 
 ## Query planning
 
-Same B-tree machinery as anywhere else, see [[btree-indexes]]. `ANALYZE`
-populates `sqlite_stat1`; without it the planner guesses from structure alone.
-`EXPLAIN QUERY PLAN` is short enough to read entirely — look for `SCAN` where you
-expected `SEARCH`, and for `USE TEMP B-TREE FOR ORDER BY`, which means the index
-did not satisfy the sort.
+Same B-tree machinery as anywhere else, see [[btree-indexes#Structure]].
+`ANALYZE` populates `sqlite_stat1`; without it the planner guesses from
+structure alone. `EXPLAIN QUERY PLAN` is short enough to read entirely — look
+for `SCAN` where you expected `SEARCH`, and for `USE TEMP B-TREE FOR ORDER BY`,
+which means the index did not satisfy the sort.
 
 Covering indexes matter more than usual because the table is a B-tree keyed by
 rowid: a non-covering index lookup is a second descent per row.
@@ -74,7 +74,7 @@ FTS5 is a virtual table with its own inverted index, `MATCH` queries, and
 content table so the text is not stored twice, and triggers to keep them in
 sync. Ranking is negative — smaller is better — which trips up every first
 attempt at an ORDER BY. Combining it with a vector index is the hybrid approach
-in [[vector-search]].
+in [[vector-search#Fusion]].
 
 ## Backups
 
@@ -85,4 +85,4 @@ the online backup API and restarts if pages change underneath it.
 Copying the file with `cp` while anything is connected is not a backup — you
 will get a torn file plus a `-wal` you did not copy. Litestream streams WAL
 frames to object storage for continuous replication, which is genuinely good and
-what I use at home; see [[backups]].
+what I use at home; see [[backups#Databases]].

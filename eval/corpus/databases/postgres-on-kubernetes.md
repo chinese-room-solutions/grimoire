@@ -13,8 +13,8 @@ is what it takes when you decide otherwise.
 A database replica is not interchangeable with its peers. It owns a data
 directory, it has a role (primary or standby), and Patroni's peers find each
 other by hostname. That rules out the anonymous controller immediately — the
-reasoning is written out in [[statefulset-vs-deployment]], and the mechanics in
-[[statefulsets]].
+reasoning is written out in [[statefulset-vs-deployment#Picking one]], and the
+mechanics in [[statefulsets#Naming that survives rescheduling]].
 
 Concretely, a StatefulSet gives three things this workload cannot do without:
 
@@ -25,10 +25,11 @@ Concretely, a StatefulSet gives three things this workload cannot do without:
 3. Ordered rollout, so an upgrade touches one member at a time and never leaves
    the quorum in an unknown state.
 
-The governing Service is headless, and Patroni additionally maintains a
-regular ClusterIP Service whose endpoints it rewrites on failover, so
-`pg-primary` always points at the current leader. Applications connect to that
-name and reconnect on error. Layer details in [[services-and-networking]].
+The governing Service is headless, and Patroni additionally maintains a regular
+ClusterIP Service whose endpoints it rewrites on failover, so `pg-primary`
+always points at the current leader. Applications connect to that name and
+reconnect on error. Layer details in
+[[services-and-networking#DNS inside the cluster]].
 
 ## Storage
 
@@ -39,7 +40,8 @@ assumes exclusive access to its data directory, so `ReadWriteOncePod` is the
 correct access mode.
 
 Set the reclaim policy to `Retain`. A stray `kubectl delete` should cost you an
-argument with the storage team, not the database. See [[persistent-volumes]].
+argument with the storage team, not the database. See
+[[persistent-volumes#Reclaim policy]].
 
 Filesystem snapshots are crash-consistent, which for Postgres is fine — it
 replays WAL on start — but only if the snapshot is atomic across all volumes the
@@ -53,7 +55,7 @@ backups.
   cache has to fit under the container's memory limit, and the page cache counts.
   Postgres has no equivalent of `GOMEMLIMIT`; set the limit generously and make
   it Guaranteed QoS. An OOMKilled Postgres is a crash recovery on restart. See
-  [[resource-limits]].
+  [[resource-limits#QoS classes]].
 - **Huge pages.** Worth it above ~8GB of shared buffers, needs the node
   pre-configured and `hugepages-2Mi` in the resource spec.
 - **Probes.** A liveness probe that fails during a long crash recovery will
@@ -74,12 +76,12 @@ postgres-operator, and Crunchy's PGO all encode failover, backups, and switchove
 in a controller. CloudNativePG is the one I would pick now: no Patroni sidecar,
 it drives the instances directly, and continuous archiving to object storage is
 a first-class field rather than a bolt-on. The general shape of these
-controllers is in [[operators]].
+controllers is in [[operators#The reconcile contract]].
 
 What the operator does not decide for you: your recovery point objective, and
 whether the recovery path has ever been rehearsed. Replication is not a backup —
-[[postgres-replication]] and [[backups]] both make that point, and I keep having
-to relearn it.
+[[postgres-replication]] and [[backups#The rule]] both make that point, and I
+keep having to relearn it.
 
 ## Cutover checklist
 

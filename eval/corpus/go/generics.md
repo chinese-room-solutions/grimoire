@@ -59,7 +59,7 @@ fluent chained-transform API everyone tries to write first — you can have
   `DeleteFunc`.
 - `cmp` — `Ordered`, `Compare`, `Or`.
 - `sync.OnceValue` / `OnceValues`, the typed version of the pattern in
-  [[concurrency]].
+  [[concurrency#sync primitives]].
 
 `slices.SortFunc` with a comparison returning an int replaced most `sort.Slice`
 calls; it is faster because there is no reflection and no interface boxing.

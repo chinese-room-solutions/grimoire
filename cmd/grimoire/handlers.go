@@ -81,6 +81,7 @@ func noteRenderer(svc *app.Service) ui.NoteRenderer {
 	return ui.NoteRenderer{
 		Kernel:     svc.KernelInfo,
 		FileExists: svc.VaultFileExists,
+		NoteTitle:  noteTitles(svc),
 		RunResult: func(notePath, code string) (ui.RunResult, bool) {
 			res, ok := svc.RunResultFor(notePath, code)
 			if !ok {
@@ -88,6 +89,22 @@ func noteRenderer(svc *app.Service) ui.NoteRenderer {
 			}
 			return toUIRunResult(res), true
 		},
+	}
+}
+
+// noteTitles answers a wikilink target with the target note's title, memoized
+// for the one render it was built for — a note linking the same target five
+// times reads it once. Each renderer belongs to a single request, so the map
+// needs no lock and can't go stale under an edit.
+func noteTitles(svc *app.Service) func(string) (string, bool) {
+	seen := map[string]string{}
+	return func(target string) (string, bool) {
+		title, cached := seen[target]
+		if !cached {
+			title, _ = svc.NoteTitle(target)
+			seen[target] = title
+		}
+		return title, title != ""
 	}
 }
 
@@ -210,7 +227,7 @@ func grimoireRoutes(reg *vaultRegistry, api *grimoireapi.API, ctl *daemonControl
 func pageHandler(reg *vaultRegistry, ctl *daemonControl, appDir string, store *connstore.Store, client *app.GatewayClient, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cfg := masgui.LoadConfig(appDir)
-		update := ctl.update.get()
+		update := ctl.update.Available()
 		svc := pageService(reg, r, logger)
 		endpoint := client.BaseURL()
 		conn, _ := store.GetConn(endpoint)
@@ -780,7 +797,7 @@ func previewHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 				source, err = svc.ReadNote(rel)
 			}
 		}
-		patchSignals(sse, map[string]any{"gPreviewOpen": true, "gPreviewTitle": rel})
+		patchSignals(sse, map[string]any{"gPreviewTitle": rel})
 		if err != nil {
 			_ = sse.PatchElementTempl(ui.Notice("Note not found: "+sig.Path),
 				datastar.WithSelector("#g-preview-body"), datastar.WithModeInner())
@@ -1587,14 +1604,13 @@ func renameNoteHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc
 	}
 }
 
-// deleteNoteHandler removes a note from the vault, repaints the tree, and closes
-// the preview if it was showing the deleted note. The path arrives as a signal.
+// deleteNoteHandler removes a note from the vault and repaints the tree. The
+// path arrives as a signal; the client closes the note's tab itself.
 func deleteNoteHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// ReadSignals before NewSSE — NewSSE closes the request body.
 		var sig struct {
-			Path        string `json:"gNotePath"`
-			PreviewPath string `json:"gPreviewPath"`
+			Path string `json:"gNotePath"`
 		}
 		if err := datastar.ReadSignals(r, &sig); err != nil {
 			logger.Warn().Err(err).Msg("reading delete signals")
@@ -1608,7 +1624,6 @@ func deleteNoteHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc
 			logger.Warn().Err(err).Str("note", sig.Path).Msg("deleting note")
 		}
 		renderFiles(sse, svc, logger)
-		closePreviewIf(sse, sig.PreviewPath == sig.Path)
 	}
 }
 
@@ -1756,14 +1771,13 @@ func renameFolderHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFu
 
 // deleteFolderHandler deletes a folder and all its contents — honouring the
 // vault's trash setting like a note delete (soft-deleting the folder as a unit
-// when enabled) — repaints the tree, and closes the preview if the open note was
-// inside the deleted folder. The folder path arrives as a signal.
+// when enabled) — and repaints the tree. The folder path arrives as a signal;
+// the client closes the tabs of the notes inside it.
 func deleteFolderHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// ReadSignals before NewSSE — NewSSE closes the request body.
 		var sig struct {
-			Path        string `json:"gFolderPath"`
-			PreviewPath string `json:"gPreviewPath"`
+			Path string `json:"gFolderPath"`
 		}
 		if err := datastar.ReadSignals(r, &sig); err != nil {
 			logger.Warn().Err(err).Msg("reading folder-delete signals")
@@ -1776,50 +1790,29 @@ func deleteFolderHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFu
 			logger.Warn().Err(err).Str("folder", sig.Path).Msg("deleting folder")
 		}
 		renderFiles(sse, svc, logger)
-		closePreviewIf(sse, sig.PreviewPath == sig.Path || strings.HasPrefix(sig.PreviewPath, sig.Path+"/"))
-	}
-}
-
-// closePreviewIf closes the note preview (gPreviewOpen=false) when showing is
-// true — used after a delete removes the note currently shown.
-func closePreviewIf(sse *datastar.ServerSentEventGenerator, showing bool) {
-	if showing {
-		patchSignals(sse, map[string]any{"gPreviewOpen": false})
 	}
 }
 
 // deleteNotesManyHandler removes every note in the gBatchPaths signal (a JSON
-// array of vault-relative paths) in one request, repaints the tree, and closes
-// the preview if it was showing one of them.
+// array of vault-relative paths) in one request and repaints the tree.
 func deleteNotesManyHandler(svc *app.Service, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var sig struct {
-			Paths       string `json:"gBatchPaths"`
-			PreviewPath string `json:"gPreviewPath"`
+			Paths string `json:"gBatchPaths"`
 		}
 		if err := datastar.ReadSignals(r, &sig); err != nil {
 			logger.Warn().Err(err).Msg("reading batch-delete note signals")
 		}
 		sse := datastar.NewSSE(w, r)
-		closedPreview := false
 		for _, path := range parseJSONList(sig.Paths, logger) {
 			if path == "" {
 				continue
 			}
 			if _, _, err := svc.RemoveNote(r.Context(), path); err != nil {
 				logger.Warn().Err(err).Str("note", path).Msg("batch-deleting note")
-				// A stale index still means the note left the vault, so the
-				// preview bookkeeping below must run; anything else didn't delete.
-				if !errors.Is(err, app.ErrIndexStale) {
-					continue
-				}
-			}
-			if path == sig.PreviewPath {
-				closedPreview = true
 			}
 		}
 		renderFiles(sse, svc, logger)
-		closePreviewIf(sse, closedPreview)
 	}
 }
 

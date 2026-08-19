@@ -68,8 +68,8 @@ not the one that takes ten seconds nightly.
 discrepancies worth chasing: estimated rows far from actual (statistics or a
 correlated predicate the planner cannot model — `CREATE STATISTICS` for the
 latter), `Rows Removed by Filter` in the thousands (a missing or wrong index,
-see [[btree-indexes]]), and a nested loop chosen on a bad estimate that becomes
-quadratic.
+see [[btree-indexes#When it is the wrong index]]), and a nested loop chosen on a
+bad estimate that becomes quadratic.
 
 `random_page_cost = 1.1` on SSDs. The default of 4.0 encodes a spinning disk and
 biases the planner away from index scans on hardware nobody runs any more.
@@ -81,4 +81,4 @@ switching and lock contention dominate and throughput goes *down*. PgBouncer in
 transaction pooling mode fixes this, at the cost of session-level features:
 prepared statements need care, `SET` does not persist, and advisory locks held
 across statements break. In the cluster it goes in front of every service, see
-[[postgres-on-kubernetes]].
+[[postgres-on-kubernetes#The pieces that fight the platform]].

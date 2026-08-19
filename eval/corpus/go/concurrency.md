@@ -114,4 +114,5 @@ in 1.22, still present in older modules), a map written from a handler, and a
   input is drained and returning early on `ctx.Done()`.
 - `singleflight.Group` to collapse duplicate concurrent work behind one call —
   cache stampede protection in four lines. Used in the reconcile loops in
-  [[operators]] and in front of the embedding calls in [[rag]].
+  [[operators#The reconcile contract]] and in front of the embedding calls in
+  [[rag#Pipeline]].

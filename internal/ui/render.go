@@ -67,16 +67,23 @@ func codeWrapper(w util.BufWriter, c highlighting.CodeBlockContext, entering boo
 // of navigating.
 const NoteLinkScheme = "grimoire-note:"
 
-// wikilink matches Obsidian-style [[Target]] and [[Target|Alias]] references.
-var wikilink = regexp.MustCompile(`\[\[([^\]|]+)(?:\|([^\]]+))?\]\]`)
+// wikilink matches Obsidian-style [[Target]], [[Target#Heading]] and either with
+// an |Alias. The heading is one heading's own text, not a breadcrumb — that is
+// what the preview scrolls by. A target may not contain '#'.
+var wikilink = regexp.MustCompile(`\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?\]\]`)
 
-// rewriteWikilinks turns [[Target]] and [[Target|Alias]] into Markdown links to
-// the note scheme.
-func rewriteWikilinks(source string) string { return replaceWikilinks(source, noteLink) }
+// rewriteWikilinks turns every wikilink form into a Markdown link to the note
+// scheme.
+func rewriteWikilinks(nr NoteRenderer, source string) string {
+	return replaceWikilinks(source, func(m string) string { return noteLink(nr, m) })
+}
 
-// flattenWikilinks reduces [[Target]] and [[Target|Alias]] to the text they
-// display, for a render that must not link out (see snippetHTML).
-func flattenWikilinks(source string) string { return replaceWikilinks(source, wikilinkLabel) }
+// flattenWikilinks reduces every wikilink form to the text it displays, for a
+// render that must not link out (see snippetHTML). Search snippets are rendered
+// without a vault to ask, so their links keep the target as written.
+func flattenWikilinks(source string) string {
+	return replaceWikilinks(source, func(m string) string { return wikilinkLabel(NoteRenderer{}, m) })
+}
 
 // replaceWikilinks rewrites every wikilink outside code through repl, skipping
 // code: `[[ -f x ]]` in a bash fence or [[nodiscard]] in a code span is code,
@@ -106,22 +113,38 @@ func replaceWikilinks(source string, repl func(string) string) string {
 	return b.String()
 }
 
-// noteLink renders one matched wikilink as a Markdown link. The URL is
-// percent-encoded so spaces in note names don't break parsing; the click handler
-// decodes it.
-func noteLink(m string) string {
+// noteLink renders one matched wikilink as a Markdown link. Both parts are
+// percent-encoded so spaces in note names don't break parsing — and so a '#' in
+// either can't pass for the fragment separator; the click handler splits on the
+// first literal '#' and decodes each side.
+func noteLink(nr NoteRenderer, m string) string {
 	g := wikilink.FindStringSubmatch(m)
-	return "[" + wikilinkLabel(m) + "](" + NoteLinkScheme + url.PathEscape(strings.TrimSpace(g[1])) + ")"
+	href := NoteLinkScheme + url.PathEscape(strings.TrimSpace(g[1]))
+	if heading := strings.TrimSpace(g[2]); heading != "" {
+		href += "#" + url.PathEscape(heading)
+	}
+	return "[" + wikilinkLabel(nr, m) + "](" + href + ")"
 }
 
-// wikilinkLabel is the text one matched wikilink displays: its alias, or its
-// target when it has none.
-func wikilinkLabel(m string) string {
+// wikilinkLabel is the text one matched wikilink displays: its alias, else the
+// target note's own title — suffixed with the heading it points into, in the same
+// "note › heading" form the search hits and the preview breadcrumb use. The href
+// still carries the target as written; only the label reads better.
+func wikilinkLabel(nr NoteRenderer, m string) string {
 	g := wikilink.FindStringSubmatch(m)
-	if alias := strings.TrimSpace(g[2]); alias != "" {
+	if alias := strings.TrimSpace(g[3]); alias != "" {
 		return alias
 	}
-	return strings.TrimSpace(g[1])
+	label := strings.TrimSpace(g[1])
+	if nr.NoteTitle != nil {
+		if title, ok := nr.NoteTitle(label); ok && title != "" {
+			label = title
+		}
+	}
+	if heading := strings.TrimSpace(g[2]); heading != "" {
+		return label + " › " + heading
+	}
+	return label
 }
 
 // srcSegment is a half-open byte range of a note's source.
@@ -241,7 +264,7 @@ func renderBody(nr NoteRenderer, source, notePath string) string {
 	}
 
 	var buf bytes.Buffer
-	if err := md.Convert([]byte(rewriteWikilinks(source)), &buf); err != nil {
+	if err := md.Convert([]byte(rewriteWikilinks(nr, source)), &buf); err != nil {
 		// Fall back to the raw text rather than failing the preview.
 		return "<pre>" + strings.ReplaceAll(source, "<", "&lt;") + "</pre>"
 	}
@@ -350,6 +373,11 @@ type NoteRenderer struct {
 	// no probe the renderer can't tell, so it reads the src's own form and never
 	// marks an embed broken.
 	FileExists func(rel string) bool
+	// NoteTitle, when set, returns the title of the note a wikilink target names,
+	// which is what the link displays: `[[resource-limits]]` reads as the note's
+	// own heading rather than its file name. ok is false when the target names no
+	// note. With no lookup the target is displayed as written.
+	NoteTitle func(target string) (title string, ok bool)
 }
 
 // RunResult is a block's persisted last run, mirrored from the app/runs layer so
@@ -1097,8 +1125,18 @@ var styleBlock = `<style>
    a long version can't widen the 220px menu. */
 #app-grimoire .g-version{display:flex;align-items:baseline;justify-content:space-between;gap:0.5rem;font-size:0.72rem;color:var(--mass-text-faint)}
 #app-grimoire .g-version-value{color:var(--mass-text-muted);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:right;overflow-wrap:anywhere}
-/* The update affordance under the version line — a full-width row, since the
-   220px menu leaves no room beside the version value. */
+/* The update affordance under the version line — full-width rows, since the
+   220px menu leaves no room beside the version value. The Check button is always
+   there; the answer and the install row appear under it. [hidden] needs spelling
+   out: the display rules below outrank the UA stylesheet's. */
+#app-grimoire .g-update-check{display:flex;align-items:center;justify-content:center;gap:0.35rem;width:100%;margin-top:0.3rem;padding:0.25rem 0.4rem;border:1px solid var(--mass-border);border-radius:var(--mass-radius,4px);background:var(--mass-bg-base);color:var(--mass-text-muted);font:inherit;font-size:0.72rem;cursor:pointer}
+#app-grimoire .g-update-check:hover{background:var(--mass-bg-hover)}
+#app-grimoire .g-update-check[disabled]{opacity:0.6;cursor:default}
+#app-grimoire .g-update-check sl-spinner{display:none;font-size:0.7rem}
+#app-grimoire .g-update-check[aria-busy="true"] sl-spinner{display:inline-block}
+#app-grimoire .g-update-status{margin-top:0.3rem;font-size:0.72rem;color:var(--mass-text-faint);overflow-wrap:anywhere}
+#app-grimoire .g-update-status.g-update-error{color:var(--mass-danger)}
+#app-grimoire .g-update-status[hidden],#app-grimoire .g-update-line[hidden]{display:none}
 #app-grimoire .g-update-line{display:flex;align-items:center;gap:0.35rem;width:100%;margin-top:0.3rem;padding:0.25rem 0.4rem;border:1px solid var(--mass-accent);border-radius:var(--mass-radius,4px);background:none;color:var(--mass-accent);font:inherit;font-size:0.72rem;text-align:left;cursor:pointer}
 #app-grimoire .g-update-line:hover{background:var(--mass-bg-hover)}
 #app-grimoire .g-update-line[disabled]{opacity:0.6;cursor:default}
@@ -1603,7 +1641,8 @@ var styleBlock = `<style>
    default Sessions tab nor the empty home flashes before the restore swaps them
    in (set pre-paint and cleared by JS once restore completes). */
 #app-grimoire.g-prepaint-hide{visibility:hidden}
-#app-grimoire .g-preview{position:absolute;inset:0;background:var(--mass-bg-base);z-index:25;display:flex;flex-direction:column}
+#app-grimoire .g-preview{position:absolute;inset:0;background:var(--mass-bg-base);z-index:25;display:none;flex-direction:column}
+#app-grimoire .g-preview.g-preview-open{display:flex}
 #app-grimoire .g-preview-head{display:flex;align-items:center;gap:0.75rem;box-sizing:border-box;flex-shrink:0;height:var(--g-head-h);padding:0 1.25rem 0 2rem;border-bottom:1px solid var(--mass-border)}
 /* The header action icons (save-all/remove-all/edit/close) sit in a tight cluster
    so they read as one control group, not spread across the bar by the header's
@@ -1838,28 +1877,34 @@ func settingsMenu(logLevel, theme string, st State) string {
 	)
 }
 
-// versionLine is the running build's version at the foot of the settings menu:
-// one faint label/value row, not a section of its own — the menu is 220px wide.
-// The value is shown exactly as the build stamped it ("dev" without ldflags,
-// otherwise a git describe). An unset version drops the line.
+// versionLine is the update block at the foot of the settings menu: the running
+// build (shown exactly as the build stamped it — "dev" without ldflags,
+// otherwise a git describe), a Check for updates button, the answer it gets, and
+// the install row when there is something to install. Faint label/value rows,
+// not a section of its own — the menu is 220px wide, so each affordance gets its
+// own full-width row. An unset version drops the whole block.
 //
-// When a newer release is known, an install affordance follows on its own row:
-// the 220px budget has no room to hang it off the version value, and this is the
-// only place in the UI the update can be started from. initUpdate (grimoire.js)
-// binds it.
+// The button and the answer are always rendered, not just when a release was
+// already found: the page can render before the daemon's first check has
+// answered, and nothing re-renders it afterwards. initUpdate (grimoire.js) binds
+// the rows and hydrates them from the daemon on load.
 func versionLine(version, available string) string {
 	if version == "" {
 		return ""
 	}
-	line := fmt.Sprintf(`<div class="g-version"><span>Version</span><span class="g-version-value">%s</span></div>`,
-		html.EscapeString(version))
-	if available == "" {
-		return line
+	hidden, label := " hidden", ""
+	if available != "" {
+		hidden, label = "", available+" available — install"
 	}
-	return line + fmt.Sprintf(
-		`<button type="button" id="g-update-btn" class="g-update-line" data-g-version="%s">`+
-			`<sl-icon name="arrow-up-circle"></sl-icon><span>%s available — install</span></button>`,
-		html.EscapeString(available), html.EscapeString(available))
+	return fmt.Sprintf(
+		`<div class="g-version"><span>Version</span><span class="g-version-value">%s</span></div>`+
+			`<button type="button" id="g-update-check" class="g-update-check" `+
+			`title="Ask GitHub whether a newer Grimoire has been published.">`+
+			`<sl-spinner></sl-spinner><span>Check for updates</span></button>`+
+			`<div id="g-update-status" class="g-update-status" hidden></div>`+
+			`<button type="button" id="g-update-btn" class="g-update-line"%s data-g-version="%s">`+
+			`<sl-icon name="arrow-up-circle"></sl-icon><span>%s</span></button>`,
+		html.EscapeString(version), hidden, html.EscapeString(available), html.EscapeString(label))
 }
 
 // trashSwitch is the soft-delete control in the settings menu: on, a delete

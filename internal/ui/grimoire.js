@@ -619,20 +619,27 @@
     });
   }
 
-  // initUpdate wires the settings menu's "vX.Y.Z available — install" row (only
-  // rendered when the daemon's check found a newer release) and announces the
-  // update once per page load. The announcement is a toast rather than a modal —
-  // nothing is broken — with the install offered right in it; the menu row is
-  // the affordance that remains after the toast clears.
+  // initUpdate wires the settings menu's update block: a Check for updates
+  // button, the answer, and the install row. The block is always rendered, so
+  // this hydrates it from the daemon's cached answer on load — the page can
+  // render before the startup check has landed, and nothing else would ever
+  // correct it. The button asks the release repository there and then, for an
+  // app that has been open since before the release.
   //
-  // A successful apply says nothing more — the daemon pushes update-restarting
+  // A found release is also announced once per page load as a toast — nothing is
+  // broken, so not a modal — with the install offered right in it; the menu row
+  // is the affordance that remains after the toast clears.
+  //
+  // A successful apply says nothing more: the daemon pushes update-restarting
   // down the window's control channel a moment later, and gUpdateRestarting
   // below takes over. Only a refusal (409: not installed by the installer, or a
   // system-wide install needing admin) has anything left to report.
   function initUpdate() {
+    var checkBtn = getEl("g-update-check");
+    var status = getEl("g-update-status");
     var btn = getEl("g-update-btn");
-    if (!btn) return;
-    var tag = btn.getAttribute("data-g-version") || "";
+    if (!checkBtn || !status || !btn) return;
+    var announced = false;
 
     function apply() {
       btn.disabled = true;
@@ -649,11 +656,70 @@
       });
     }
 
-    // 15s rather than the 6s default: the toast carries the action, and the
-    // default is short enough to vanish mid-reach.
-    window.massToast("Grimoire " + tag + " is available",
-      { duration: 15000, action: { label: "Install", onClick: apply } });
+    function say(text, isError) {
+      status.textContent = text;
+      status.classList.toggle("g-update-error", !!isError);
+      status.hidden = !text;
+    }
+
+    // asked distinguishes the button's answer from the cached one: a daemon that
+    // hasn't managed to check yet reports no release, which is not the same as
+    // "up to date" and must not be claimed as one.
+    function render(st, asked) {
+      if (st.error) {
+        btn.hidden = true;
+        say(st.error, true);
+        return;
+      }
+      if (st.available) {
+        btn.setAttribute("data-g-version", st.available);
+        btn.querySelector("span").textContent = st.available + " available — install";
+        btn.hidden = false;
+        say("");
+        if (!announced) {
+          announced = true;
+          // 15s rather than the 6s default: the toast carries the action, and the
+          // default is short enough to vanish mid-reach.
+          window.massToast("Grimoire " + st.available + " is available",
+            { duration: 15000, action: { label: "Install", onClick: apply } });
+        }
+        return;
+      }
+      btn.hidden = true;
+      say(asked ? "Up to date" : "");
+    }
+
+    function idle() {
+      checkBtn.disabled = false;
+      checkBtn.removeAttribute("aria-busy");
+    }
+
+    checkBtn.addEventListener("click", function () {
+      checkBtn.disabled = true;
+      checkBtn.setAttribute("aria-busy", "true");
+      say("");
+      fetch("api/v1/update/check", { method: "POST" }).then(function (r) {
+        return r.ok ? r.json() : null;
+      }).then(function (st) {
+        idle();
+        if (st) render(st, true);
+        else say("Couldn't check for updates.", true);
+      }, function () {
+        idle();
+        say("Couldn't check for updates: the app isn't responding.", true);
+      });
+    });
     btn.addEventListener("click", apply);
+
+    // Hydrate from the daemon's cached answer, which is what kills the startup
+    // race: the answer no longer has to exist when the page renders. A daemon
+    // that doesn't answer says nothing here — the page it served is proof it was
+    // there, and the button is the way to ask again.
+    fetch("api/v1/ping").then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (st) {
+      if (st) render(st, false);
+    }, function () { /* nothing to report: the button is the retry. */ });
   }
 
   // The window process calls this over the webview bridge when the daemon says an
@@ -1093,9 +1159,9 @@
     }
 
     new MutationObserver(mark).observe(tree, { childList: true, subtree: true });
-    // The preview's display flips with gPreviewOpen (data-show) and its body
-    // changes when a different note loads — both are cues to re-mark.
-    new MutationObserver(mark).observe(preview, { attributes: true, attributeFilter: ["style"] });
+    // The preview's g-preview-open class flips as notes open and close, and its
+    // body changes when a different note loads — both are cues to re-mark.
+    new MutationObserver(mark).observe(preview, { attributes: true, attributeFilter: ["class"] });
     var pbody = getEl("g-preview-body");
     if (pbody) new MutationObserver(mark).observe(pbody, { childList: true });
     mark();
@@ -1961,16 +2027,14 @@
       if (sessions) sessions.querySelectorAll(".g-session-active").forEach(function (r) { r.classList.remove("g-session-active"); });
     }
 
-    // hidePreview closes the note overlay without it being a user "close" (the ×
-    // handler bails while suppressClose is set), so focusing a session/graph/empty
-    // tab can hide the preview underneath without side effects.
-    var suppressClose = false;
-    function hidePreview() {
-      if (panel && panel.style.display === "none") return;
-      suppressClose = true;
-      if (closeBtn) closeBtn.click(); // $gPreviewOpen = false.
-      suppressClose = false;
-    }
+    // showPreview/hidePreview reveal the note overlay by toggling a plain class —
+    // synchronous and deterministic, the same treatment setGraph gives the graph
+    // overlay. (It used the reactive gPreviewOpen signal, patched by the server
+    // once the note had been read; on WebKit that round-trip could lose, leaving a
+    // restored note tab focused over a hidden panel until another reload.)
+    function previewVisible() { return !!panel && panel.classList.contains("g-preview-open"); }
+    function showPreview() { if (panel) panel.classList.add("g-preview-open"); }
+    function hidePreview() { if (panel) panel.classList.remove("g-preview-open"); }
     // setGraph shows/hides the similarity-graph overlay by toggling a plain class —
     // synchronous and deterministic. (It used a Datastar data-show signal via hidden
     // buttons, but that build's reactive display churn left the overlay flickering
@@ -2049,6 +2113,15 @@
       if (showGraph) showGraph(); // build/redraw once the overlay is shown + sized.
     }
 
+    // leaveVaultGraph gives the workspace back before opening a note, since the
+    // Vaults-tab graph view outranks the focused tab in render() and would leave
+    // the note open but invisible. Files is where a note belongs, so its tree
+    // lights the row. The Graph TAB needs none of this — opening a note focuses
+    // another tab and render() drops the overlay by itself.
+    function leaveVaultGraph() {
+      if (vaultGraph) showSidebar("files");
+    }
+
     // render drives the shared panel for the focused tab. It is the SINGLE source
     // of truth for "what's shown + which sidebar row is lit", so highlight state
     // can't drift from the view. Reuses the existing show paths (no history).
@@ -2093,7 +2166,11 @@
       var preview = getEl("g-preview");
       if (preview) preview.classList.toggle("g-preview-readonly", (t.ref || "").indexOf(".trash/") === 0);
       if (editorAPI) editorAPI.closeUnless(t.ref); // a different note opens for reading.
-      trigger.click(); // server fills #g-preview-body.
+      showPreview();  // the panel is ours to show; the server only fills it.
+      // Fire on the next frame so Datastar has committed gPreviewPath — a
+      // synchronous click can post the previous value, and the handler answers a
+      // blank path with nothing at all (see fireWithSignal).
+      requestAnimationFrame(function () { trigger.click(); }); // server fills #g-preview-body.
       var c = tabCache[t.id];
       scrollGen += 1;
       if (c && typeof c.scrollTop === "number" && !(t.pendingHeading)) {
@@ -2109,13 +2186,30 @@
       }
     }
 
-    // restoreScroll waits for the (re)rendered visible body, then restores the
-    // cached scroll position — the scroll mirror of scrollToHeading.
+    // restoreScroll puts a tab's cached position back — the scroll mirror of
+    // scrollToHeading, and fiddly for the same reason: the body is patched in
+    // asynchronously after the @post, so at call time the panel still holds the
+    // note we came FROM. Scrolling then is worse than useless — a shorter
+    // outgoing note clamps the position, and the patch wipes what survived. So
+    // wait for the patch (a mutation of the body) and for content tall enough to
+    // hold the position. The frame budget is the fallback for a re-render whose
+    // HTML came back identical; its last try scrolls anyway, so a note that
+    // genuinely shrank still lands as close as it can.
     function restoreScroll(top, gen, tries) {
-      if (gen !== scrollGen) return;
-      var visible = panel && panel.style.display !== "none";
-      if (visible && body) { body.scrollTop = top; return; }
-      if (tries > 0) requestAnimationFrame(function () { restoreScroll(top, gen, tries - 1); });
+      if (!body || gen !== scrollGen) return;
+      var patched = false;
+      var obs = new MutationObserver(function () { patched = true; });
+      obs.observe(body, { childList: true, subtree: true });
+      (function step(left) {
+        if (gen !== scrollGen) { obs.disconnect(); return; } // superseded.
+        var ready = patched && previewVisible() && body.scrollHeight - body.clientHeight >= top;
+        if (!ready && left > 0) {
+          requestAnimationFrame(function () { step(left - 1); });
+          return;
+        }
+        obs.disconnect();
+        if (previewVisible()) body.scrollTop = top;
+      })(tries);
     }
 
     function focus(id) {
@@ -2659,11 +2753,13 @@
       // takes over its kind's reusable preview tab. openNotePinned / openSessionPinned
       // are the double-click opens that commit a permanent tab.
       openNote: function (path, heading) {
+        leaveVaultGraph();
         var t = openPreview("note", path, titleForNote(path));
         t.pendingHeading = heading || "";
         focus(t.id);
       },
       openNotePinned: function (path, heading) {
+        leaveVaultGraph();
         var t = open("note", path, null);
         t.preview = false;
         t.pendingHeading = heading || "";
@@ -2835,7 +2931,7 @@
     function scrollToHeading(heading, gen, tries) {
       if (gen !== scrollGen) return; // superseded by a newer open.
       var want = heading.trim().toLowerCase();
-      var visible = panel && panel.style.display !== "none";
+      var visible = previewVisible();
       if (want && body && visible) {
         var heads = body.querySelectorAll("h1,h2,h3,h4,h5,h6");
         for (var i = 0; i < heads.length; i++) {
@@ -2890,7 +2986,13 @@
       var link = e.target.closest('a[href^="' + NOTE_SCHEME + '"]');
       if (link) {
         e.preventDefault();
-        nav.openNote(decodeURIComponent(link.getAttribute("href").slice(NOTE_SCHEME.length)), "");
+        // href is <escaped note>[#<escaped heading>]: a [[Note#Heading]] link
+        // opens the note scrolled to that heading. Both sides are percent-encoded,
+        // so the first literal "#" is the separator and nothing else can be one.
+        var ref = link.getAttribute("href").slice(NOTE_SCHEME.length);
+        var hash = ref.indexOf("#");
+        nav.openNote(decodeURIComponent(hash < 0 ? ref : ref.slice(0, hash)),
+          hash < 0 ? "" : decodeURIComponent(ref.slice(hash + 1)));
         return;
       }
       // A relative link inside rendered note/result content points at another
@@ -2916,11 +3018,10 @@
       stepHistory(e.button === 3 ? -1 : 1);
     });
 
-    // The preview × closes the focused tab (a note tab). suppressClose guards the
-    // programmatic hidePreview() so it isn't treated as a user close.
+    // The preview × closes the focused tab (a note tab); render() then hides the
+    // panel for whatever tab takes focus.
     if (closeBtn) {
       closeBtn.addEventListener("click", function () {
-        if (suppressClose) return;
         if (focusedID !== null) close(focusedID);
       });
     }
@@ -2967,8 +3068,7 @@
     var current = -1;
 
     function previewOpen() {
-      // Datastar drives #g-preview's display via data-show; "" / non-"none" = open.
-      return preview.style.display !== "none";
+      return preview.classList.contains("g-preview-open");
     }
     function clearHighlights() {
       CSS.highlights.delete("g-find");
@@ -3993,8 +4093,10 @@
     }
 
     // openNode opens a node's note as a permanent (pinned) tab — a deliberate
-    // navigation from the graph, not a list-style preview. render() hides the graph
-    // overlay for the note entry, so no explicit close is needed here.
+    // navigation from the graph, not a list-style preview. The workspace handles
+    // the overlay: render() drops it for the note entry, and a note opened from
+    // the Vaults tab's graph view leaves that view (nav's leaveVaultGraph), so
+    // the graph opens notes the same way from either entry point.
     function openNode(nd) {
       if (nav) nav.openNotePinned(nd.id, "");
     }

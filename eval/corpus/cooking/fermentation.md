@@ -5,7 +5,7 @@ tags: [cooking, fermentation, preserving]
 # Fermentation
 
 Notes on the vegetable and brine side of things. The bread culture has its own
-page, [[sourdough]].
+page, [[sourdough#The culture]].
 
 ## Why it is safe
 

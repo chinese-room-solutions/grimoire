@@ -613,6 +613,9 @@ func TestResolveNote(t *testing.T) {
 		{"bare name", "Map Internals", "Map Internals.md", true},
 		{"with extension", "Map Internals.md", "Map Internals.md", true},
 		{"with alias", "Map Internals|shown", "Map Internals.md", true},
+		{"with heading", "Map Internals#Rollback", "Map Internals.md", true},
+		{"with heading and alias", "Map Internals#Rollback|shown", "Map Internals.md", true},
+		{"nested by path with heading", "sub/Deep Note#Rollback", "sub/Deep Note.md", true},
 		{"case-insensitive", "map internals", "Map Internals.md", true},
 		{"nested by basename", "Deep Note", "sub/Deep Note.md", true},
 		{"nested by path", "sub/Deep Note", "sub/Deep Note.md", true},
@@ -636,6 +639,42 @@ func TestResolveNote(t *testing.T) {
 		got, ok := s.ResolveNote("Twin")
 		require.True(t, ok)
 		require.Equal(t, "aa/Twin.md", got)
+	}
+}
+
+// A wikilink displays the target note's own title, so the label reads as the
+// author wrote it rather than as the file is named.
+func TestNoteTitle(t *testing.T) {
+	vault := t.TempDir()
+	write := func(name, body string) {
+		require.NoError(t, os.WriteFile(filepath.Join(vault, name), []byte(body), 0o644))
+	}
+	write("resource-limits.md", "---\ntags: [k8s]\n---\n\n# Requests, limits, and QoS\n\nbody\n")
+	write("tls.md", "# TLS\n\nbody\n")
+	write("Deep Heading.md", "some prose first\n\n## Only a sub-heading\n")
+	write("no-heading.md", "just prose, no heading at all\n")
+	write("fenced-first.md", "```sh\n# not a title\n```\n\n# The real title\n")
+	s := &Service{cfg: appconfig.Config{Vault: vault}}
+
+	tests := []struct {
+		name, target, want string
+		ok                 bool
+	}{
+		{"first heading wins over the file name", "resource-limits", "Requests, limits, and QoS", true},
+		{"an acronym keeps its own casing", "tls", "TLS", true},
+		{"any level counts, not just h1", "Deep Heading", "Only a sub-heading", true},
+		{"no heading falls back to the file name", "no-heading", "no-heading", true},
+		{"a comment in an opening fence is not the title", "fenced-first", "The real title", true},
+		{"a heading target names the same note", "resource-limits#Limits", "Requests, limits, and QoS", true},
+		{"an alias target names the same note", "tls|shown", "TLS", true},
+		{"an unknown target has no title", "Nope", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := s.NoteTitle(tc.target)
+			require.Equal(t, tc.ok, ok)
+			require.Equal(t, tc.want, got)
+		})
 	}
 }
 

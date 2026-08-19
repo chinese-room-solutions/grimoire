@@ -27,7 +27,8 @@ the cgroup is derived from the request, so two containers requesting 100m and
   throttling a p99 to protect a node that has spare capacity is a bad trade.
 - **Memory limit** is a hard ceiling. Cross it and the kernel OOM killer takes
   the process; the container shows `OOMKilled` with exit code 137. There is no
-  throttling equivalent for memory. Diagnosis is in [[troubleshooting-pods]].
+  throttling equivalent for memory. Diagnosis is in
+  [[troubleshooting-pods#OOMKilled]].
 
 Memory that counts against the limit includes the page cache for files the
 container writes and any tmpfs `emptyDir` (`medium: Memory`), which surprises
@@ -67,5 +68,6 @@ namespace **must** set the corresponding request and limit or it is rejected
 outright. Roll out the LimitRange first, then the quota, or the next deploy
 fails for reasons nobody will connect to your change.
 
-Related: [[deployments]] for how replica counts multiply all of this, and
-[[monitoring]] for where the series above actually live.
+Related: [[deployments#Horizontal scaling]] for how replica counts multiply all
+of this, and [[monitoring#Metric types]] for where the series above actually
+live.

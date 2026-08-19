@@ -33,7 +33,7 @@ Rules that are not optional:
   key and applies rate-limited exponential backoff on returned errors.
 - **Honor the context.** Every client call takes the `ctx`; on shutdown the
   manager cancels it and the loop must unwind. Same rule as any Go service, see
-  [[concurrency]].
+  [[concurrency#Context]].
 
 Errors returned from Reconcile are retried with backoff, which means a
 permanently invalid spec becomes a hot loop unless you distinguish it: record
@@ -80,7 +80,8 @@ Finalizers are how you clean up things Kubernetes does not own — a cloud bucke
 a DNS record, a database. Add the finalizer on first reconcile, and on deletion
 run the cleanup then remove it. A finalizer whose cleanup can never succeed
 makes the object undeletable, which is its own outage; that is the mechanism
-behind objects stuck `Terminating` in [[troubleshooting-pods]].
+behind objects stuck `Terminating` in
+[[troubleshooting-pods#Terminating forever]].
 
 ## Testing
 
@@ -89,7 +90,8 @@ but Pods never start. It catches RBAC gaps and schema mistakes, which are most
 of the bugs. Fake clients are faster and lie more. Table-driven tests over
 (existing objects, spec, expected objects) work well here.
 
-Do not forget the RBAC markers — `// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch`.
+Do not forget the RBAC markers — `//
++kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch`.
 A missing verb shows up only in production as a forbidden error inside the loop.
-See [[rbac-and-service-accounts]], and [[statefulsets]] for what the operator is
-usually managing.
+See [[rbac-and-service-accounts#Debugging access]], and [[statefulsets]] for
+what the operator is usually managing.

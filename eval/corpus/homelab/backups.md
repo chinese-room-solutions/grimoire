@@ -55,9 +55,9 @@ filesystem atomically and rely on crash recovery, or take a logical dump.
 - Postgres: `pg_dump -Fc` nightly for the small ones, plus continuous WAL
   archiving to object storage for the one that matters. Point-in-time recovery
   needs the base backup *and* the WAL segments since it — see
-  [[postgres-replication]] for what those are.
+  [[postgres-replication#Write-ahead log first]] for what those are.
 - SQLite: `VACUUM INTO` for a consistent copy, or Litestream streaming the WAL
-  continuously. [[sqlite]].
+  continuously. [[sqlite#Backups]].
 - Replication is not a backup. It replicates the DELETE too. I have written this
   sentence in three notes now and it keeps needing saying.
 
@@ -67,7 +67,8 @@ A CronJob per workload writing into the restic repository, with the repository
 password from a Secret and a PersistentVolumeClaim mounted read-only where the
 data lives. Velero for the cluster objects themselves, though in practice
 everything is declared in git and the cluster is treated as rebuildable — the
-only irreplaceable things are the PersistentVolumes. See [[k3s-cluster]].
+only irreplaceable things are the PersistentVolumes. See
+[[k3s-cluster#Storage]].
 
 ## Restore drills
 

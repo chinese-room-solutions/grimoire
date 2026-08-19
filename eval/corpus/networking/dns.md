@@ -30,7 +30,8 @@ TTL will not ask again for 24 hours no matter what you publish.
 - **NS** — delegation. The parent zone's NS records are what actually direct the
   recursor; a mismatch with the child zone's own NS set is the classic "works
   from my machine" bug.
-- **CAA** — which certificate authorities may issue for the name. See [[tls]].
+- **CAA** — which certificate authorities may issue for the name. See
+  [[tls#Certificates]].
 
 ## Negative caching and the SOA
 
@@ -60,7 +61,7 @@ authoritative server returning different answers to different resolvers. It is
 coarse: the granularity is the resolver, not the client, and the failover speed
 is bounded by the TTL plus every intermediate cache that ignores short TTLs.
 Good for regional steering, bad as a health-based load balancer — that job
-belongs to a real one, see [[load-balancing]].
+belongs to a real one, see [[load-balancing#Health checks]].
 
 ## Encrypted transports
 
@@ -68,7 +69,7 @@ DoT (853/tcp) and DoH (443/https) encrypt the stub-to-recursor hop only. The
 recursor's queries upstream are still plaintext unless it also uses them. They
 protect against the coffee shop, not against the resolver operator, and a
 browser doing DoH bypasses your local resolver entirely — which is exactly what
-breaks split-horizon setups at home. My workaround is in [[router]].
+breaks split-horizon setups at home. My workaround is in [[router#DNS]].
 
 ## Inside a cluster
 
@@ -76,7 +77,7 @@ CoreDNS is authoritative for `cluster.local` and forwards everything else. The
 search path in `/etc/resolv.conf` plus `ndots: 5` means an external lookup tries
 several nonsense names first, costing latency on every cold connection. The
 details, including headless Service records, are in
-[[services-and-networking]].
+[[services-and-networking#DNS inside the cluster]].
 
 ## Debugging order
 

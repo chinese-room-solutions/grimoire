@@ -7,10 +7,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// `grimoire update` reads the daemon's answer and says what to do about it;
+// `grimoire update` asks for a live check and says what to do about the answer;
 // --apply asks for the install and reports what the daemon started. A refusal
 // (409) is the "you have to run the installer yourself" case, and exits 4 so a
-// script can tell it from a real failure.
+// script can tell it from a real failure. A check that couldn't reach the
+// release repository answers 200 with the reason, and is a failure here: an
+// unanswered question must not read as "up to date".
 func TestCLIUpdate(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -24,7 +26,7 @@ func TestCLIUpdate(t *testing.T) {
 		{
 			name: "up to date",
 			routes: map[string]http.HandlerFunc{
-				"GET /api/v1/ping": func(w http.ResponseWriter, _ *http.Request) {
+				"POST /api/v1/update/check": func(w http.ResponseWriter, _ *http.Request) {
 					stubJSON(t, w, map[string]string{"version": "v0.4.1", "available": ""})
 				},
 			},
@@ -35,7 +37,7 @@ func TestCLIUpdate(t *testing.T) {
 		{
 			name: "an update is available",
 			routes: map[string]http.HandlerFunc{
-				"GET /api/v1/ping": func(w http.ResponseWriter, _ *http.Request) {
+				"POST /api/v1/update/check": func(w http.ResponseWriter, _ *http.Request) {
 					stubJSON(t, w, map[string]string{"version": "v0.4.1", "available": "v0.5.0"})
 				},
 			},
@@ -68,13 +70,16 @@ func TestCLIUpdate(t *testing.T) {
 		{
 			name: "--json emits the raw shape",
 			routes: map[string]http.HandlerFunc{
-				"GET /api/v1/ping": func(w http.ResponseWriter, _ *http.Request) {
-					stubJSON(t, w, map[string]string{"version": "v0.4.1", "available": "v0.5.0"})
+				"POST /api/v1/update/check": func(w http.ResponseWriter, _ *http.Request) {
+					stubJSON(t, w, map[string]string{
+						"version": "v0.4.1", "available": "v0.5.0", "checked_at": "2026-08-18T10:00:00Z",
+					})
 				},
 			},
-			args:     []string{"update"},
-			json:     true,
-			wantOut:  "{\n  \"version\": \"v0.4.1\",\n  \"available\": \"v0.5.0\"\n}\n",
+			args: []string{"update"},
+			json: true,
+			wantOut: "{\n  \"version\": \"v0.4.1\",\n  \"available\": \"v0.5.0\"," +
+				"\n  \"checked_at\": \"2026-08-18T10:00:00Z\"\n}\n",
 			wantCode: exitOK,
 		},
 		{

@@ -36,7 +36,7 @@ with the configuration I want. `--disable servicelb` because MetalLB in L2 mode
 handles the address pool better. `--flannel-backend=wireguard-native` encrypts
 node-to-node traffic, which costs a little throughput and means the shelf being
 on the same VLAN as the TV is less of a worry; protocol notes in
-[[wireguard]].
+[[wireguard#Model]].
 
 Agents join with the node token from `/var/lib/rancher/k3s/server/node-token`.
 The kubeconfig at `/etc/rancher/k3s/k3s.yaml` needs its server address rewritten
@@ -46,14 +46,14 @@ to the `--tls-san` name before it is any use from the laptop.
 
 - Traefik as the ingress controller, one wildcard certificate for
   `*.home.arpa` via DNS-01, since nothing here is reachable on port 80. See
-  [[ingress]] and [[tls]].
+  [[ingress#Termination and certificates]] and [[tls#ACME]].
 - MetalLB handing out `192.168.1.240-250`.
 - Prometheus, Alertmanager, Grafana, Loki — [[monitoring]].
 - Paperless, Immich, Miniflux, Jellyfin, Home Assistant.
 - A single Postgres instance behind CloudNativePG. Overkill for the load,
   entirely the point as practice; the real considerations are in
   [[postgres-on-kubernetes]].
-- Restic backup CronJobs, [[backups]].
+- Restic backup CronJobs, [[backups#Restic]].
 
 ## Storage
 
@@ -64,18 +64,19 @@ three nodes with consumer NVMe was noticeably slow at rebuild time.
 
 The 4TB spinning disks on brock are an NFS export for media, mounted by a
 PersistentVolume with `ReadWriteMany`. That is the only volume that legitimately
-needs it; see [[persistent-volumes]].
+needs it; see [[persistent-volumes#Access modes]].
 
 ## Lessons
 
 - **Do not run the cluster's DNS through a service on the cluster.** Pi-hole was
   the ingress, the ingress needed DNS, and a reboot deadlocked everything. It
-  runs on the router now, [[router]].
+  runs on the router now, [[router#DNS]].
 - **Etcd on consumer SSDs is unhappy.** Watch `etcd_disk_wal_fsync_duration`;
-  slow fsyncs show up as leader elections at 3am, which show up as every workload
-  restarting. This was the single biggest source of instability.
+  slow fsyncs show up as leader elections at 3am, which show up as every
+  workload restarting. This was the single biggest source of instability.
 - **Memory limits, everywhere.** One unbounded Java thing on a 16GB node OOMs
-  the node, not itself, and takes the kubelet with it. [[resource-limits]].
+  the node, not itself, and takes the kubelet with it.
+  [[resource-limits#Limits]].
 - **Upgrades in place with the system-upgrade-controller** work, one node at a
   time, but read the release notes for removed APIs first — a chart written
   against an older k8s version silently stops reconciling.

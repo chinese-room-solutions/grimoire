@@ -19,7 +19,7 @@ combination is a separate series**. That is the only capacity rule that matters:
 a label with unbounded values — a user id, a full URL path, a request id — turns
 one metric into millions and the process dies of memory. Route templates, not
 paths. This is the same discipline as the histogram labels in
-[[http-services]].
+[[http-services#Observability]].
 
 Retention is 15 days locally, which is enough for "what happened last night" and
 not enough for capacity trends; those go to a small Thanos sidecar writing to B2.
@@ -43,13 +43,13 @@ The rest is a dashboard, not a page. What actually wakes me:
 - A disk that will be full within 4 hours: `predict_linear(node_filesystem_avail_bytes[6h], 4*3600) < 0`.
 - `up == 0 for: 10m` on anything in the critical set.
 - Certificate expiring within 7 days. Every certificate outage is one nobody
-  watched; see [[tls]].
+  watched; see [[tls#Certificates]].
 - Backup job has not succeeded in 36 hours — the CronJob's last success
   timestamp, not the job's exit code, because a job that never ran exits nothing.
-  [[backups]].
+  [[backups#In the cluster]].
 - Etcd fsync p99 above 100ms, which was the leading indicator for every cluster
-  wobble in [[k3s-cluster]].
-- OOMKill count increasing on any Pod. [[resource-limits]].
+  wobble in [[k3s-cluster#Lessons]].
+- OOMKill count increasing on any Pod. [[resource-limits#Limits]].
 
 `for:` is what stops flapping. Alert on symptoms users would notice, plus the
 few leading indicators that have actually predicted an outage here.

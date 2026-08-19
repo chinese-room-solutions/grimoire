@@ -204,7 +204,12 @@ build from source ("dev") never has an update.`},
 Run the Grimoire backend headless, without the GUI. One daemon serves every
 vault — each command names the vault it acts on — so there is nothing to bind:
 --vault is accepted and ignored. The CLI starts a daemon on demand, so this is
-for running one yourself (a container, a remote box).`},
+for running one yourself (a container, a remote box).
+
+--idle-timeout D retires the daemon after D without a request; without it the
+daemon runs until stopped. The one the CLI spawns uses 10s — short because a
+running daemon holds the executable open, and an update can't replace it until
+it retires.`},
 }
 
 // helpRequested reports whether a command's own arguments ask for help: a bare

@@ -87,4 +87,5 @@ five peers the manual mesh becomes quadratic bookkeeping and the coordination
 layer earns its place.
 
 This is how I reach the house without opening a single inbound port; the rest of
-that setup is in [[router]], and what runs behind it is in [[k3s-cluster]].
+that setup is in [[router]], and what runs behind it is in
+[[k3s-cluster#What runs on it]].

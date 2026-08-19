@@ -70,6 +70,12 @@ func TestSnippetHTML(t *testing.T) {
 			absent:   []string{NoteLinkScheme, "[[", "<a "},
 		},
 		{
+			name:     "a heading wikilink flattens to note › heading",
+			in:       "see [[Some Note#Rollback]]",
+			contains: []string{"Some Note › Rollback"},
+			absent:   []string{NoteLinkScheme, "[[", "<a "},
+		},
+		{
 			name:     "a wikilink inside code stays literal",
 			in:       "`[[nodiscard]]`",
 			contains: []string{"[[nodiscard]]"},
@@ -115,6 +121,26 @@ func TestRenderNoteBody(t *testing.T) {
 		{"raw html is dropped", "<script>alert(1)</script>", nil},
 		{"wikilink", "see [[My Note]]", []string{`href="` + NoteLinkScheme + `My%20Note"`, ">My Note</a>"}},
 		{"wikilink with alias", "see [[My Note|the note]]", []string{`href="` + NoteLinkScheme + `My%20Note"`, ">the note</a>"}},
+		{
+			"wikilink to a heading",
+			"see [[My Note#Rollback]]",
+			[]string{`href="` + NoteLinkScheme + `My%20Note#Rollback"`, ">My Note › Rollback</a>"},
+		},
+		{
+			"wikilink to a heading with an alias",
+			"see [[My Note#Rollback|how to roll back]]",
+			[]string{`href="` + NoteLinkScheme + `My%20Note#Rollback"`, ">how to roll back</a>"},
+		},
+		{
+			"a spaced heading is escaped, and only the separator stays literal",
+			"see [[Deploy#Rolling back]]",
+			[]string{`href="` + NoteLinkScheme + `Deploy#Rolling%20back"`},
+		},
+		{
+			"a hash in the alias is not a separator",
+			"see [[Deploy|the #1 guide]]",
+			[]string{`href="` + NoteLinkScheme + `Deploy"`, ">the #1 guide</a>"},
+		},
 		{
 			"callout with title",
 			"> [!note] Visa\n> Blue card required.",
@@ -431,6 +457,64 @@ func withRunResults(nr NoteRenderer, want map[string]RunResult) NoteRenderer {
 		return r, ok
 	}
 	return nr
+}
+
+// A wikilink shows the target note's own title, so a link written against a
+// slugged file name reads as prose. The href keeps the target as written — it is
+// what the click handler resolves by.
+func TestRenderNoteBodyUsesTheTargetsTitle(t *testing.T) {
+	titles := map[string]string{
+		"resource-limits": "Requests, limits, and QoS",
+		"tls":             "TLS",
+	}
+	nr := NoteRenderer{NoteTitle: func(target string) (string, bool) {
+		title, ok := titles[target]
+		return title, ok
+	}}
+
+	tests := []struct {
+		name, in string
+		contains []string
+	}{
+		{
+			"the title replaces the file name",
+			"see [[resource-limits]]",
+			[]string{`href="` + NoteLinkScheme + `resource-limits"`, ">Requests, limits, and QoS</a>"},
+		},
+		{
+			"a section link titles only its note half",
+			"see [[resource-limits#Limits]]",
+			[]string{
+				`href="` + NoteLinkScheme + `resource-limits#Limits"`,
+				">Requests, limits, and QoS › Limits</a>",
+			},
+		},
+		{"an acronym is not re-cased", "see [[tls#Certificates]]", []string{">TLS › Certificates</a>"}},
+		{
+			"an alias still wins over the title",
+			"see [[resource-limits|the limits note]]",
+			[]string{">the limits note</a>"},
+		},
+		{
+			"a target with no title is shown as written",
+			"see [[scratch#Notes]]",
+			[]string{`href="` + NoteLinkScheme + `scratch#Notes"`, ">scratch › Notes</a>"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RenderNoteBody(nr, tc.in, "")
+			for _, want := range tc.contains {
+				require.Contains(t, got, want)
+			}
+		})
+	}
+}
+
+// Without a lookup (the search-snippet render) a wikilink keeps the target as
+// written, rather than guessing at a title the renderer cannot ask for.
+func TestFlattenWikilinksKeepsTheTargetAsWritten(t *testing.T) {
+	require.Equal(t, "see resource-limits › Limits", flattenWikilinks("see [[resource-limits#Limits]]"))
 }
 
 func TestRenderNoteBodyRehydratesStoredOutput(t *testing.T) {
@@ -848,6 +932,37 @@ func TestRenderPageVersion(t *testing.T) {
 			// It closes the gear menu: after the connection section, the last item
 			// of the settings dropdown.
 			require.Less(t, strings.Index(page, "MASS connection"), strings.Index(page, marker))
+		})
+	}
+}
+
+// The update affordance is part of the version block whether or not a release
+// has been found: the page can render before the daemon's first check answers,
+// and the button is what lets the user ask again. Only the install row is
+// conditional, and it is rendered hidden rather than left out, so the script
+// that hydrates it has something to reveal.
+func TestRenderPageUpdateRow(t *testing.T) {
+	tests := []struct {
+		name       string
+		available  string
+		wantLabel  string
+		wantHidden bool
+	}{
+		{name: "nothing found yet", wantHidden: true},
+		{name: "a release is available", available: "v0.5.0", wantLabel: "v0.5.0 available — install"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			page := RenderPage("dark", "info", State{Version: "v0.4.1", UpdateAvailable: tc.available})
+
+			require.Contains(t, page, `id="g-update-check"`)
+			require.Contains(t, page, `id="g-update-status"`)
+			if tc.wantHidden {
+				require.Contains(t, page, `id="g-update-btn" class="g-update-line" hidden`)
+				return
+			}
+			require.Contains(t, page, `id="g-update-btn" class="g-update-line" data-g-version="v0.5.0"`)
+			require.Contains(t, page, tc.wantLabel)
 		})
 	}
 }

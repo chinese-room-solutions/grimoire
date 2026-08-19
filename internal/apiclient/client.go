@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
+	"github.com/chinese-room-solutions/mass-sdk/selfupdate"
 )
 
 // Client talks to one daemon over its loopback /api/v1 surface, for one vault.
@@ -321,19 +322,29 @@ func (c *Client) ThemeRemove(ctx context.Context, name string) (grimoireapi.Them
 	return out, err
 }
 
-// UpdateStatus is the daemon's self-update state, read off /ping: the build it
-// runs, and the newer release its startup check found (empty when it is current,
-// is a dev build, or couldn't reach the release repository).
+// UpdateStatus is the daemon's self-update state: the build it runs, the newer
+// release it knows of (empty when it is current or is a dev build), when the
+// answer was taken, and why the last check failed. The shape is the SDK's, so
+// the cached and the live route answer identically.
 type UpdateStatus struct {
-	Version   string `json:"version"`
-	Available string `json:"available"`
+	selfupdate.Status
 }
 
-// UpdateStatus reports the running build and any newer release available. It is
-// vault-independent — the daemon, not a vault, is what gets updated.
+// UpdateStatus reports the daemon's cached answer, read off /ping. It is
+// vault-independent — the daemon, not a vault, is what gets updated — and costs
+// nothing, but is only as fresh as CheckedAt says. Use UpdateCheck to ask now.
 func (c *Client) UpdateStatus(ctx context.Context) (UpdateStatus, error) {
 	var out UpdateStatus
 	err := c.getJSON(ctx, "/ping", nil, &out)
+	return out, err
+}
+
+// UpdateCheck asks the release repository now and returns the fresh status. A
+// check that couldn't reach it still answers 200: the reason is in Err, because
+// "we couldn't look" is what the user needs to be told, not an HTTP failure.
+func (c *Client) UpdateCheck(ctx context.Context) (UpdateStatus, error) {
+	var out UpdateStatus
+	err := c.sendJSON(ctx, http.MethodPost, "/update/check", nil, &out)
 	return out, err
 }
 

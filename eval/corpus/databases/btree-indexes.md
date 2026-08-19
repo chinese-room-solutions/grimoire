@@ -42,9 +42,9 @@ only a filter applied to the rows it walks.
 If every column a query touches is in the index, the heap is never visited.
 Postgres calls it an index-only scan and it still needs the visibility map to be
 current, which means recently updated rows send it back to the heap anyway —
-another reason autovacuum matters, see [[postgres-tuning]]. `INCLUDE (col)`
-adds payload columns to the leaves without making them part of the key or the
-uniqueness constraint.
+another reason autovacuum matters, see [[postgres-tuning#Autovacuum]]. `INCLUDE
+(col)` adds payload columns to the leaves without making them part of the key or
+the uniqueness constraint.
 
 ## Selectivity
 
@@ -78,13 +78,14 @@ here too: `(a)` is redundant if `(a, b)` exists.
 
 ## When it is the wrong index
 
-- Full-text — inverted index, GIN in Postgres, FTS5 in [[sqlite]].
+- Full-text — inverted index, GIN in Postgres, FTS5 in
+  [[sqlite#Full-text search]].
 - Containment on jsonb or arrays — GIN.
 - Geometry, ranges, nearest-neighbour — GiST or SP-GiST.
 - High-dimensional vector similarity — none of the above; a B-tree is useless
   past a handful of dimensions because there is no total order to exploit. That
   is the whole reason approximate structures like HNSW and IVF exist, see
-  [[vector-search]].
+  [[vector-search#HNSW]].
 - Append-only analytics on one column — BRIN, tiny and only useful when physical
   order correlates with the value.
 
