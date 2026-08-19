@@ -70,6 +70,12 @@ func TestSnippetHTML(t *testing.T) {
 			absent:   []string{NoteLinkScheme, "[[", "<a "},
 		},
 		{
+			name:     "a heading wikilink flattens to note › heading",
+			in:       "see [[Some Note#Rollback]]",
+			contains: []string{"Some Note › Rollback"},
+			absent:   []string{NoteLinkScheme, "[[", "<a "},
+		},
+		{
 			name:     "a wikilink inside code stays literal",
 			in:       "`[[nodiscard]]`",
 			contains: []string{"[[nodiscard]]"},
@@ -115,6 +121,26 @@ func TestRenderNoteBody(t *testing.T) {
 		{"raw html is dropped", "<script>alert(1)</script>", nil},
 		{"wikilink", "see [[My Note]]", []string{`href="` + NoteLinkScheme + `My%20Note"`, ">My Note</a>"}},
 		{"wikilink with alias", "see [[My Note|the note]]", []string{`href="` + NoteLinkScheme + `My%20Note"`, ">the note</a>"}},
+		{
+			"wikilink to a heading",
+			"see [[My Note#Rollback]]",
+			[]string{`href="` + NoteLinkScheme + `My%20Note#Rollback"`, ">My Note › Rollback</a>"},
+		},
+		{
+			"wikilink to a heading with an alias",
+			"see [[My Note#Rollback|how to roll back]]",
+			[]string{`href="` + NoteLinkScheme + `My%20Note#Rollback"`, ">how to roll back</a>"},
+		},
+		{
+			"a spaced heading is escaped, and only the separator stays literal",
+			"see [[Deploy#Rolling back]]",
+			[]string{`href="` + NoteLinkScheme + `Deploy#Rolling%20back"`},
+		},
+		{
+			"a hash in the alias is not a separator",
+			"see [[Deploy|the #1 guide]]",
+			[]string{`href="` + NoteLinkScheme + `Deploy"`, ">the #1 guide</a>"},
+		},
 		{
 			"callout with title",
 			"> [!note] Visa\n> Blue card required.",

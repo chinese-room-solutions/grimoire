@@ -1296,11 +1296,13 @@ const (
 )
 
 // ResolveNote maps a wikilink target to a vault-relative note path, matching
-// Obsidian: a target may be a bare note name ("My Note"), a name with an alias
-// ("My Note|shown"), or a relative path; the Markdown extension (".md" or
-// ".markdown") is optional. The first note whose path or basename matches
-// (case-insensitively) wins, in the vault walk's lexical order. It is a hot
-// path (wikilink rendering, the resolve API/CLI), so it scans the cached walk
+// Obsidian: a target may be a bare note name ("My Note"), a name with a heading
+// ("My Note#Rollback"), an alias ("My Note|shown"), or a relative path; the
+// Markdown extension (".md" or ".markdown") is optional. The heading picks a
+// place inside the note, not a different note, so it resolves the same as the
+// bare name. The first note whose path or basename matches (case-insensitively)
+// wins, in the vault walk's lexical order. It is a hot path (wikilink
+// rendering, the resolve API/CLI), so it scans the cached walk
 // rather than the disk.
 func (s *Service) ResolveNote(target string) (string, bool) {
 	s.mu.Lock()
@@ -1312,6 +1314,9 @@ func (s *Service) ResolveNote(target string) (string, bool) {
 
 	name := target
 	if i := strings.IndexByte(name, '|'); i >= 0 { // drop "|alias".
+		name = name[:i]
+	}
+	if i := strings.IndexByte(name, '#'); i >= 0 { // drop "#heading".
 		name = name[:i]
 	}
 	name = strings.TrimSpace(name)

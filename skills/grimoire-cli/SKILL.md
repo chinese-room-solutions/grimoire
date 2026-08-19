@@ -52,10 +52,9 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
   path — pass it as `--vault` to read the note). `--vault PATH` narrows the
   search to one vault, and its hits print bare. A vault that can't answer is
   named on stderr with a `warning:` prefix (`warnings` in `--json`) and skipped —
-  the search still exits 0. Needs the MASS
-  gateway (`GRIMOIRE_GATEWAY_URL`, default
-  `http://localhost:3455/mass.llama-cpp`); without it, exit 1. Reading and
-  editing need no gateway.
+  the search still exits 0. Needs the MASS gateway (`GRIMOIRE_GATEWAY_URL`,
+  default `http://localhost:3455/mass.llama-cpp`); without it, exit 1. Reading
+  and editing need no gateway.
   - Every hit carries the embedding model that ranked it (`model` in `--json`).
     Vaults sharing a model are ranked as one corpus; vaults on another model
     form their own group, listed after it under a `— vaults A, B (model)`
@@ -64,8 +63,9 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
     each group, so two models can return up to 2×k hits. One model (the usual
     case) means one flat list and no headers.
 - `resolve TARGET` — a wikilink or bare name (`"My Note"`, `"My Note|alias"`,
-  with or without `.md`) to a real path. Use it before assuming a path; exit 3
-  if nothing matches.
+  `"My Note#Heading"`, with or without `.md`) to a real path. A `#Heading` names
+  a place inside the note, so it resolves to the bare name's path. Use it before
+  assuming a path; exit 3 if nothing matches.
 - `vault tree` — the folder/note tree of the `--vault` you name.
 - `vault current` — the vault the **app** has open (what it reopens next). It is
   not a default for the CLI: no command falls back to it, and passing `--vault`
@@ -97,6 +97,17 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
   `--set` per key; include the keys you want to keep.
 - `note rename FROM TO` moves a note (adds `.md`, creates parents).
 - `note get PATH` prints raw Markdown and nothing else, so it pipes.
+
+## Linking notes
+
+`[[Note]]` links to a note, `[[Note#Heading]]` opens it scrolled to that
+section, and `[[Note#Heading|alias]]` sets the link text.
+
+Cite a specific claim with the section form — it lands the reader on the
+paragraph you meant instead of the top of a long note; keep the bare form for
+linking a note as a whole. The heading is one heading's own text, not a path of
+nested ones, and has to match the target verbatim: `note get` it first when
+you're unsure.
 
 ## Deleting
 

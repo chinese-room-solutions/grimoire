@@ -67,15 +67,17 @@ func codeWrapper(w util.BufWriter, c highlighting.CodeBlockContext, entering boo
 // of navigating.
 const NoteLinkScheme = "grimoire-note:"
 
-// wikilink matches Obsidian-style [[Target]] and [[Target|Alias]] references.
-var wikilink = regexp.MustCompile(`\[\[([^\]|]+)(?:\|([^\]]+))?\]\]`)
+// wikilink matches Obsidian-style [[Target]], [[Target#Heading]] and either with
+// an |Alias. The heading is one heading's own text, not a breadcrumb — that is
+// what the preview scrolls by. A target may not contain '#'.
+var wikilink = regexp.MustCompile(`\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?\]\]`)
 
-// rewriteWikilinks turns [[Target]] and [[Target|Alias]] into Markdown links to
-// the note scheme.
+// rewriteWikilinks turns every wikilink form into a Markdown link to the note
+// scheme.
 func rewriteWikilinks(source string) string { return replaceWikilinks(source, noteLink) }
 
-// flattenWikilinks reduces [[Target]] and [[Target|Alias]] to the text they
-// display, for a render that must not link out (see snippetHTML).
+// flattenWikilinks reduces every wikilink form to the text it displays, for a
+// render that must not link out (see snippetHTML).
 func flattenWikilinks(source string) string { return replaceWikilinks(source, wikilinkLabel) }
 
 // replaceWikilinks rewrites every wikilink outside code through repl, skipping
@@ -106,22 +108,32 @@ func replaceWikilinks(source string, repl func(string) string) string {
 	return b.String()
 }
 
-// noteLink renders one matched wikilink as a Markdown link. The URL is
-// percent-encoded so spaces in note names don't break parsing; the click handler
-// decodes it.
+// noteLink renders one matched wikilink as a Markdown link. Both parts are
+// percent-encoded so spaces in note names don't break parsing — and so a '#' in
+// either can't pass for the fragment separator; the click handler splits on the
+// first literal '#' and decodes each side.
 func noteLink(m string) string {
 	g := wikilink.FindStringSubmatch(m)
-	return "[" + wikilinkLabel(m) + "](" + NoteLinkScheme + url.PathEscape(strings.TrimSpace(g[1])) + ")"
+	href := NoteLinkScheme + url.PathEscape(strings.TrimSpace(g[1]))
+	if heading := strings.TrimSpace(g[2]); heading != "" {
+		href += "#" + url.PathEscape(heading)
+	}
+	return "[" + wikilinkLabel(m) + "](" + href + ")"
 }
 
-// wikilinkLabel is the text one matched wikilink displays: its alias, or its
-// target when it has none.
+// wikilinkLabel is the text one matched wikilink displays: its alias, else its
+// target — suffixed with the heading it points into, in the same "note › heading"
+// form the search hits and the preview breadcrumb use.
 func wikilinkLabel(m string) string {
 	g := wikilink.FindStringSubmatch(m)
-	if alias := strings.TrimSpace(g[2]); alias != "" {
+	if alias := strings.TrimSpace(g[3]); alias != "" {
 		return alias
 	}
-	return strings.TrimSpace(g[1])
+	target := strings.TrimSpace(g[1])
+	if heading := strings.TrimSpace(g[2]); heading != "" {
+		return target + " › " + heading
+	}
+	return target
 }
 
 // srcSegment is a half-open byte range of a note's source.

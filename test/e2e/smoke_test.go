@@ -455,6 +455,34 @@ func TestUISmoke(t *testing.T) {
 		assertNoConsoleErrors(t, d)
 	})
 
+	// A [[Note#Heading]] link opens the target note AND lands on that heading. The
+	// whole chain is under test: the renderer's href, the click handler splitting
+	// it, and the preview's scroll-to-heading — the breadcrumb only fills in once
+	// the heading has actually been found and scrolled to.
+	t.Run("HeadingWikilinkOpensTheSection", func(t *testing.T) {
+		_, d := boot(t, map[string]string{
+			"index.md":  "# Index\n\nsee [[Deploy#Rollback]] when it breaks\n",
+			"Deploy.md": "# Deploy\n\n## Setup\n\nsetup body\n\n## Rollback\n\ndrain the node first\n",
+		})
+		defer failShot(t, d)
+
+		openFilesTab(t, d)
+		clickReady(t, d, `#g-files .g-tree-note[data-note="index.md"]`)
+		waitTextContains(t, d, "#g-preview-body", "when it breaks")
+		// The link carries the heading as a fragment, note and heading each escaped.
+		waitVisible(t, d, `#g-preview-body a[href="grimoire-note:Deploy#Rollback"]`)
+		// Its label reads "note › heading", the form the search hits use.
+		waitTextContains(t, d, `#g-preview-body a[href="grimoire-note:Deploy#Rollback"]`, "Deploy › Rollback")
+
+		clickReady(t, d, `#g-preview-body a[href="grimoire-note:Deploy#Rollback"]`)
+		waitTextContains(t, d, "#g-preview-body", "drain the node first")
+		waitTextContains(t, d, ".g-tab-active .g-tab-title", "Deploy")
+		// The breadcrumb names the section, so the jump happened rather than
+		// leaving the reader at the top of the note.
+		waitTextContains(t, d, "#g-preview-section", "Rollback")
+		assertNoConsoleErrors(t, d)
+	})
+
 	// Opening a note while the Vaults tab's graph view covers the workspace has to
 	// leave that view, or the note lands in a tab nothing shows — the graph's own
 	// node click enters through the same nav method, so this is what makes the

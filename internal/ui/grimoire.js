@@ -2968,7 +2968,13 @@
       var link = e.target.closest('a[href^="' + NOTE_SCHEME + '"]');
       if (link) {
         e.preventDefault();
-        nav.openNote(decodeURIComponent(link.getAttribute("href").slice(NOTE_SCHEME.length)), "");
+        // href is <escaped note>[#<escaped heading>]: a [[Note#Heading]] link
+        // opens the note scrolled to that heading. Both sides are percent-encoded,
+        // so the first literal "#" is the separator and nothing else can be one.
+        var ref = link.getAttribute("href").slice(NOTE_SCHEME.length);
+        var hash = ref.indexOf("#");
+        nav.openNote(decodeURIComponent(hash < 0 ? ref : ref.slice(0, hash)),
+          hash < 0 ? "" : decodeURIComponent(ref.slice(hash + 1)));
         return;
       }
       // A relative link inside rendered note/result content points at another
