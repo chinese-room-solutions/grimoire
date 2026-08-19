@@ -317,6 +317,61 @@ func TestUISmoke(t *testing.T) {
 		})
 	})
 
+	// Each tab's scroll position is per-tab client state: leaving a note and
+	// coming back must land on the line it was left on. The restore has to wait
+	// for the server's body patch — a scrollTop set before it lands is clamped by
+	// the other note still in the panel, then wiped when the patch replaces it.
+	t.Run("NoteScrollSurvivesATabSwitch", func(t *testing.T) {
+		long := func(tag string) string {
+			return "# " + tag + "\n\n" + strings.Repeat("filler paragraph for "+tag+".\n\n", 200) + "end of " + tag + "\n"
+		}
+		// Note b is short on purpose: the panel it leaves behind is too short to
+		// hold note a's position, which is what makes a too-early restore clamp.
+		_, d := boot(t, map[string]string{"a.md": long("alpha"), "b.md": "# bravo\n\nend of bravo\n"})
+		defer failShot(t, d)
+
+		openFilesTab(t, d)
+		// Double-click pins one permanent tab per note, so both stay open.
+		for _, note := range []string{"a.md", "b.md"} {
+			sel := fmt.Sprintf(`#g-files .g-tree-note[data-note=%q]`, note)
+			waitVisible(t, d, sel)
+			pollErr(t, "double-clicking "+note, func() error {
+				id, err := d.find(sel)
+				if err != nil {
+					return err
+				}
+				return d.doubleClick(id)
+			})
+			waitActiveTab(t, d, strings.TrimSuffix(note, ".md"))
+		}
+
+		const want = 600
+		clickTabTitled(t, d, "a")
+		waitTextContains(t, d, "#g-preview-body", "end of alpha")
+		poll(t, "note a to scroll down its body", func() (bool, string) {
+			got, err := d.exec(fmt.Sprintf(
+				"var b = document.getElementById('g-preview-body'); b.scrollTop = %d; return b.scrollTop;", want))
+			if err != nil {
+				return false, err.Error()
+			}
+			f, _ := got.(float64)
+			return int(f) == want, fmt.Sprintf("scrollTop=%v", got)
+		})
+
+		clickTabTitled(t, d, "b")
+		waitTextContains(t, d, "#g-preview-body", "end of bravo")
+		clickTabTitled(t, d, "a")
+		waitTextContains(t, d, "#g-preview-body", "end of alpha")
+		poll(t, "note a to come back at the line it was left on", func() (bool, string) {
+			got, err := d.exec("return document.getElementById('g-preview-body').scrollTop;")
+			if err != nil {
+				return false, err.Error()
+			}
+			f, _ := got.(float64)
+			return int(f) == want, fmt.Sprintf("scrollTop=%v, want %d", got, want)
+		})
+	})
+
 	// Back/forward retrace where the user has BEEN, not the tab strip. Both notes
 	// share the one reusable preview tab, so stepping back has to reopen the
 	// earlier note in that same tab — the case a strip-order step got wrong,

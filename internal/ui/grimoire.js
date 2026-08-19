@@ -2186,12 +2186,30 @@
       }
     }
 
-    // restoreScroll waits for the (re)rendered visible body, then restores the
-    // cached scroll position — the scroll mirror of scrollToHeading.
+    // restoreScroll puts a tab's cached position back — the scroll mirror of
+    // scrollToHeading, and fiddly for the same reason: the body is patched in
+    // asynchronously after the @post, so at call time the panel still holds the
+    // note we came FROM. Scrolling then is worse than useless — a shorter
+    // outgoing note clamps the position, and the patch wipes what survived. So
+    // wait for the patch (a mutation of the body) and for content tall enough to
+    // hold the position. The frame budget is the fallback for a re-render whose
+    // HTML came back identical; its last try scrolls anyway, so a note that
+    // genuinely shrank still lands as close as it can.
     function restoreScroll(top, gen, tries) {
-      if (gen !== scrollGen) return;
-      if (previewVisible() && body) { body.scrollTop = top; return; }
-      if (tries > 0) requestAnimationFrame(function () { restoreScroll(top, gen, tries - 1); });
+      if (!body || gen !== scrollGen) return;
+      var patched = false;
+      var obs = new MutationObserver(function () { patched = true; });
+      obs.observe(body, { childList: true, subtree: true });
+      (function step(left) {
+        if (gen !== scrollGen) { obs.disconnect(); return; } // superseded.
+        var ready = patched && previewVisible() && body.scrollHeight - body.clientHeight >= top;
+        if (!ready && left > 0) {
+          requestAnimationFrame(function () { step(left - 1); });
+          return;
+        }
+        obs.disconnect();
+        if (previewVisible()) body.scrollTop = top;
+      })(tries);
     }
 
     function focus(id) {
