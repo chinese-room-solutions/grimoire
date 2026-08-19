@@ -455,6 +455,33 @@ func TestUISmoke(t *testing.T) {
 		assertNoConsoleErrors(t, d)
 	})
 
+	// Opening a note while the Vaults tab's graph view covers the workspace has to
+	// leave that view, or the note lands in a tab nothing shows — the graph's own
+	// node click enters through the same nav method, so this is what makes the
+	// vault graph open notes like the Graph tab does. ?note= is the route that
+	// reaches it without picking a node off a canvas.
+	t.Run("OpeningANoteLeavesTheVaultsGraphView", func(t *testing.T) {
+		srv, d := boot(t, map[string]string{"a.md": "# A\n\nnote a\n"})
+		defer failShot(t, d)
+
+		// Vaults is the default sidebar tab, so the page opens on the graph view.
+		waitVisible(t, d, "#g-graph.g-graph-open")
+		waitNotVisible(t, d, ".g-tabstrip")
+
+		if err := d.navigate(srv.baseURL + "?note=a.md"); err != nil {
+			t.Fatalf("navigating with ?note=: %v", err)
+		}
+		waitReady(t, d)
+		// The graph view is gone, the workspace is back, and the note is readable.
+		waitNotVisible(t, d, "#g-graph.g-graph-open")
+		waitVisible(t, d, ".g-tabstrip")
+		waitTextContains(t, d, "#g-preview-body", "note a")
+		waitTextContains(t, d, ".g-tab-active .g-tab-title", "a")
+		// It lands on Files, where the tree lights the row it opened.
+		waitVisible(t, d, `#g-files .g-tree-note[data-note="a.md"].g-tree-note-active`)
+		assertNoConsoleErrors(t, d)
+	})
+
 	// The Extensions dialog against stub registries: the installed sections read
 	// from disk (built-ins locked), an install lands the artifact and takes effect
 	// live, and the palette dropdown picks the new theme up without a reload.

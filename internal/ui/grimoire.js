@@ -2113,6 +2113,15 @@
       if (showGraph) showGraph(); // build/redraw once the overlay is shown + sized.
     }
 
+    // leaveVaultGraph gives the workspace back before opening a note, since the
+    // Vaults-tab graph view outranks the focused tab in render() and would leave
+    // the note open but invisible. Files is where a note belongs, so its tree
+    // lights the row. The Graph TAB needs none of this — opening a note focuses
+    // another tab and render() drops the overlay by itself.
+    function leaveVaultGraph() {
+      if (vaultGraph) showSidebar("files");
+    }
+
     // render drives the shared panel for the focused tab. It is the SINGLE source
     // of truth for "what's shown + which sidebar row is lit", so highlight state
     // can't drift from the view. Reuses the existing show paths (no history).
@@ -2726,11 +2735,13 @@
       // takes over its kind's reusable preview tab. openNotePinned / openSessionPinned
       // are the double-click opens that commit a permanent tab.
       openNote: function (path, heading) {
+        leaveVaultGraph();
         var t = openPreview("note", path, titleForNote(path));
         t.pendingHeading = heading || "";
         focus(t.id);
       },
       openNotePinned: function (path, heading) {
+        leaveVaultGraph();
         var t = open("note", path, null);
         t.preview = false;
         t.pendingHeading = heading || "";
@@ -4058,8 +4069,10 @@
     }
 
     // openNode opens a node's note as a permanent (pinned) tab — a deliberate
-    // navigation from the graph, not a list-style preview. render() hides the graph
-    // overlay for the note entry, so no explicit close is needed here.
+    // navigation from the graph, not a list-style preview. The workspace handles
+    // the overlay: render() drops it for the note entry, and a note opened from
+    // the Vaults tab's graph view leaves that view (nav's leaveVaultGraph), so
+    // the graph opens notes the same way from either entry point.
     function openNode(nd) {
       if (nav) nav.openNotePinned(nd.id, "");
     }
