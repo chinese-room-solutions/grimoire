@@ -27,16 +27,17 @@ func signalContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
-// headlessIdleTimeout is how long a CLI-spawned headless daemon stays up after
-// its last request before retiring itself, so an on-demand instance an agent
-// touched once doesn't linger. A working agent (calls every few seconds) keeps
-// resetting it; the next call after expiry just respawns it.
-const headlessIdleTimeout = 2 * time.Minute
-
 // spawnLogName is the file a detached daemon's stdout/stderr append to, under the
 // app dir. Without it the child would inherit the launching CLI's streams and
 // write log noise into a script's output long after the verb returned.
 const spawnLogName = "daemon-spawn.log"
+
+// headlessIdleTimeout is how long a spawned headless daemon stays up after its
+// last request before retiring itself. Short because a running daemon holds the
+// executable open, so an update can't replace it until this elapses. A working
+// agent (calls every few seconds) keeps resetting it; the next call after expiry
+// just respawns it.
+const headlessIdleTimeout = 10 * time.Second
 
 // launchDaemonHeadless starts a new detached Grimoire daemon with no window (the
 // `serve` subcommand) — used by the CLI to bring the backend up on demand for an

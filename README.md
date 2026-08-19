@@ -169,9 +169,11 @@ again brings it back.
 **One daemon serves every vault**, and each request names the vault it acts on.
 If none is running, the CLI **spawns a headless daemon on demand** (no window),
 serves the call, and leaves it warm for follow-ups; that daemon **self-retires
-after ~2 minutes of inactivity** (a request in flight counts as activity for its
+after 10 seconds of inactivity** (a request in flight counts as activity for its
 whole duration, so a minutes-long `reindex --force` isn't cut off, and an open
-app window holds it up for as long as it lives). A daemon the GUI already
+app window holds it up for as long as it lives). It stays short because a
+running daemon holds the executable open, so an update can't replace it until
+it retires. A daemon the GUI already
 started is reused, so the CLI never blocks you from opening the app yourself —
 but `screenshot` needs a GUI window and fails against a headless daemon.
 
