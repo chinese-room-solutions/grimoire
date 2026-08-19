@@ -47,7 +47,8 @@ attacker enumerate what it can do with `kubectl auth can-i --list`.
 
 Service accounts also carry `imagePullSecrets`, so attaching the registry
 credential once per namespace beats repeating it in every Pod spec — relevant
-when chasing an ImagePullBackOff, see [[troubleshooting-pods]].
+when chasing an ImagePullBackOff, see
+[[troubleshooting-pods#ImagePullBackOff and ErrImagePull]].
 
 ## Debugging access
 
@@ -59,7 +60,7 @@ kubectl auth can-i --list --as=system:serviceaccount:data:operator
 The impersonation form is the fastest way to check what a controller will be
 allowed to do before it fails at three in the morning. Missing verbs in an
 operator's generated role are the single most common cause of a reconcile loop
-that logs `is forbidden` forever; see [[operators]].
+that logs `is forbidden` forever; see [[operators#The reconcile contract]].
 
 ## Escalation prevention
 

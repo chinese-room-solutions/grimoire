@@ -37,8 +37,8 @@ That address follows the Pod when the scheduler moves it to another node. Peers
 can therefore be configured by hostname in a config file that never changes,
 which is exactly what quorum systems (etcd, ZooKeeper, Patroni, Kafka) need —
 they gossip about each other by name, and a name that changes on every restart
-breaks membership. See [[services-and-networking]] for how the headless variant
-differs from a normal ClusterIP.
+breaks membership. See [[services-and-networking#Types]] for how the headless
+variant differs from a normal ClusterIP.
 
 By default only ready Pods are published. Set
 `publishNotReadyAddresses: true` on the Service when peers must find each other
@@ -80,7 +80,7 @@ Do not reach for a StatefulSet just because a workload writes files. A cache
 with a scratch directory wants an `emptyDir`. A web tier that happens to keep
 sessions wants a session store, not per-replica disks. The moment identity is
 not load bearing, the ordering and the leftover claims are pure cost — that
-trade-off is written up in [[statefulset-vs-deployment]].
+trade-off is written up in [[statefulset-vs-deployment#Picking one]].
 
 Real cases from this cluster: Postgres with Patroni (see
 [[postgres-on-kubernetes]]), a three-node NATS JetStream cluster, and Prometheus

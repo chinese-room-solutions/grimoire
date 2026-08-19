@@ -103,7 +103,7 @@ Fixed query set, graded judgments, and these numbers:
   one answer" case.
 
 Report all three, always against the same set, and change one thing at a time.
-Chunking strategy, embedding model, `ef_search`, fusion constant, reranker — each
-of them moves the numbers, and evaluating a bundle of changes tells you nothing
-about which one helped. Model choice details in [[embeddings]], and the SQLite
-side of the stack in [[sqlite]].
+Chunking strategy, embedding model, `ef_search`, fusion constant, reranker —
+each of them moves the numbers, and evaluating a bundle of changes tells you
+nothing about which one helped. Model choice details in
+[[embeddings#Versioning]], and the SQLite side of the stack in [[sqlite]].

@@ -24,7 +24,7 @@ srv := &http.Server{
 The decision is `clientPool`. It must not be the system trust store: any
 certificate issued by any public authority would then be accepted, and you have
 authenticated nothing. Use a private issuer whose only job is this, and keep it
-separate from the one serving public traffic — see [[tls]].
+separate from the one serving public traffic — see [[tls#Certificates]].
 
 Verification proves the peer holds a key some issuer vouched for. It does not
 say the peer is allowed to call this endpoint. Authorisation is a second step,
@@ -52,7 +52,7 @@ Pods move, addresses are recycled, and a policy written against an address range
 is wrong the moment the scheduler reschedules something. This is why the mesh
 implementations converged on the same shape: a per-workload identity issued at
 start-up from the service account it runs as, see
-[[rbac-and-service-accounts]].
+[[rbac-and-service-accounts#Workload identity]].
 
 ## Do it with a mesh or not at all
 

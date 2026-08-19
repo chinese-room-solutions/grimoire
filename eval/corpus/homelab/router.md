@@ -31,7 +31,7 @@ The arrangement instead:
 
 1. **Personal access** is a WireGuard tunnel. Phone and laptop have peers, split
    tunnel to `192.168.20.0/24`, and everything internal is reachable by its real
-   name. Config and the `AllowedIPs` reasoning in [[wireguard]].
+   name. Config and the `AllowedIPs` reasoning in [[wireguard#A working pair]].
 2. **Genuinely public services** (two of them) go through a Cloudflare tunnel: an
    outbound-only daemon in the cluster connects to the edge, and the edge
    publishes the hostname. No open port, no dynamic DNS, and the origin address
@@ -53,9 +53,9 @@ outside the VPN, it is not reachable outside the VPN.
 
 Blocklists via the Unbound blocklist feature rather than a separate Pi-hole,
 after the incident where DNS lived in the cluster and the cluster needed DNS to
-start. Written up in [[k3s-cluster]]. DNS-01 for the wildcard certificate is
-delegated to a real public zone, since ACME cannot validate `home.arpa`;
-see [[tls]] and [[dns]].
+start. Written up in [[k3s-cluster#Lessons]]. DNS-01 for the wildcard
+certificate is delegated to a real public zone, since ACME cannot validate
+`home.arpa`; see [[tls#ACME]] and [[dns]].
 
 Clients that hardcode DoH (phones, Chrome) ignore all of this. A firewall rule
 NATs all port 53 to Unbound and blocks known DoH endpoints on the iot VLAN,

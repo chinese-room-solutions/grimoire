@@ -30,7 +30,8 @@ entirely by teams that adopted it for a schema that had neither problem.
 They travel together in blog posts and they are independent. You can separate
 the two models and keep a perfectly ordinary table as the source of truth, with
 the read model maintained by a trigger, a scheduled refresh, or a stream of row
-changes off the write database — see [[change-data-capture]].
+changes off the write database — see
+[[change-data-capture#Read the log, not the table]].
 
 Event sourcing means the log of state transitions *is* the state, and it brings
 its own problems: schema evolution of old events, replay time, and the fact
@@ -63,4 +64,5 @@ query layer reads. Rebuild time is the number to watch — a projection that tak
 nine hours to rebuild is a projection you will be afraid to change.
 
 Keep the lag as a first-class metric with an objective on it, the same way any
-other user-visible property gets one; see [[service-level-objectives]].
+other user-visible property gets one; see
+[[service-level-objectives#Write the indicator as a ratio of events]].

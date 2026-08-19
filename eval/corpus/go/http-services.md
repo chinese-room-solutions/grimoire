@@ -52,7 +52,7 @@ func handleGetNote(store StoreInterface) http.HandlerFunc {
 
 `r.Context()` is cancelled when the client disconnects, so passing it into every
 downstream call means an abandoned request stops costing you database time. One
-error-mapping helper for the whole service, per [[error-handling]].
+error-mapping helper for the whole service, per [[error-handling#Handle once]].
 
 Decode with `json.NewDecoder(r.Body)` and `DisallowUnknownFields` when the
 schema is yours; cap the body with `http.MaxBytesReader` before decoding, or an
@@ -93,16 +93,16 @@ _ = srv.Shutdown(shutdownCtx)
 
 `Shutdown` stops accepting, then waits for in-flight requests. It does **not**
 wait for hijacked connections or your background workers — those need their own
-context and a `WaitGroup`, per [[concurrency]].
+context and a `WaitGroup`, per [[concurrency#Goroutines have owners]].
 
 In the cluster this pairs with a `preStop` sleep, because the process gets
 SIGTERM before it has been removed from the Service endpoints; without the
 sleep, graceful shutdown races endpoint propagation and clients see connection
-resets. Details in [[services-and-networking]].
+resets. Details in [[services-and-networking#Readiness and endpoint churn]].
 
 ## Observability
 
 `log/slog` with a handler chosen at startup, a request id in the context, and
 one log line per request at the boundary. Histogram of latency by route and
 status, not by full path — cardinality is a monitoring bill, see
-[[monitoring]].
+[[monitoring#Metric types]].

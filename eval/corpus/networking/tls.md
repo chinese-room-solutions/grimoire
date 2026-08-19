@@ -46,14 +46,15 @@ Let's Encrypt, less with ACME automation.
 HTTP-01 proves control by serving a token at `/.well-known/acme-challenge/`;
 needs port 80 reachable from the internet. DNS-01 publishes a TXT record; works
 for wildcards and for hosts with no public address, at the cost of giving the
-client an API credential for your zone. See [[dns]].
+client an API credential for your zone. See [[dns#Record types worth knowing]].
 
 CAA records restrict which CAs may issue at all, and are checked by the CA at
 issuance. Cheap, and worth setting.
 
 In the cluster this is cert-manager writing a Secret that an Ingress references,
-see [[ingress]]. At home it is a DNS-01 wildcard, because nothing is reachable
-on port 80; see [[router]].
+see [[ingress#Termination and certificates]]. At home it is a DNS-01 wildcard,
+because nothing is reachable on port 80; see
+[[router#Getting to services from outside]].
 
 ## mTLS
 

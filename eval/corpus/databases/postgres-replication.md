@@ -87,7 +87,7 @@ is around it:
 
 Patroni is the usual answer: it holds a leader lock in etcd or Consul, runs the
 health checks, and does the promotion. In the cluster it drives the numbered
-workload described in [[postgres-on-kubernetes]].
+workload described in [[postgres-on-kubernetes#Why the workload shape matters]].
 
 ## Logical replication is a different thing
 
@@ -99,4 +99,4 @@ UPDATE/DELETE fails at runtime. It is the tool for a zero-downtime major upgrade
 not for high availability.
 
 Neither replaces backups: replication faithfully replicates a `DROP TABLE`. See
-[[backups]].
+[[backups#The rule]].

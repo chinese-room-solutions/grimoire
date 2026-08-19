@@ -55,7 +55,7 @@ and for hosts that are not reachable from the public internet.
 Termination happens at the controller, so the hop from proxy to Pod is plaintext
 unless you re-encrypt with a `backend-protocol: HTTPS` annotation or run a mesh.
 Whether that hop needs protecting is a threat-model question, not a checkbox —
-notes on the protocol in [[tls]].
+notes on the protocol in [[tls#What the handshake does]].
 
 ## What it cannot express
 
@@ -73,9 +73,10 @@ should probably start there; existing Ingress objects keep working.
 
 An Ingress controller is itself exposed by a Service of type LoadBalancer or by
 host networking, so there is a layer 4 hop in front of the layer 7 one. That
-distinction is spelled out in [[load-balancing]], and the Service semantics are
-in [[services-and-networking]]. At home the same job is done by a single
-Traefik instance and a reverse tunnel; see [[k3s-cluster]] and [[router]].
+distinction is spelled out in [[load-balancing#Layer 4 compared to layer 7]],
+and the Service semantics are in [[services-and-networking#Types]]. At home the
+same job is done by a single Traefik instance and a reverse tunnel; see
+[[k3s-cluster]] and [[router#Getting to services from outside]].
 
 ## Debugging checklist
 

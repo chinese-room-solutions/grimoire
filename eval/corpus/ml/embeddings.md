@@ -83,4 +83,4 @@ Do not evaluate by looking at ten results and feeling good about them. Build a
 small set of queries with graded judgments over your own corpus, and measure
 nDCG@10 and recall@50. Fifty labelled queries beats any amount of eyeballing,
 and it is the only way to know whether a model swap helped. Scoring details in
-[[vector-search]]; the end-to-end version in [[rag]].
+[[vector-search#Measuring it]]; the end-to-end version in [[rag#Evaluating it]].

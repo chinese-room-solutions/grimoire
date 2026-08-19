@@ -69,7 +69,7 @@ default:
 ```
 
 Never leak the raw chain to the client — it names your files, hosts, and
-libraries. See [[http-services]].
+libraries. See [[http-services#Handlers]].
 
 ## Panics
 
@@ -99,4 +99,4 @@ Structured, with the error as a field: `log.Error("reconcile failed", "err",
 err, "resource", key)`. One event per failure, at the layer that decides what to
 do about it. In the operator loops this matters double, because a returned error
 becomes a requeue with backoff and a logged-and-swallowed one becomes silence;
-see [[operators]].
+see [[operators#The reconcile contract]].

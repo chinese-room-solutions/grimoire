@@ -28,7 +28,7 @@ carelessly. Two consequences worth internalising:
 
 Set the resource target on the request, not the limit — the percentage is a
 fraction of what the Pod asked for. A workload with a tiny request and a huge
-limit reports absurd utilisation and thrashes; see [[resource-limits]].
+limit reports absurd utilisation and thrashes; see [[resource-limits#Requests]].
 
 ## Which metric
 
@@ -68,7 +68,7 @@ minute cannot halve the fleet.
 
 Leave `replicas` out of the manifest entirely once a workload is autoscaled;
 otherwise the GitOps reconciler and this controller fight over the field, see
-[[deployments]].
+[[deployments#Horizontal scaling]].
 
 ## The vertical pod autoscaler
 

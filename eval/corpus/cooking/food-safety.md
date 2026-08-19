@@ -30,11 +30,11 @@ it: 60 to 20 °C in two hours, 20 to 4 °C in four more.
   survives reheating, so the reheat does not save you. Cool it fast or throw it
   out.
 - Garlic in oil at room temperature. Anaerobic, low acid, and the one home
-  preparation with a real botulism history. Refrigerate it and use it within
-  the week, or acidify it.
+  preparation with a real botulism history. Refrigerate it and use it within the
+  week, or acidify it.
 - Cross-contamination from raw poultry, which is mostly a matter of what the
-  hands touch between the bird and the tap — see [[knife-skills]] for how the
-  board gets organised.
+  hands touch between the bird and the tap — see [[knife-skills#Board]] for how
+  the board gets organised.
 - Reheating rather than cooking: bring leftovers to a genuine simmer, not warm.
 
 Rinsing raw chicken does nothing except aerosolise the problem across the sink.
@@ -45,7 +45,7 @@ It looks like a violation of every rule above and it is not: salt and the acid
 the culture produces do the work that refrigeration does elsewhere. A brine at
 2% and a pH under 4.6 is a hostile place for anything that would make you ill,
 which is why the salt ratio is the one measurement in the whole process that is
-not a matter of taste; see [[fermentation]] and [[sourdough]].
+not a matter of taste; see [[fermentation#Why it is safe]] and [[sourdough]].
 
 Mould on the surface of a ferment is a surface problem — lift it off and check
 the smell. Pink or fuzzy growth through the body of it is not, and the batch

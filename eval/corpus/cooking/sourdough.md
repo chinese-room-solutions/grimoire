@@ -46,7 +46,7 @@ Whether it needs a name is between you and the jar. Mine does not.
    it. Done when it has risen 50%, feels airy, and shows bubbles at the edges of
    the container. Roughly 4-5 hours at 24C, and much longer if the kitchen is
    cold — the clock is a suggestion and the dough is the instruction. General
-   temperature effects in [[fermentation]].
+   temperature effects in [[fermentation#Temperature]].
 4. **Preshape**, bench rest 30 minutes, **final shape** with tension across the
    surface.
 5. **Cold retard.** Banneton, covered, fridge overnight, 12-16 hours. This is

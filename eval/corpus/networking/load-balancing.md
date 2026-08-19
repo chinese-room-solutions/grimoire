@@ -20,8 +20,8 @@ holds your keys and adds a hop of latency and CPU.
 The practical arrangement is both: an L4 device or a cloud network load balancer
 in front spreading connections across a fleet of L7 proxies, which then make the
 per-request decisions. In a cluster that is exactly a `LoadBalancer` Service in
-front of an ingress controller — see [[ingress]] and
-[[services-and-networking]].
+front of an ingress controller — see [[ingress#Anatomy]] and
+[[services-and-networking#Types]].
 
 ## Algorithms
 
@@ -71,10 +71,11 @@ cluster.
   balance at all after the first minute. That is the reason to move to
   request-level balancing or a mesh.
 - **Draining.** Stop new connections, let in-flight ones finish, then remove.
-  Same idea as the graceful shutdown dance in [[http-services]].
+  Same idea as the graceful shutdown dance in
+  [[http-services#Graceful shutdown]].
 
 ## Where it sits at home
 
 One Traefik instance, a small number of services, and a router doing port
-forwarding. No fleet, no algorithms worth arguing about; see [[router]] and
-[[k3s-cluster]].
+forwarding. No fleet, no algorithms worth arguing about; see
+[[router#Getting to services from outside]] and [[k3s-cluster]].

@@ -67,8 +67,10 @@ replicas with `minAvailable: 2` will block a drain rather than dip below two.
 The rollout itself still needs a readiness probe worth trusting — with no probe,
 "ready" means "the process started", and traffic lands on a service that has not
 finished warming its caches. Endpoint churn during a rollout is handled by the
-Service layer described in [[services-and-networking]], and a preStop hook plus
-`terminationGracePeriodSeconds` is what keeps in-flight requests from being cut.
+Service layer described in
+[[services-and-networking#Readiness and endpoint churn]], and a preStop hook
+plus `terminationGracePeriodSeconds` is what keeps in-flight requests from being
+cut.
 
 ## Horizontal scaling
 
@@ -81,8 +83,9 @@ will fight over the field forever.
 State. A Deployment mounting one ReadWriteOnce volume can never do a rolling
 update — the new Pod cannot attach the disk while the old Pod holds it, so the
 rollout wedges. That is the point at which the workload has outgrown this
-controller; the choice is laid out in [[statefulset-vs-deployment]].
+controller; the choice is laid out in [[statefulset-vs-deployment#Picking one]].
 
 The rollout language here also collides with the release-engineering sense of
 the word "deployment" — the pipeline that ships a build to an environment. That
-one is in [[release-process]], and it is a different thing entirely.
+one is in [[release-process#Pipeline stages]], and it is a different thing
+entirely.

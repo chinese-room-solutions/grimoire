@@ -62,7 +62,7 @@ generated mock. Mocks that assert on call order test your implementation, and
 they fail on every refactor that changes nothing observable.
 
 For the cluster controllers, `envtest` boots a real API server so reconciliation
-is tested against real validation and RBAC; see [[operators]].
+is tested against real validation and RBAC; see [[operators#Testing]].
 
 ## Golden files
 

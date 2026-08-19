@@ -6,7 +6,7 @@ tags: [process, ci-cd, release]
 
 How a commit becomes production. This is the shipping pipeline, not the workload
 object of the same name — for the controller and its `RollingUpdate` settings
-see [[deployments]].
+see [[deployments#Rollout strategies]].
 
 ## Pipeline stages
 
@@ -63,7 +63,7 @@ Expand-contract, over three releases:
 
 Backfills run as a separate job with a bounded batch size, a delay between
 batches, and a kill switch — the reason for that last requirement is written up
-in [[2026-07-14]].
+in [[2026-07-14#Cause]].
 
 ## Versioning and notes
 
