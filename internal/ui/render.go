@@ -74,11 +74,16 @@ var wikilink = regexp.MustCompile(`\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?\
 
 // rewriteWikilinks turns every wikilink form into a Markdown link to the note
 // scheme.
-func rewriteWikilinks(source string) string { return replaceWikilinks(source, noteLink) }
+func rewriteWikilinks(nr NoteRenderer, source string) string {
+	return replaceWikilinks(source, func(m string) string { return noteLink(nr, m) })
+}
 
 // flattenWikilinks reduces every wikilink form to the text it displays, for a
-// render that must not link out (see snippetHTML).
-func flattenWikilinks(source string) string { return replaceWikilinks(source, wikilinkLabel) }
+// render that must not link out (see snippetHTML). Search snippets are rendered
+// without a vault to ask, so their links keep the target as written.
+func flattenWikilinks(source string) string {
+	return replaceWikilinks(source, func(m string) string { return wikilinkLabel(NoteRenderer{}, m) })
+}
 
 // replaceWikilinks rewrites every wikilink outside code through repl, skipping
 // code: `[[ -f x ]]` in a bash fence or [[nodiscard]] in a code span is code,
@@ -112,28 +117,34 @@ func replaceWikilinks(source string, repl func(string) string) string {
 // percent-encoded so spaces in note names don't break parsing — and so a '#' in
 // either can't pass for the fragment separator; the click handler splits on the
 // first literal '#' and decodes each side.
-func noteLink(m string) string {
+func noteLink(nr NoteRenderer, m string) string {
 	g := wikilink.FindStringSubmatch(m)
 	href := NoteLinkScheme + url.PathEscape(strings.TrimSpace(g[1]))
 	if heading := strings.TrimSpace(g[2]); heading != "" {
 		href += "#" + url.PathEscape(heading)
 	}
-	return "[" + wikilinkLabel(m) + "](" + href + ")"
+	return "[" + wikilinkLabel(nr, m) + "](" + href + ")"
 }
 
-// wikilinkLabel is the text one matched wikilink displays: its alias, else its
-// target — suffixed with the heading it points into, in the same "note › heading"
-// form the search hits and the preview breadcrumb use.
-func wikilinkLabel(m string) string {
+// wikilinkLabel is the text one matched wikilink displays: its alias, else the
+// target note's own title — suffixed with the heading it points into, in the same
+// "note › heading" form the search hits and the preview breadcrumb use. The href
+// still carries the target as written; only the label reads better.
+func wikilinkLabel(nr NoteRenderer, m string) string {
 	g := wikilink.FindStringSubmatch(m)
 	if alias := strings.TrimSpace(g[3]); alias != "" {
 		return alias
 	}
-	target := strings.TrimSpace(g[1])
-	if heading := strings.TrimSpace(g[2]); heading != "" {
-		return target + " › " + heading
+	label := strings.TrimSpace(g[1])
+	if nr.NoteTitle != nil {
+		if title, ok := nr.NoteTitle(label); ok && title != "" {
+			label = title
+		}
 	}
-	return target
+	if heading := strings.TrimSpace(g[2]); heading != "" {
+		return label + " › " + heading
+	}
+	return label
 }
 
 // srcSegment is a half-open byte range of a note's source.
@@ -253,7 +264,7 @@ func renderBody(nr NoteRenderer, source, notePath string) string {
 	}
 
 	var buf bytes.Buffer
-	if err := md.Convert([]byte(rewriteWikilinks(source)), &buf); err != nil {
+	if err := md.Convert([]byte(rewriteWikilinks(nr, source)), &buf); err != nil {
 		// Fall back to the raw text rather than failing the preview.
 		return "<pre>" + strings.ReplaceAll(source, "<", "&lt;") + "</pre>"
 	}
@@ -362,6 +373,11 @@ type NoteRenderer struct {
 	// no probe the renderer can't tell, so it reads the src's own form and never
 	// marks an embed broken.
 	FileExists func(rel string) bool
+	// NoteTitle, when set, returns the title of the note a wikilink target names,
+	// which is what the link displays: `[[resource-limits]]` reads as the note's
+	// own heading rather than its file name. ok is false when the target names no
+	// note. With no lookup the target is displayed as written.
+	NoteTitle func(target string) (title string, ok bool)
 }
 
 // RunResult is a block's persisted last run, mirrored from the app/runs layer so

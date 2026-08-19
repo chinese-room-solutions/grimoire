@@ -81,6 +81,7 @@ func noteRenderer(svc *app.Service) ui.NoteRenderer {
 	return ui.NoteRenderer{
 		Kernel:     svc.KernelInfo,
 		FileExists: svc.VaultFileExists,
+		NoteTitle:  noteTitles(svc),
 		RunResult: func(notePath, code string) (ui.RunResult, bool) {
 			res, ok := svc.RunResultFor(notePath, code)
 			if !ok {
@@ -88,6 +89,22 @@ func noteRenderer(svc *app.Service) ui.NoteRenderer {
 			}
 			return toUIRunResult(res), true
 		},
+	}
+}
+
+// noteTitles answers a wikilink target with the target note's title, memoized
+// for the one render it was built for — a note linking the same target five
+// times reads it once. Each renderer belongs to a single request, so the map
+// needs no lock and can't go stale under an edit.
+func noteTitles(svc *app.Service) func(string) (string, bool) {
+	seen := map[string]string{}
+	return func(target string) (string, bool) {
+		title, cached := seen[target]
+		if !cached {
+			title, _ = svc.NoteTitle(target)
+			seen[target] = title
+		}
+		return title, title != ""
 	}
 }
 

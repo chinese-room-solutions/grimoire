@@ -515,23 +515,27 @@ func TestUISmoke(t *testing.T) {
 	// it, and the preview's scroll-to-heading — the breadcrumb only fills in once
 	// the heading has actually been found and scrolled to.
 	t.Run("HeadingWikilinkOpensTheSection", func(t *testing.T) {
+		// The target's file name and its title differ on purpose: a link written
+		// against the slug has to read as the note's own heading.
+		const link = `#g-preview-body a[href="grimoire-note:deploy-runbook#Rollback"]`
 		_, d := boot(t, map[string]string{
-			"index.md":  "# Index\n\nsee [[Deploy#Rollback]] when it breaks\n",
-			"Deploy.md": "# Deploy\n\n## Setup\n\nsetup body\n\n## Rollback\n\ndrain the node first\n",
+			"index.md": "# Index\n\nsee [[deploy-runbook#Rollback]] when it breaks\n",
+			"deploy-runbook.md": "# Deploying and rolling back\n\n## Setup\n\nsetup body\n\n" +
+				"## Rollback\n\ndrain the node first\n",
 		})
 		defer failShot(t, d)
 
 		openFilesTab(t, d)
 		clickReady(t, d, `#g-files .g-tree-note[data-note="index.md"]`)
 		waitTextContains(t, d, "#g-preview-body", "when it breaks")
-		// The link carries the heading as a fragment, note and heading each escaped.
-		waitVisible(t, d, `#g-preview-body a[href="grimoire-note:Deploy#Rollback"]`)
-		// Its label reads "note › heading", the form the search hits use.
-		waitTextContains(t, d, `#g-preview-body a[href="grimoire-note:Deploy#Rollback"]`, "Deploy › Rollback")
+		// The href carries the target as written, note and heading each escaped.
+		waitVisible(t, d, link)
+		// The label reads "title › heading" — the note's heading, not its file name.
+		waitTextContains(t, d, link, "Deploying and rolling back › Rollback")
 
-		clickReady(t, d, `#g-preview-body a[href="grimoire-note:Deploy#Rollback"]`)
+		clickReady(t, d, link)
 		waitTextContains(t, d, "#g-preview-body", "drain the node first")
-		waitTextContains(t, d, ".g-tab-active .g-tab-title", "Deploy")
+		waitTextContains(t, d, ".g-tab-active .g-tab-title", "deploy-runbook")
 		// The breadcrumb names the section, so the jump happened rather than
 		// leaving the reader at the top of the note.
 		waitTextContains(t, d, "#g-preview-section", "Rollback")

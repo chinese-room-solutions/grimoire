@@ -107,7 +107,8 @@ Cite a specific claim with the section form — it lands the reader on the
 paragraph you meant instead of the top of a long note; keep the bare form for
 linking a note as a whole. The heading is one heading's own text, not a path of
 nested ones, and has to match the target verbatim: `note get` it first when
-you're unsure.
+you're unsure. Target the file name and skip the alias — the link already
+displays the note's own title, so an alias restating it only goes stale.
 
 ## Deleting
 

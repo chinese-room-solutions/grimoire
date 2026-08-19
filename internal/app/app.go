@@ -1339,6 +1339,53 @@ func (s *Service) ResolveNote(target string) (string, bool) {
 	return "", false
 }
 
+// NoteTitle returns the display title of the note a wikilink target names: the
+// note's own first heading, else its file name. The heading is what the author
+// wrote, so it reads better than the file name a link is written with
+// ("resource-limits" → "Requests, limits, and QoS") and doesn't have to guess at
+// an acronym's casing the way un-slugifying would. ok is false when the target
+// names no note.
+func (s *Service) NoteTitle(target string) (string, bool) {
+	rel, ok := s.ResolveNote(target)
+	if !ok {
+		return "", false
+	}
+	source, err := s.ReadNote(rel)
+	if err != nil {
+		return "", false
+	}
+	if h := firstHeading(source); h != "" {
+		return h, true
+	}
+	return trimMarkdownExt(filepath.Base(rel)), true
+}
+
+// firstHeading is a note's first ATX heading text, or "" when it has none.
+// Frontmatter is dropped first, and fenced blocks are skipped so a comment like
+// "# usage" in an opening code sample can't pass for the note's title.
+func firstHeading(source string) string {
+	_, body := frontmatter.Split(source)
+	fenced := false
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			fenced = !fenced
+			continue
+		}
+		if fenced || !strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		level := 0
+		for level < len(trimmed) && trimmed[level] == '#' {
+			level++
+		}
+		if level <= 6 && level < len(trimmed) && trimmed[level] == ' ' {
+			return strings.TrimSpace(trimmed[level:])
+		}
+	}
+	return ""
+}
+
 // notePaths returns the vault's Markdown note paths (vault-relative, slash-form,
 // in WalkDir's lexical order), rebuilding the cached list when it has been
 // invalidated. The walk runs without any lock held; if an invalidation lands

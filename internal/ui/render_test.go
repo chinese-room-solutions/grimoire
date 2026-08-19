@@ -459,6 +459,64 @@ func withRunResults(nr NoteRenderer, want map[string]RunResult) NoteRenderer {
 	return nr
 }
 
+// A wikilink shows the target note's own title, so a link written against a
+// slugged file name reads as prose. The href keeps the target as written — it is
+// what the click handler resolves by.
+func TestRenderNoteBodyUsesTheTargetsTitle(t *testing.T) {
+	titles := map[string]string{
+		"resource-limits": "Requests, limits, and QoS",
+		"tls":             "TLS",
+	}
+	nr := NoteRenderer{NoteTitle: func(target string) (string, bool) {
+		title, ok := titles[target]
+		return title, ok
+	}}
+
+	tests := []struct {
+		name, in string
+		contains []string
+	}{
+		{
+			"the title replaces the file name",
+			"see [[resource-limits]]",
+			[]string{`href="` + NoteLinkScheme + `resource-limits"`, ">Requests, limits, and QoS</a>"},
+		},
+		{
+			"a section link titles only its note half",
+			"see [[resource-limits#Limits]]",
+			[]string{
+				`href="` + NoteLinkScheme + `resource-limits#Limits"`,
+				">Requests, limits, and QoS › Limits</a>",
+			},
+		},
+		{"an acronym is not re-cased", "see [[tls#Certificates]]", []string{">TLS › Certificates</a>"}},
+		{
+			"an alias still wins over the title",
+			"see [[resource-limits|the limits note]]",
+			[]string{">the limits note</a>"},
+		},
+		{
+			"a target with no title is shown as written",
+			"see [[scratch#Notes]]",
+			[]string{`href="` + NoteLinkScheme + `scratch#Notes"`, ">scratch › Notes</a>"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RenderNoteBody(nr, tc.in, "")
+			for _, want := range tc.contains {
+				require.Contains(t, got, want)
+			}
+		})
+	}
+}
+
+// Without a lookup (the search-snippet render) a wikilink keeps the target as
+// written, rather than guessing at a title the renderer cannot ask for.
+func TestFlattenWikilinksKeepsTheTargetAsWritten(t *testing.T) {
+	require.Equal(t, "see resource-limits › Limits", flattenWikilinks("see [[resource-limits#Limits]]"))
+}
+
 func TestRenderNoteBodyRehydratesStoredOutput(t *testing.T) {
 	nr := kernelStub()
 	// Block one has a stored result; block two doesn't.

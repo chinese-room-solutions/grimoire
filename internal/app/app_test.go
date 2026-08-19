@@ -642,6 +642,42 @@ func TestResolveNote(t *testing.T) {
 	}
 }
 
+// A wikilink displays the target note's own title, so the label reads as the
+// author wrote it rather than as the file is named.
+func TestNoteTitle(t *testing.T) {
+	vault := t.TempDir()
+	write := func(name, body string) {
+		require.NoError(t, os.WriteFile(filepath.Join(vault, name), []byte(body), 0o644))
+	}
+	write("resource-limits.md", "---\ntags: [k8s]\n---\n\n# Requests, limits, and QoS\n\nbody\n")
+	write("tls.md", "# TLS\n\nbody\n")
+	write("Deep Heading.md", "some prose first\n\n## Only a sub-heading\n")
+	write("no-heading.md", "just prose, no heading at all\n")
+	write("fenced-first.md", "```sh\n# not a title\n```\n\n# The real title\n")
+	s := &Service{cfg: appconfig.Config{Vault: vault}}
+
+	tests := []struct {
+		name, target, want string
+		ok                 bool
+	}{
+		{"first heading wins over the file name", "resource-limits", "Requests, limits, and QoS", true},
+		{"an acronym keeps its own casing", "tls", "TLS", true},
+		{"any level counts, not just h1", "Deep Heading", "Only a sub-heading", true},
+		{"no heading falls back to the file name", "no-heading", "no-heading", true},
+		{"a comment in an opening fence is not the title", "fenced-first", "The real title", true},
+		{"a heading target names the same note", "resource-limits#Limits", "Requests, limits, and QoS", true},
+		{"an alias target names the same note", "tls|shown", "TLS", true},
+		{"an unknown target has no title", "Nope", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := s.NoteTitle(tc.target)
+			require.Equal(t, tc.ok, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // TestResolveNoteCacheInvalidation pins the resolver's cache contract: every
 // in-app path change (here a rename) and every watcher-reported external change
 // drops the cached walk, so a resolve never serves a path the service itself
