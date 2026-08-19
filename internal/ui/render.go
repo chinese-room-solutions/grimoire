@@ -1613,7 +1613,8 @@ var styleBlock = `<style>
    default Sessions tab nor the empty home flashes before the restore swaps them
    in (set pre-paint and cleared by JS once restore completes). */
 #app-grimoire.g-prepaint-hide{visibility:hidden}
-#app-grimoire .g-preview{position:absolute;inset:0;background:var(--mass-bg-base);z-index:25;display:flex;flex-direction:column}
+#app-grimoire .g-preview{position:absolute;inset:0;background:var(--mass-bg-base);z-index:25;display:none;flex-direction:column}
+#app-grimoire .g-preview.g-preview-open{display:flex}
 #app-grimoire .g-preview-head{display:flex;align-items:center;gap:0.75rem;box-sizing:border-box;flex-shrink:0;height:var(--g-head-h);padding:0 1.25rem 0 2rem;border-bottom:1px solid var(--mass-border)}
 /* The header action icons (save-all/remove-all/edit/close) sit in a tight cluster
    so they read as one control group, not spread across the bar by the header's

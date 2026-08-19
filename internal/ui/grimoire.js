@@ -1159,9 +1159,9 @@
     }
 
     new MutationObserver(mark).observe(tree, { childList: true, subtree: true });
-    // The preview's display flips with gPreviewOpen (data-show) and its body
-    // changes when a different note loads — both are cues to re-mark.
-    new MutationObserver(mark).observe(preview, { attributes: true, attributeFilter: ["style"] });
+    // The preview's g-preview-open class flips as notes open and close, and its
+    // body changes when a different note loads — both are cues to re-mark.
+    new MutationObserver(mark).observe(preview, { attributes: true, attributeFilter: ["class"] });
     var pbody = getEl("g-preview-body");
     if (pbody) new MutationObserver(mark).observe(pbody, { childList: true });
     mark();
@@ -2027,16 +2027,14 @@
       if (sessions) sessions.querySelectorAll(".g-session-active").forEach(function (r) { r.classList.remove("g-session-active"); });
     }
 
-    // hidePreview closes the note overlay without it being a user "close" (the ×
-    // handler bails while suppressClose is set), so focusing a session/graph/empty
-    // tab can hide the preview underneath without side effects.
-    var suppressClose = false;
-    function hidePreview() {
-      if (panel && panel.style.display === "none") return;
-      suppressClose = true;
-      if (closeBtn) closeBtn.click(); // $gPreviewOpen = false.
-      suppressClose = false;
-    }
+    // showPreview/hidePreview reveal the note overlay by toggling a plain class —
+    // synchronous and deterministic, the same treatment setGraph gives the graph
+    // overlay. (It used the reactive gPreviewOpen signal, patched by the server
+    // once the note had been read; on WebKit that round-trip could lose, leaving a
+    // restored note tab focused over a hidden panel until another reload.)
+    function previewVisible() { return !!panel && panel.classList.contains("g-preview-open"); }
+    function showPreview() { if (panel) panel.classList.add("g-preview-open"); }
+    function hidePreview() { if (panel) panel.classList.remove("g-preview-open"); }
     // setGraph shows/hides the similarity-graph overlay by toggling a plain class —
     // synchronous and deterministic. (It used a Datastar data-show signal via hidden
     // buttons, but that build's reactive display churn left the overlay flickering
@@ -2159,7 +2157,11 @@
       var preview = getEl("g-preview");
       if (preview) preview.classList.toggle("g-preview-readonly", (t.ref || "").indexOf(".trash/") === 0);
       if (editorAPI) editorAPI.closeUnless(t.ref); // a different note opens for reading.
-      trigger.click(); // server fills #g-preview-body.
+      showPreview();  // the panel is ours to show; the server only fills it.
+      // Fire on the next frame so Datastar has committed gPreviewPath — a
+      // synchronous click can post the previous value, and the handler answers a
+      // blank path with nothing at all (see fireWithSignal).
+      requestAnimationFrame(function () { trigger.click(); }); // server fills #g-preview-body.
       var c = tabCache[t.id];
       scrollGen += 1;
       if (c && typeof c.scrollTop === "number" && !(t.pendingHeading)) {
@@ -2179,8 +2181,7 @@
     // cached scroll position — the scroll mirror of scrollToHeading.
     function restoreScroll(top, gen, tries) {
       if (gen !== scrollGen) return;
-      var visible = panel && panel.style.display !== "none";
-      if (visible && body) { body.scrollTop = top; return; }
+      if (previewVisible() && body) { body.scrollTop = top; return; }
       if (tries > 0) requestAnimationFrame(function () { restoreScroll(top, gen, tries - 1); });
     }
 
@@ -2901,7 +2902,7 @@
     function scrollToHeading(heading, gen, tries) {
       if (gen !== scrollGen) return; // superseded by a newer open.
       var want = heading.trim().toLowerCase();
-      var visible = panel && panel.style.display !== "none";
+      var visible = previewVisible();
       if (want && body && visible) {
         var heads = body.querySelectorAll("h1,h2,h3,h4,h5,h6");
         for (var i = 0; i < heads.length; i++) {
@@ -2982,11 +2983,10 @@
       stepHistory(e.button === 3 ? -1 : 1);
     });
 
-    // The preview × closes the focused tab (a note tab). suppressClose guards the
-    // programmatic hidePreview() so it isn't treated as a user close.
+    // The preview × closes the focused tab (a note tab); render() then hides the
+    // panel for whatever tab takes focus.
     if (closeBtn) {
       closeBtn.addEventListener("click", function () {
-        if (suppressClose) return;
         if (focusedID !== null) close(focusedID);
       });
     }
@@ -3033,8 +3033,7 @@
     var current = -1;
 
     function previewOpen() {
-      // Datastar drives #g-preview's display via data-show; "" / non-"none" = open.
-      return preview.style.display !== "none";
+      return preview.classList.contains("g-preview-open");
     }
     function clearHighlights() {
       CSS.highlights.delete("g-find");

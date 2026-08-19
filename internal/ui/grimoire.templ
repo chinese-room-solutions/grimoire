@@ -307,8 +307,11 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 				@ConversationPanel(nil)
 			</div>
 
-			<!-- Note preview: slides over the stream when a source is clicked. -->
-			<div id="g-preview" class="g-preview" data-show="$gPreviewOpen">
+			<!-- Note preview: slides over the stream when a source is clicked. Its
+			     visibility is a plain class the workspace toggles (like the graph
+			     overlay), not a reactive data-show — the panel is layout-critical,
+			     and a signal round-trip left it hidden on a WebKit reload. -->
+			<div id="g-preview" class="g-preview">
 				<div class="g-preview-head">
 					<div class="g-preview-nav">
 						<sl-icon-button id="g-preview-back" name="arrow-left" title="Back" style="font-size:1rem"></sl-icon-button>
@@ -336,7 +339,7 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 						     stored output (JS toggles g-has-results on the preview). -->
 						<sl-icon-button id="g-rundeleteall-btn" class="g-rundeleteall-btn" name="trash" title="Remove all run results" style="font-size:1rem"></sl-icon-button>
 						<sl-icon-button id="g-edit-toggle" name="pencil" title="Edit note" style="font-size:1rem"></sl-icon-button>
-						<sl-icon-button name="x-lg" class="g-preview-close" data-on:click="$gPreviewOpen = false" style="font-size:1rem"></sl-icon-button>
+						<sl-icon-button name="x-lg" class="g-preview-close" style="font-size:1rem"></sl-icon-button>
 					</span>
 				</div>
 				<!-- In-note find bar (Ctrl+F while the preview is open). Searches and
