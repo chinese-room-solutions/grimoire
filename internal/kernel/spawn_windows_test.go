@@ -10,19 +10,16 @@ import (
 
 // stubOnlyPath puts a fake bash.exe under a WindowsApps dir (the Store stub's
 // signature), points PATH at it alone, and clears the roots findGitBash probes.
-// It returns the stub's path.
-func stubOnlyPath(t *testing.T) string {
+func stubOnlyPath(t *testing.T) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "WindowsApps")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
-	stub := filepath.Join(dir, "bash.exe")
-	require.NoError(t, os.WriteFile(stub, nil, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bash.exe"), nil, 0o755))
 	t.Setenv("PATH", dir)
 	t.Setenv("PATHEXT", ".EXE")
 	for _, env := range []string{"ProgramFiles", "ProgramFiles(x86)", "LocalAppData"} {
 		t.Setenv(env, "")
 	}
-	return stub
 }
 
 // TestLookExeRefusesStubOnly is the box with WSL/Store bash and no Git Bash:
