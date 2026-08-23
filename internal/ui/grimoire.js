@@ -3067,15 +3067,38 @@
     var matches = []; // Range per match, in document order.
     var current = -1;
 
+    // The two highlight sets are registered once and mutated in place, so a
+    // repaint only ever has to reconcile their ranges — not a registry entry
+    // coming and going.
+    var allHits = new Highlight();
+    var currentHit = new Highlight();
+    CSS.highlights.set("g-find", allHits);
+    CSS.highlights.set("g-find-current", currentHit);
+
+    // WebKit (the macOS WKWebView) doesn't invalidate what a ::highlight() range
+    // has already painted: dropping or narrowing the ranges leaves the old bands
+    // on screen until a reload, so a query typed a character at a time
+    // accumulates every prefix's highlights. Putting the note on its own paint
+    // layer and taking it off again forces the repaint WebKit skips. The nudge
+    // has to survive a paint to invalidate anything, hence the two frames —
+    // undoing it in the first one would coalesce away without ever painting.
+    function repaint() {
+      body.style.opacity = "0.999";
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { body.style.opacity = ""; });
+      });
+    }
+
     function previewOpen() {
       return preview.classList.contains("g-preview-open");
     }
     function clearHighlights() {
-      CSS.highlights.delete("g-find");
-      CSS.highlights.delete("g-find-current");
+      allHits.clear();
+      currentHit.clear();
       matches = [];
       current = -1;
       count.textContent = "";
+      repaint();
     }
     // Collect ranges for every case-insensitive occurrence of q in the note.
     function findRanges(q) {
@@ -3098,12 +3121,11 @@
       return ranges;
     }
     function paint() {
-      var all = new Highlight();
-      for (var i = 0; i < matches.length; i++) all.add(matches[i]);
-      CSS.highlights.set("g-find", all);
-      var cur = new Highlight();
-      if (current >= 0) cur.add(matches[current]);
-      CSS.highlights.set("g-find-current", cur);
+      allHits.clear();
+      for (var i = 0; i < matches.length; i++) allHits.add(matches[i]);
+      currentHit.clear();
+      if (current >= 0) currentHit.add(matches[current]);
+      repaint();
     }
     function update() {
       matches = findRanges(input.value.trim());
