@@ -327,7 +327,7 @@ func TestWrapCodeBlocks(t *testing.T) {
 		{
 			"a single pre is wrapped and gets a button",
 			"<p>x</p><pre><code>a</code></pre>",
-			[]string{`<div class="g-code-block"><pre><code>a</code></pre><sl-icon-button class="g-code-copy"`, "<p>x</p>"},
+			[]string{`<div class="g-code-block"><pre><code>a</code></pre><div class="g-code-controls"><sl-icon-button class="g-code-copy"`, "<p>x</p>"},
 			nil,
 		},
 		{

@@ -426,7 +426,7 @@ func wrapCodeBlocksWithRuns(
 			// An indented code block: copyable, but no id and no run plumbing. The
 			// app only knows fenced blocks, so numbering this one would shift every
 			// later block's id away from the index a run targets.
-			return `<div class="g-code-block">` + block + copyBtn + `</div>`
+			return `<div class="g-code-block">` + block + controls(copyBtn) + `</div>`
 		}
 		i++
 		lang := ""
@@ -450,13 +450,13 @@ func wrapCodeBlocksWithRuns(
 		id := strconv.Itoa(i)
 		if !runnable {
 			if lang == "" {
-				return `<div class="g-code-block">` + block + copyBtn + `</div>`
+				return `<div class="g-code-block">` + block + controls(copyBtn) + `</div>`
 			}
 			// Dead end: the block names a language nothing here can run. Leave a
 			// slot the webview fills with an install CTA when the registry offers
 			// a kernel for it (the extensions module in grimoire.js); no match leaves
 			// it empty, and CSS hides it.
-			return `<div class="g-code-block" data-g-block="` + id + `">` + block + copyBtn +
+			return `<div class="g-code-block" data-g-block="` + id + `">` + block + controls(copyBtn) +
 				installSlot(lang) + `</div>`
 		}
 
@@ -486,8 +486,16 @@ func wrapCodeBlocksWithRuns(
 				panel = runResultPanelHTML(id, res)
 			}
 		}
-		return `<div class="g-code-block" data-g-block="` + id + `"` + kernelAttr + `>` + block + badge + runAboveBtn + runBtn + copyBtn + panel + `</div>`
+		return `<div class="g-code-block" data-g-block="` + id + `"` + kernelAttr + `>` + block +
+			controls(badge+runAboveBtn+runBtn+copyBtn) + panel + `</div>`
 	})
+}
+
+// controls pins a block's corner controls (badge, run buttons, copy) in one row,
+// so their spacing is the row's gap rather than a per-button offset and the row
+// centres itself against a one-line block.
+func controls(inner string) string {
+	return `<div class="g-code-controls">` + inner + `</div>`
 }
 
 // installSlot is the placeholder the point-of-use kernel install CTA renders
@@ -1709,25 +1717,25 @@ var styleBlock = `<style>
 #app-grimoire .markdown-body ol{list-style:decimal}
 #app-grimoire .markdown-body li{margin:0.2em 0;display:list-item}
 #app-grimoire .markdown-body code{background:var(--mass-bg-panel);padding:0.1em 0.35em;border-radius:0.25rem;font-size:0.85em}
-#app-grimoire .markdown-body pre{background:var(--mass-bg-panel);padding:0.8rem 1rem;border-radius:0.45rem;overflow-x:auto;border:1px solid var(--mass-border)}
+#app-grimoire .markdown-body pre{background:var(--mass-bg-panel);padding:0.45rem 0.65rem;border-radius:0.35rem;overflow-x:auto;border:1px solid var(--mass-border)}
 #app-grimoire .markdown-body pre code{background:none;padding:0}
 ` + codeHighlightCSS + `
 
 /* Code-block controls: copy, and (for runnable blocks) run / run-above, plus the
    kernel badge. All are always visible and fixed in place — no hover-to-reveal,
-   so the row doesn't shift under the cursor. The check tint confirms a copy. */
+   so the row doesn't shift under the cursor. The check tint confirms a copy.
+   The row is pinned to the block's top-right and centred over the first
+   max-height of it — one code line plus the pre's vertical padding. A tall block
+   keeps the controls near its top edge; a one-line block is shorter than the cap,
+   so they centre against its single line. */
 #app-grimoire .g-code-block{position:relative}
-#app-grimoire .g-code-copy{position:absolute;top:0.4rem;right:0.4rem;font-size:0.95rem;color:var(--mass-text-muted);background:var(--mass-bg-panel);border-radius:0.25rem;z-index:1}
+#app-grimoire .g-code-controls{position:absolute;top:0;right:0.35rem;height:100%;max-height:2.55rem;display:flex;align-items:center;gap:0.25rem;z-index:1}
+#app-grimoire .g-code-controls sl-icon-button{font-size:0.95rem;color:var(--mass-text-muted);background:var(--mass-bg-panel);border-radius:0.25rem}
+#app-grimoire .g-code-controls sl-icon-button::part(base){padding:0.2rem}
 #app-grimoire .g-code-copy.g-copied{color:var(--mass-success)}
-#app-grimoire .g-code-copy::part(base){padding:0.2rem}
-/* Run / Run-above buttons: sit left of the copy button. */
-#app-grimoire .g-code-run{position:absolute;top:0.4rem;right:2.2rem;font-size:0.95rem;color:var(--mass-text-muted);background:var(--mass-bg-panel);border-radius:0.25rem;z-index:1}
-#app-grimoire .g-code-run-above{position:absolute;top:0.4rem;right:4rem;font-size:0.95rem;color:var(--mass-text-muted);background:var(--mass-bg-panel);border-radius:0.25rem;z-index:1}
-#app-grimoire .g-code-run::part(base),#app-grimoire .g-code-run-above::part(base){padding:0.2rem}
-/* Kernel badge: a chip in the block's top-right showing which kernel will run it,
-   fixed left of the run buttons (which start at right:4rem). Muted so it doesn't
-   compete with the code. */
-#app-grimoire .g-code-kernel{position:absolute;top:0.45rem;right:5.8rem;font-size:0.68rem;line-height:1;padding:0.18rem 0.4rem;color:var(--mass-text-muted);background:var(--mass-bg-base);border:1px solid var(--mass-border);border-radius:0.35rem;user-select:none}
+/* Kernel badge: a chip naming the kernel that will run the block. Muted so it
+   doesn't compete with the code. */
+#app-grimoire .g-code-kernel{font-size:0.68rem;line-height:1;padding:0.18rem 0.4rem;color:var(--mass-text-muted);background:var(--mass-bg-base);border:1px solid var(--mass-border);border-radius:0.35rem;user-select:none;white-space:nowrap}
 /* Output panel under a runnable block: streamed stdout/stderr + a status footer. */
 /* Symmetric vertical padding reserves equal room top and bottom for the corner
    controls (run time top-right, save/discard/remove bottom-right) so they don't
