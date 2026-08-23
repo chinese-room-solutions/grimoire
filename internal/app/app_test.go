@@ -426,18 +426,18 @@ func TestRenameNote(t *testing.T) {
 	s := &Service{cfg: appconfig.Config{Vault: vault}}
 
 	t.Run("moves the note, adding the extension to the target", func(t *testing.T) {
-		path, err := s.RenameNote(context.Background(), "Old.md", "New")
+		res, err := s.RenameNote(context.Background(), "Old.md", "New")
 		require.NoError(t, err)
-		require.Equal(t, "New.md", path)
+		require.Equal(t, "New.md", res.Path)
 		require.NoFileExists(t, filepath.Join(vault, "Old.md"))
 		require.FileExists(t, filepath.Join(vault, "New.md"))
 	})
 
 	t.Run("moves a note into a folder, creating it as needed", func(t *testing.T) {
 		// This is the drag-move path: same basename, a different parent directory.
-		path, err := s.RenameNote(context.Background(), "New.md", "Sub/New.md")
+		res, err := s.RenameNote(context.Background(), "New.md", "Sub/New.md")
 		require.NoError(t, err)
-		require.Equal(t, "Sub/New.md", path)
+		require.Equal(t, "Sub/New.md", res.Path)
 		require.NoFileExists(t, filepath.Join(vault, "New.md"))
 		require.FileExists(t, filepath.Join(vault, "Sub", "New.md"))
 	})
@@ -451,6 +451,68 @@ func TestRenameNote(t *testing.T) {
 		_, err := s.RenameNote(context.Background(), "New.md", "../escape")
 		require.ErrorIs(t, err, ErrOutsideVault)
 	})
+}
+
+// A rename retargets the vault's inbound wikilinks, so no link is left dangling
+// — every link form follows the note, code is left as code, and the counts
+// report what actually changed on disk.
+func TestRenameNoteRetargetsLinks(t *testing.T) {
+	vault := t.TempDir()
+	write := func(rel, body string) {
+		full := filepath.Join(vault, filepath.FromSlash(rel))
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
+		require.NoError(t, os.WriteFile(full, []byte(body), 0o644))
+	}
+	read := func(rel string) string {
+		data, err := os.ReadFile(filepath.Join(vault, filepath.FromSlash(rel)))
+		require.NoError(t, err)
+		return string(data)
+	}
+	write("notes/Old Name.md", "# Old Name\n\nsee also [[Old Name]] (itself)\n")
+	write("bare.md", "---\nlink: \"[[Old Name]]\"\n---\n\nsee [[Old Name]] and [[old name#Setup]] and [[Old Name|the note]]\n")
+	write("embed.md", "![[Old Name]]\n")
+	write("pathform.md", "see [[notes/Old Name]]\n")
+	write("code.md", "```sh\ngrep [[Old Name]] x\n```\n\nand `[[Old Name]]` inline\n")
+	write("plain.md", "no links at all\n")
+	write("prefix.md", "see [[Old Name Extra]]\n")
+	write("Old Name Extra.md", "# a different note sharing the prefix\n")
+	s := &Service{cfg: appconfig.Config{Vault: vault}}
+
+	res, err := s.RenameNote(context.Background(), "notes/Old Name.md", "notes/New Name.md")
+	require.NoError(t, err)
+	require.Equal(t, "notes/New Name.md", res.Path)
+	// 6 links: 3 in bare.md's body (the frontmatter one is a property, not a
+	// link), 1 embed, 1 path form, and the renamed note's link to itself — across
+	// 4 notes.
+	require.Equal(t, 6, res.LinksUpdated)
+	require.Equal(t, 4, res.NotesUpdated)
+
+	require.Contains(t, read("bare.md"), "see [[New Name]] and [[New Name#Setup]] and [[New Name|the note]]\n")
+	require.Contains(t, read("bare.md"), "link: \"[[Old Name]]\"") // frontmatter untouched.
+	require.Equal(t, "![[New Name]]\n", read("embed.md"))
+	require.Equal(t, "see [[notes/New Name]]\n", read("pathform.md"))
+	require.Contains(t, read("notes/New Name.md"), "see also [[New Name]] (itself)")
+	require.Equal(t, "```sh\ngrep [[Old Name]] x\n```\n\nand `[[Old Name]]` inline\n", read("code.md"))
+	require.Equal(t, "no links at all\n", read("plain.md"))
+	require.Equal(t, "see [[Old Name Extra]]\n", read("prefix.md"))
+}
+
+// Moving a note into a folder leaves the notes that link to it by name alone —
+// a bare name still resolves — so nothing is rewritten and nothing is counted.
+func TestRenameNoteKeepsBareLinksOnAMove(t *testing.T) {
+	vault := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(vault, "Note.md"), []byte("# n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(vault, "linker.md"), []byte("see [[Note]]\n"), 0o644))
+	s := &Service{cfg: appconfig.Config{Vault: vault}}
+
+	res, err := s.RenameNote(context.Background(), "Note.md", "Sub/Note.md")
+	require.NoError(t, err)
+	require.Zero(t, res.LinksUpdated)
+	require.Zero(t, res.NotesUpdated)
+
+	data, err := os.ReadFile(filepath.Join(vault, "linker.md"))
+	require.NoError(t, err)
+	require.Equal(t, "see [[Note]]\n", string(data))
 }
 
 func TestCreateFolder(t *testing.T) {

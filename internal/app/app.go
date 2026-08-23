@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -41,6 +42,7 @@ import (
 	"github.com/chinese-room-solutions/grimoire/internal/session"
 	"github.com/chinese-room-solutions/grimoire/internal/store"
 	"github.com/chinese-room-solutions/grimoire/internal/uistate"
+	"github.com/chinese-room-solutions/grimoire/internal/wikilink"
 	"github.com/chinese-room-solutions/grimoire/pkg/officedoc"
 	"github.com/chinese-room-solutions/mass-sdk/fsutil"
 	"github.com/rs/zerolog"
@@ -756,32 +758,59 @@ func (s *Service) WriteNote(ctx context.Context, rel, source string) error {
 	return nil
 }
 
-// ErrEditNotFound is returned by ReplaceInBody when oldText doesn't occur in the
-// note's body; ErrEditAmbiguous when it occurs more than once. Both mean the edit
-// was rejected without touching the note — the caller must supply a unique anchor.
+// Edit is one surgical replacement in a note's Markdown body: Old is the anchor
+// to replace, New what replaces it. A sequence of them is applied in order, each
+// against the body as the previous ones left it.
+type Edit struct {
+	Old string `json:"old_text"`
+	New string `json:"new_text"`
+}
+
+// ErrEditNotFound is returned by ReplaceInBody when an edit's anchor doesn't
+// occur in the note's body; ErrEditAmbiguous when it occurs more than once;
+// ErrNoEdits when no edit was given at all. All mean the note was left
+// untouched — the caller must supply a unique anchor.
 var (
 	ErrEditNotFound  = errors.New("old text not found in note body")
 	ErrEditAmbiguous = errors.New("old text occurs more than once in note body")
+	ErrNoEdits       = errors.New("no edits given")
 )
 
-// ReplaceInBody applies a surgical string replacement to a note's Markdown body:
-// oldText must occur exactly once (so the edit is unambiguous) and is replaced by
-// newText; the frontmatter is left untouched. The read, check, and atomic write
-// happen as one serialized span (writeMu), so a concurrent edit can't slip in
-// between the read and the write and get lost.
-func (s *Service) ReplaceInBody(ctx context.Context, rel, oldText, newText string) error {
+// editError tags a rejected edit with which pair failed, in the message (so the
+// caller can relay it) and in the error context (so a log carries the anchor).
+func editError(sentinel error, rel string, i int, edit Edit) error {
+	return ctxerr.With(
+		fmt.Errorf("edit %d: %w", i+1, sentinel),
+		map[string]any{"note": rel, "edit": i, "old": edit.Old},
+	)
+}
+
+// ReplaceInBody applies surgical string replacements to a note's Markdown body,
+// in order: each edit's Old must occur exactly once in the body as the preceding
+// edits left it (so the edit is unambiguous, and a later edit may anchor on text
+// an earlier one wrote) and is replaced by its New; the frontmatter is left
+// untouched. The read, checks, and atomic write happen as one serialized span
+// (writeMu), so the whole sequence lands or none of it does, and a concurrent
+// edit can't slip in between the read and the write and get lost.
+func (s *Service) ReplaceInBody(ctx context.Context, rel string, edits []Edit) error {
+	if len(edits) == 0 {
+		return ctxerr.With(ErrNoEdits, map[string]any{"note": rel})
+	}
 	var newBody string
 	err := s.rewriteNote(rel, func(current string) (string, error) {
 		_, body := frontmatter.Split(current)
-		switch strings.Count(body, oldText) {
-		case 0:
-			return "", ctxerr.With(ErrEditNotFound, map[string]any{"note": rel})
-		case 1:
-			// unique anchor — proceed.
-		default:
-			return "", ctxerr.With(ErrEditAmbiguous, map[string]any{"note": rel})
+		for i, e := range edits {
+			switch strings.Count(body, e.Old) {
+			case 0:
+				return "", editError(ErrEditNotFound, rel, i, e)
+			case 1:
+				// unique anchor — proceed.
+			default:
+				return "", editError(ErrEditAmbiguous, rel, i, e)
+			}
+			body = strings.Replace(body, e.Old, e.New, 1)
 		}
-		newBody = strings.Replace(body, oldText, newText, 1)
+		newBody = body
 		return frontmatter.ReplaceBody(current, newBody), nil
 	})
 	if err != nil {
@@ -1140,30 +1169,119 @@ func (s *Service) DeleteNote(ctx context.Context, rel string) error {
 	return nil
 }
 
+// RenameResult is a rename's outcome: the slash path the note was written to,
+// and how many inbound [[wikilinks]] were retargeted at it — LinksUpdated links
+// across NotesUpdated notes (both zero when nothing pointed at the note).
+type RenameResult struct {
+	Path         string
+	NotesUpdated int
+	LinksUpdated int
+}
+
 // RenameNote moves a note to a new vault-relative path (e.g. for an inline
 // rename), creating parent folders as needed, and reindexes both paths — the old
 // key is pruned, the new one indexed. The ".md" extension is added to the target
-// if missing. It never overwrites an existing note (ErrNoteExists). Returns the
-// slash path actually written.
-func (s *Service) RenameNote(ctx context.Context, oldRel, newRel string) (string, error) {
+// if missing. It never overwrites an existing note (ErrNoteExists).
+//
+// Every [[wikilink]] in the vault that pointed at the note follows it: the links
+// are retargeted in place after the move (see retargetLinks), so a rename never
+// leaves dangling links behind. Wikilinks inside code blocks and code spans are
+// left alone.
+func (s *Service) RenameNote(ctx context.Context, oldRel, newRel string) (RenameResult, error) {
 	newRel = ensureMarkdownExt(newRel)
 	oldClean, err := s.vaultPath(oldRel)
 	if err != nil {
-		return "", err
+		return RenameResult{}, err
 	}
 	newClean, err := s.vaultPath(newRel)
 	if err != nil {
-		return "", err
+		return RenameResult{}, err
 	}
 	if newClean == oldClean {
-		return filepath.ToSlash(newRel), nil // no-op rename.
+		return RenameResult{Path: filepath.ToSlash(newRel)}, nil // no-op rename.
 	}
+	// The vault as it stood before the move: a link is inbound exactly when it
+	// resolved to the old path then, which nothing can answer once the file has
+	// moved.
+	s.mu.Lock()
+	vault := s.cfg.Vault
+	s.mu.Unlock()
+	before := s.notePaths(vault)
+
 	if err := s.renameNoteFile(oldRel, newRel, oldClean, newClean); err != nil {
-		return "", err
+		return RenameResult{}, err
 	}
 	s.reindexNote(oldRel)
 	s.reindexNote(newRel)
-	return filepath.ToSlash(newRel), nil
+
+	res := RenameResult{Path: filepath.ToSlash(newRel)}
+	res.NotesUpdated, res.LinksUpdated = s.retargetLinks(vault, before, oldRel, newRel)
+	return res, nil
+}
+
+// retargetLinks points the vault's [[wikilinks]] at a note that has just moved
+// from oldRel to newRel, and reports how many notes it rewrote and how many
+// links in them. before is the note list as it stood ahead of the move, so a
+// link counts as inbound exactly when ResolveNote would have resolved it to the
+// old path (resolveNoteIn is that same rule). The renamed note is walked like
+// any other — a note may link to itself. Only note bodies are rewritten, and
+// within them only links outside code blocks and code spans. Each rewrite goes
+// through rewriteNote, so it is serialized and atomic like every other note
+// edit, and every note actually changed is reindexed.
+//
+// Best effort by design: the file has already moved, so a note that can't be
+// read or written is logged and skipped rather than failing or undoing the
+// rename. The counts report only what was rewritten.
+func (s *Service) retargetLinks(vault string, before []string, oldRel, newRel string) (notes, links int) {
+	oldPath := filepath.ToSlash(oldRel)
+	matches := func(target string) bool {
+		rel, ok := resolveNoteIn(before, target)
+		return ok && strings.EqualFold(rel, oldPath)
+	}
+	newPath := trimMarkdownExt(filepath.ToSlash(newRel))
+	newName := path.Base(newPath)
+	// Only the body is rewritten: a target in the frontmatter is a property value,
+	// not a link the reader follows, and rewriting it would edit the note's data.
+	retarget := func(source string) (string, int) {
+		_, body := frontmatter.Split(source)
+		updated, n := wikilink.Retarget(body, newName, newPath, matches)
+		if n == 0 {
+			return source, 0
+		}
+		return frontmatter.ReplaceBody(source, updated), n
+	}
+
+	for _, rel := range s.notePaths(vault) {
+		// Which notes to touch at all is decided on this read: rewriteNote always
+		// writes, so rewriting unconditionally would restamp every note in the
+		// vault. The rewrite then redoes the retarget against the content it read
+		// under the lock, so a concurrent edit isn't overwritten from a stale read.
+		source, err := s.ReadNote(rel)
+		if err != nil {
+			s.logger.Warn().Err(err).Str("note", rel).Msg("reading note to retarget its wikilinks")
+			continue
+		}
+		if _, n := retarget(source); n == 0 {
+			continue
+		}
+		changed := 0
+		err = s.rewriteNote(rel, func(current string) (string, error) {
+			updated, n := retarget(current)
+			changed = n
+			return updated, nil
+		})
+		if err != nil {
+			s.logger.Warn().Err(err).Str("note", rel).Msg("retargeting wikilinks after a rename")
+			continue
+		}
+		if changed == 0 {
+			continue // a concurrent edit took the links out between the two reads.
+		}
+		notes++
+		links += changed
+		s.reindexNote(rel)
+	}
+	return notes, links
 }
 
 // renameNoteFile is RenameNote's serialized filesystem span: the existence check,
@@ -1311,7 +1429,13 @@ func (s *Service) ResolveNote(target string) (string, bool) {
 	if vault == "" {
 		return "", false
 	}
+	return resolveNoteIn(s.notePaths(vault), target)
+}
 
+// resolveNoteIn is ResolveNote's matching rule against a given list of
+// vault-relative note paths, so a caller holding its own snapshot of the vault
+// (RenameNote's pre-move walk) resolves exactly the way the live resolver does.
+func resolveNoteIn(paths []string, target string) (string, bool) {
 	name := target
 	if i := strings.IndexByte(name, '|'); i >= 0 { // drop "|alias".
 		name = name[:i]
@@ -1330,7 +1454,7 @@ func (s *Service) ResolveNote(target string) (string, bool) {
 		wantBase = wantBase[i+1:]
 	}
 
-	for _, rel := range s.notePaths(vault) {
+	for _, rel := range paths {
 		slash := strings.ToLower(rel)
 		if trimMarkdownExt(slash) == wantPath || trimMarkdownExt(filepath.Base(slash)) == wantBase {
 			return rel, true

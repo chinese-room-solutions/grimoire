@@ -86,16 +86,29 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
 
 ## Editing
 
-- `note edit PATH --old S --new S` is the default choice: one **exact, unique**
-  occurrence replaced, frontmatter untouched. Exit 3 = anchor absent, exit 4 =
-  anchor ambiguous; lengthen it and retry rather than guessing.
+- `note edit PATH --old S --new S [--old S --new S ...]` is the default choice:
+  an **exact, unique** occurrence replaced, frontmatter untouched. Both flags
+  repeat and pair up in the order given, so several edits ride in one command —
+  they apply in sequence as one atomic server-side span, so a later pair may
+  anchor on text an earlier one wrote, and if any pair is rejected the note is
+  left untouched. Exit 3 = anchor absent, exit 4 = anchor ambiguous; the message
+  names the pair (`edit 2: ...`), so lengthen that anchor and retry rather than
+  guessing.
 - `note update PATH` replaces the whole body (`--content S`, `-f FILE`, or
   stdin) — only when you mean to rewrite the note.
 - `note create PATH` takes the body the same three ways; `--overwrite` replaces
   instead of failing with exit 4.
 - `note props PATH --set key=v1,v2` replaces the frontmatter wholesale. Repeat
   `--set` per key; include the keys you want to keep.
-- `note rename FROM TO` moves a note (adds `.md`, creates parents).
+- `note rename FROM TO` moves a note (adds `.md`, creates parents) and retargets
+  every `[[wikilink]]` in the vault that pointed at it, so nothing is left
+  dangling — headings, aliases and `![[embeds]]` are kept, a link written as a
+  path stays a path, and brackets inside code blocks or code spans are left as
+  code. It prints `updated N wikilinks in M notes` (omitted when nothing linked
+  to the note); `--json` carries the same as `linksUpdated`/`notesUpdated`.
+  Don't hand-fix inbound links after a rename — only a link written inside a
+  note's frontmatter is left as it was, since a property value is data, not a
+  link the reader follows.
 - `note get PATH` prints raw Markdown and nothing else, so it pipes.
 
 ## Linking notes
@@ -107,8 +120,9 @@ Cite a specific claim with the section form — it lands the reader on the
 paragraph you meant instead of the top of a long note; keep the bare form for
 linking a note as a whole. The heading is one heading's own text, not a path of
 nested ones, and has to match the target verbatim: `note get` it first when
-you're unsure. Target the file name and skip the alias — the link already
-displays the note's own title, so an alias restating it only goes stale.
+you're unsure. Target the file name and skip the alias — a bare `[[Note]]`
+already displays the note's own title and a section link its file name, so an
+alias restating either only goes stale.
 
 ## Deleting
 
@@ -186,6 +200,9 @@ grimoire --vault ~/notes search "rrf"         # one vault
 grimoire --vault ~/notes resolve "Meeting Notes"
 grimoire --vault ~/notes note get projects/ideas.md
 grimoire --vault ~/notes note edit projects/ideas.md --old "TODO: bench" --new "Benchmarked: 45ms"
+grimoire --vault ~/notes note edit projects/ideas.md \
+  --old "status: draft" --new "status: done" \
+  --old "TODO: write up" --new "Written up"    # both land, or neither does
 grimoire --vault ~/notes note create archive/2026/log.md --content "# Log"
 grimoire --vault ~/notes --json vault tree
 grimoire --vault ~/notes import notes.docx paper.pdf   # pdf needs the convert model

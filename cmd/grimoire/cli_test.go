@@ -338,6 +338,8 @@ func TestCLINoteWriteExitCodes(t *testing.T) {
 		args     []string
 		wantExit int
 		wantBody string // canonical JSON of the recorded request body, "" to skip.
+		wantOut  string // exact stdout, "" to skip.
+		wantErr  string // substring of stderr, "" to skip.
 	}{
 		{
 			name: "create sends path/content/overwrite",
@@ -367,10 +369,55 @@ func TestCLINoteWriteExitCodes(t *testing.T) {
 			wantExit: exitError,
 		},
 		{
-			name:     "edit requires --old and --new",
+			name: "edit sends one pair as an edits array",
+			routes: map[string]http.HandlerFunc{
+				"PATCH /api/v1/note/edit": func(w http.ResponseWriter, _ *http.Request) {
+					stubJSON(t, w, map[string]string{"path": "n.md"})
+				},
+			},
+			args:     []string{"note", "edit", "n.md", "--old", "a", "--new", "b"},
+			wantExit: exitOK,
+			wantBody: `{"path":"n.md","edits":[{"old_text":"a","new_text":"b"}]}`,
+			wantOut:  "edited n.md\n",
+		},
+		{
+			name: "edit pairs repeated flags in the order given",
+			routes: map[string]http.HandlerFunc{
+				"PATCH /api/v1/note/edit": func(w http.ResponseWriter, _ *http.Request) {
+					stubJSON(t, w, map[string]string{"path": "n.md"})
+				},
+			},
+			args: []string{"note", "edit", "n.md",
+				"--old", "a", "--new", "b",
+				"--old", "c", "--new", "d",
+				"--old", "e", "--new", "f"},
+			wantExit: exitOK,
+			wantBody: `{"path":"n.md","edits":[` +
+				`{"old_text":"a","new_text":"b"},` +
+				`{"old_text":"c","new_text":"d"},` +
+				`{"old_text":"e","new_text":"f"}]}`,
+			wantOut: "edited n.md (3 edits)\n",
+		},
+		{
+			name:     "edit with a dangling --old is a usage error",
 			routes:   map[string]http.HandlerFunc{},
-			args:     []string{"note", "edit", "n.md", "--old", "a"},
+			args:     []string{"note", "edit", "n.md", "--old", "a", "--new", "b", "--old", "c"},
 			wantExit: exitUsage,
+			wantErr:  "2 --old and 1 --new",
+		},
+		{
+			name:     "edit with more --new than --old is a usage error",
+			routes:   map[string]http.HandlerFunc{},
+			args:     []string{"note", "edit", "n.md", "--old", "a", "--new", "b", "--new", "c"},
+			wantExit: exitUsage,
+			wantErr:  "1 --old and 2 --new",
+		},
+		{
+			name:     "edit with no pairs at all is a usage error",
+			routes:   map[string]http.HandlerFunc{},
+			args:     []string{"note", "edit", "n.md"},
+			wantExit: exitUsage,
+			wantErr:  "at least one --old/--new pair",
 		},
 		{
 			name: "rename takes dash-leading paths after --",
@@ -387,11 +434,17 @@ func TestCLINoteWriteExitCodes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b := newCLIBackend(t, tt.routes)
-			e, _, _ := b.env(t, false)
+			e, out, errBuf := b.env(t, false)
 			code := e.dispatch(tt.args)
 			require.Equal(t, tt.wantExit, code)
 			if tt.wantBody != "" {
 				require.JSONEq(t, tt.wantBody, b.lastBody)
+			}
+			if tt.wantOut != "" {
+				require.Equal(t, tt.wantOut, out.String())
+			}
+			if tt.wantErr != "" {
+				require.Contains(t, errBuf.String(), tt.wantErr)
 			}
 		})
 	}

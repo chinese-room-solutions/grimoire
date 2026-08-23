@@ -73,7 +73,7 @@ grimoire --vault PATH [--json] <command> [args]
 | Group | Commands |
 | --- | --- |
 | **search** | `search QUERY [-k N]` (across every vault at once) |
-| **note** | `note get PATH` · `note create PATH` · `note update PATH` · `note edit PATH --old S --new S` · `note delete PATH` · `note rename FROM TO` · `note props PATH --set key=v1,v2` |
+| **note** | `note get PATH` · `note create PATH` · `note update PATH` · `note edit PATH --old S --new S ...` · `note delete PATH` · `note rename FROM TO` (retargets the `[[wikilinks]]` that pointed at the note, code blocks excepted) · `note props PATH --set key=v1,v2` |
 | **vault** | `vault tree` · `vault list` · `vault current` · `vault forget PATH` |
 | **resolve** | `resolve TARGET` (a wikilink or bare name → a note path) |
 | **folder** | `folder create PATH` · `folder delete PATH` · `folder rename FROM TO` |

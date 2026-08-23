@@ -515,8 +515,8 @@ func TestUISmoke(t *testing.T) {
 	// it, and the preview's scroll-to-heading — the breadcrumb only fills in once
 	// the heading has actually been found and scrolled to.
 	t.Run("HeadingWikilinkOpensTheSection", func(t *testing.T) {
-		// The target's file name and its title differ on purpose: a link written
-		// against the slug has to read as the note's own heading.
+		// The target's file name and its title differ on purpose: a section link
+		// reads as the file name, so it names the same thing a search hit does.
 		const link = `#g-preview-body a[href="grimoire-note:deploy-runbook#Rollback"]`
 		_, d := boot(t, map[string]string{
 			"index.md": "# Index\n\nsee [[deploy-runbook#Rollback]] when it breaks\n",
@@ -530,8 +530,8 @@ func TestUISmoke(t *testing.T) {
 		waitTextContains(t, d, "#g-preview-body", "when it breaks")
 		// The href carries the target as written, note and heading each escaped.
 		waitVisible(t, d, link)
-		// The label reads "title › heading" — the note's heading, not its file name.
-		waitTextContains(t, d, link, "Deploying and rolling back › Rollback")
+		// The label reads "note › heading" against the file name, not the title.
+		waitTextContains(t, d, link, "deploy-runbook › Rollback")
 
 		clickReady(t, d, link)
 		waitTextContains(t, d, "#g-preview-body", "drain the node first")

@@ -180,10 +180,12 @@ func (c *Client) UpdateNote(ctx context.Context, path, content string) (grimoire
 	return out, err
 }
 
-// EditNote replaces oldText (which must occur exactly once) with newText in a
-// note's body. A missing anchor is a 404 APIError, an ambiguous one a 409.
-func (c *Client) EditNote(ctx context.Context, path, oldText, newText string) (grimoireapi.Note, error) {
-	body := map[string]any{"path": path, "old_text": oldText, "new_text": newText}
+// EditNote applies edits to a note's body in order, each anchor occurring
+// exactly once in the body as the preceding edits left it. They land as one
+// atomic span server-side. A missing anchor is a 404 APIError, an ambiguous one
+// a 409, both naming the pair that failed.
+func (c *Client) EditNote(ctx context.Context, path string, edits []grimoireapi.Edit) (grimoireapi.Note, error) {
+	body := map[string]any{"path": path, "edits": edits}
 	var out grimoireapi.Note
 	err := c.sendJSON(ctx, http.MethodPatch, "/note/edit", body, &out)
 	return out, err

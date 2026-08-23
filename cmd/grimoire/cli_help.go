@@ -56,10 +56,14 @@ Replace an existing note's body. Content carrying its own frontmatter block
 replaces the frontmatter too; content without one leaves it untouched.
 Prefer note edit for a small change — this resends the whole note.`},
 
-	{"note edit", "note edit PATH --old S --new S", "replace a unique string in a note", vaultRequired, `
-Replace one exact, unique occurrence of --old with --new, leaving the
-frontmatter alone. Exit 3 if --old is absent, exit 4 if it occurs more than
-once — lengthen the anchor and retry rather than guessing.`},
+	{"note edit", "note edit PATH --old S --new S [--old S --new S ...]", "replace unique strings in a note", vaultRequired, `
+Replace exact, unique occurrences of --old with --new, leaving the frontmatter
+alone. Both flags repeat and pair up in the order given, so one command can
+carry several edits; they apply in sequence as one atomic server-side span, so
+a later pair may anchor on text an earlier one wrote and a rejected pair leaves
+the note untouched. Exit 3 if an --old is absent, exit 4 if it occurs more than
+once — the message names the pair, so lengthen that anchor and retry rather
+than guessing.`},
 
 	{"note delete", "note delete PATH", "delete a note (to the trash)", vaultRequired, `
 Delete a note. It goes to the vault's trash, recoverable with trash restore,
@@ -70,7 +74,13 @@ The index is pruned before returning; a failed prune exits 1 with a warning.`},
 Move a note, creating parent folders as needed and adding .md if missing.
 It refuses to replace an existing note unless --overwrite, which displaces the
 occupant (to the trash when it is on). The index follows by itself:
-the old path is pruned, the new one indexed.`},
+the old path is pruned, the new one indexed.
+Every [[wikilink]] in the vault that pointed at the note is retargeted, so a
+rename leaves no dangling links: headings, aliases and ![[embeds]] are kept, a
+link written as a path stays a path, and brackets inside code blocks or code
+spans are left as code, as is a link written in a note's frontmatter (a property
+value is data, not a link). The second line reports how many links were
+rewritten in how many notes (omitted when nothing linked to the note).`},
 
 	{"note props", "note props PATH --set key=v1,v2", "replace a note's frontmatter (repeatable)", vaultRequired, `
 Replace a note's YAML frontmatter. Repeat --set per key; comma-separated values

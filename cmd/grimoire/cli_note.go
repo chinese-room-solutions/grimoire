@@ -240,32 +240,30 @@ func pastTense(verb string) string {
 	}
 }
 
-// runNoteEdit handles `grimoire note edit PATH --old S --new S`.
+// runNoteEdit handles `grimoire note edit PATH --old S --new S` — both flags
+// repeatable, paired up in the order given, applied as one atomic span.
 func (e *cliEnv) runNoteEdit(args []string) int {
 	fs := flag.NewFlagSet("note edit", flag.ContinueOnError)
-	oldText := fs.String("old", "", "the unique existing string to replace (required)")
-	newText := fs.String("new", "", "the replacement string")
-	oldSet, newSet := false, false
+	var olds, news multiFlag
+	fs.Var(&olds, "old", "a unique existing string to replace (repeat, paired with --new)")
+	fs.Var(&news, "new", "the replacement for the --old at the same position")
 	rest, ok := parseFlags(fs, e.err, args)
 	if !ok {
 		return exitUsage
 	}
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "old" {
-			oldSet = true
-		}
-		if f.Name == "new" {
-			newSet = true
-		}
-	})
-	if len(rest) != 1 || !oldSet || !newSet {
-		e.usageErrf("note edit takes a PATH and both --old and --new")
+	if len(rest) != 1 {
+		e.usageErrf("note edit takes exactly one PATH argument")
+		return exitUsage
+	}
+	edits, uerr := pairEdits(olds, news)
+	if uerr != nil {
+		e.usageErrf("%v", uerr)
 		return exitUsage
 	}
 	var note grimoireapi.Note
 	err := e.doWrite(context.Background(), func(ctx context.Context, c *apiclient.Client) error {
 		var callErr error
-		note, callErr = c.EditNote(ctx, rest[0], *oldText, *newText)
+		note, callErr = c.EditNote(ctx, rest[0], edits)
 		return callErr
 	})
 	if err != nil {
@@ -275,8 +273,35 @@ func (e *cliEnv) runNoteEdit(args []string) int {
 		e.writeJSON(e.out, note)
 		return exitOK
 	}
-	e.outf("edited %s\n", note.Path)
+	e.outln(editedMessage(note.Path, len(edits)))
 	return exitOK
+}
+
+// pairEdits zips the repeated --old and --new values positionally. Mismatched
+// counts are a usage error rather than a silent truncation: a dangling --old
+// would otherwise drop an edit the caller asked for.
+func pairEdits(olds, news multiFlag) ([]grimoireapi.Edit, error) {
+	if len(olds) == 0 && len(news) == 0 {
+		return nil, fmt.Errorf("note edit takes a PATH and at least one --old/--new pair")
+	}
+	if len(olds) != len(news) {
+		return nil, fmt.Errorf("note edit got %d --old and %d --new: they pair up in order, so pass one --new per --old",
+			len(olds), len(news))
+	}
+	edits := make([]grimoireapi.Edit, len(olds))
+	for i := range olds {
+		edits[i] = grimoireapi.Edit{Old: olds[i], New: news[i]}
+	}
+	return edits, nil
+}
+
+// editedMessage is the human confirmation for an edit, counting the pairs only
+// when there was more than one to count.
+func editedMessage(path string, n int) string {
+	if n == 1 {
+		return "edited " + path
+	}
+	return fmt.Sprintf("edited %s (%d edits)", path, n)
 }
 
 // runNoteDelete handles `grimoire note delete PATH`.
@@ -322,7 +347,9 @@ func deleteMessage(res grimoireapi.DeleteResult) string {
 	return fmt.Sprintf("deleted %s", res.Path)
 }
 
-// runNoteRename handles `grimoire note rename FROM TO [--overwrite]`.
+// runNoteRename handles `grimoire note rename FROM TO [--overwrite]`. Inbound
+// wikilinks follow the note, so the confirmation also reports how many were
+// retargeted.
 func (e *cliEnv) runNoteRename(args []string) int {
 	fs := flag.NewFlagSet("note rename", flag.ContinueOnError)
 	overwrite := fs.Bool("overwrite", false, "displace an existing note at TO")
@@ -348,6 +375,13 @@ func (e *cliEnv) runNoteRename(args []string) int {
 		return exitOK
 	}
 	e.outf("renamed to %s\n", res.Path)
+	if res.LinksUpdated > 0 {
+		e.outf(
+			"updated %d wikilink%s in %d note%s\n",
+			res.LinksUpdated, plural(res.LinksUpdated, "", "s"),
+			res.NotesUpdated, plural(res.NotesUpdated, "", "s"),
+		)
+	}
 	if res.ReplacedTrashed {
 		e.outf("displaced note trashed (restore id: %s)\n", res.ReplacedTrashID)
 	}

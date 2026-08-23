@@ -327,7 +327,7 @@ func TestWrapCodeBlocks(t *testing.T) {
 		{
 			"a single pre is wrapped and gets a button",
 			"<p>x</p><pre><code>a</code></pre>",
-			[]string{`<div class="g-code-block"><pre><code>a</code></pre><sl-icon-button class="g-code-copy"`, "<p>x</p>"},
+			[]string{`<div class="g-code-block"><pre><code>a</code></pre><div class="g-code-controls"><sl-icon-button class="g-code-copy"`, "<p>x</p>"},
 			nil,
 		},
 		{
@@ -482,14 +482,14 @@ func TestRenderNoteBodyUsesTheTargetsTitle(t *testing.T) {
 			[]string{`href="` + NoteLinkScheme + `resource-limits"`, ">Requests, limits, and QoS</a>"},
 		},
 		{
-			"a section link titles only its note half",
+			"a section link keeps the file name, like a search hit",
 			"see [[resource-limits#Limits]]",
 			[]string{
 				`href="` + NoteLinkScheme + `resource-limits#Limits"`,
-				">Requests, limits, and QoS › Limits</a>",
+				">resource-limits › Limits</a>",
 			},
 		},
-		{"an acronym is not re-cased", "see [[tls#Certificates]]", []string{">TLS › Certificates</a>"}},
+		{"a titled note is not re-titled inside a section link", "see [[tls#Certificates]]", []string{">tls › Certificates</a>"}},
 		{
 			"an alias still wins over the title",
 			"see [[resource-limits|the limits note]]",

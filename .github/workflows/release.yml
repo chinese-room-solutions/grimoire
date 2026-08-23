@@ -111,14 +111,15 @@ jobs:
               # root-owned outputs out of bin/ and dist/.
               chown -R "${HOST_UID}:${HOST_GID}" /src
             '
-      - name: Build
-        if: runner.os != 'Linux'
-        run: make build
-      # Installer wizard (grimoire-setup): ditto-zipped .app on macOS, console
+      # One `make` invocation, like the Linux leg above: `package` builds the app
+      # and the installer wizard itself, and a second invocation would re-stamp
+      # the version from a tree the first one had already touched.
+      #
+      # The wizard (grimoire-setup) is a ditto-zipped .app on macOS and a console
       # .exe on Windows. The bundlers self-fetch their tools, so no extra CI deps.
       # The raw self-extracting installer stays beside the container; the Archive
       # step uploads it for install.sh.
-      - name: Package installer
+      - name: Build + package
         if: runner.os != 'Linux'
         run: make package
       - name: Archive
