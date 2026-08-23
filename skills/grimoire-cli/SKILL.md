@@ -86,9 +86,14 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
 
 ## Editing
 
-- `note edit PATH --old S --new S` is the default choice: one **exact, unique**
-  occurrence replaced, frontmatter untouched. Exit 3 = anchor absent, exit 4 =
-  anchor ambiguous; lengthen it and retry rather than guessing.
+- `note edit PATH --old S --new S [--old S --new S ...]` is the default choice:
+  an **exact, unique** occurrence replaced, frontmatter untouched. Both flags
+  repeat and pair up in the order given, so several edits ride in one command —
+  they apply in sequence as one atomic server-side span, so a later pair may
+  anchor on text an earlier one wrote, and if any pair is rejected the note is
+  left untouched. Exit 3 = anchor absent, exit 4 = anchor ambiguous; the message
+  names the pair (`edit 2: ...`), so lengthen that anchor and retry rather than
+  guessing.
 - `note update PATH` replaces the whole body (`--content S`, `-f FILE`, or
   stdin) — only when you mean to rewrite the note.
 - `note create PATH` takes the body the same three ways; `--overwrite` replaces
@@ -186,6 +191,9 @@ grimoire --vault ~/notes search "rrf"         # one vault
 grimoire --vault ~/notes resolve "Meeting Notes"
 grimoire --vault ~/notes note get projects/ideas.md
 grimoire --vault ~/notes note edit projects/ideas.md --old "TODO: bench" --new "Benchmarked: 45ms"
+grimoire --vault ~/notes note edit projects/ideas.md \
+  --old "status: draft" --new "status: done" \
+  --old "TODO: write up" --new "Written up"    # both land, or neither does
 grimoire --vault ~/notes note create archive/2026/log.md --content "# Log"
 grimoire --vault ~/notes --json vault tree
 grimoire --vault ~/notes import notes.docx paper.pdf   # pdf needs the convert model

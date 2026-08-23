@@ -178,38 +178,85 @@ func TestUpdateNote(t *testing.T) {
 }
 
 func TestEditNote(t *testing.T) {
-	vault := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(vault, "n.md"),
-		[]byte("---\ntitle: keep\n---\n# Heading\n\nalpha bravo charlie\n"), 0o644))
-	api := newAPI(t, vault)
+	tests := []struct {
+		name       string
+		content    string
+		edits      []Edit
+		wantErr    error
+		wantIn     []string
+		wantNotIn  []string
+		wantOnDisk string // the whole file, asserted when the edit is rejected.
+	}{
+		{
+			name:      "a unique anchor is replaced",
+			content:   "---\ntitle: keep\n---\n# Heading\n\nalpha bravo charlie\n",
+			edits:     []Edit{{Old: "bravo", New: "DELTA"}},
+			wantIn:    []string{"alpha DELTA charlie", "title: keep"},
+			wantNotIn: []string{"bravo"},
+		},
+		{
+			name:    "several pairs land as one span",
+			content: "---\ntitle: keep\n---\nalpha bravo charlie\n",
+			edits: []Edit{
+				{Old: "alpha", New: "ONE"},
+				{Old: "charlie", New: "THREE"},
+				{Old: "ONE bravo", New: "ONE BRAVO"}, // anchors on what the first pair wrote.
+			},
+			wantIn: []string{"ONE BRAVO THREE", "title: keep"},
+		},
+		{
+			name:       "a missing anchor is rejected",
+			content:    "# body\n",
+			edits:      []Edit{{Old: "missing", New: "x"}},
+			wantErr:    ErrEditNotFound,
+			wantOnDisk: "# body\n",
+		},
+		{
+			name:       "an ambiguous anchor is rejected",
+			content:    "dup and dup\n",
+			edits:      []Edit{{Old: "dup", New: "x"}},
+			wantErr:    ErrEditAmbiguous,
+			wantOnDisk: "dup and dup\n",
+		},
+		{
+			name:       "a failure mid-sequence leaves the note byte-identical",
+			content:    "alpha bravo\n",
+			edits:      []Edit{{Old: "alpha", New: "ONE"}, {Old: "missing", New: "x"}},
+			wantErr:    ErrEditNotFound,
+			wantOnDisk: "alpha bravo\n",
+		},
+		{
+			name:       "no edits is rejected",
+			content:    "alpha\n",
+			edits:      nil,
+			wantErr:    ErrNoEdits,
+			wantOnDisk: "alpha\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vault := t.TempDir()
+			path := filepath.Join(vault, "n.md")
+			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o644))
+			api := newAPI(t, vault)
 
-	note, err := api.EditNote(context.Background(), "", "n.md", "bravo", "DELTA")
-	require.NoError(t, err)
-	require.Contains(t, note.Content, "alpha DELTA charlie", "the unique anchor was replaced")
-	require.Contains(t, note.Content, "title: keep", "frontmatter is preserved on an edit")
-	require.NotContains(t, note.Content, "bravo")
-}
-
-func TestEditNoteNotFound(t *testing.T) {
-	vault := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(vault, "n.md"), []byte("# body\n"), 0o644))
-	api := newAPI(t, vault)
-
-	_, err := api.EditNote(context.Background(), "", "n.md", "missing", "x")
-	require.ErrorIs(t, err, ErrEditNotFound)
-}
-
-func TestEditNoteAmbiguous(t *testing.T) {
-	vault := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(vault, "n.md"), []byte("dup and dup\n"), 0o644))
-	api := newAPI(t, vault)
-
-	_, err := api.EditNote(context.Background(), "", "n.md", "dup", "x")
-	require.ErrorIs(t, err, ErrEditAmbiguous)
-	// The note is untouched after a rejected edit.
-	got, err := os.ReadFile(filepath.Join(vault, "n.md"))
-	require.NoError(t, err)
-	require.Equal(t, "dup and dup\n", string(got))
+			note, err := api.EditNote(context.Background(), "", "n.md", tt.edits)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				got, rerr := os.ReadFile(path)
+				require.NoError(t, rerr)
+				require.Equal(t, tt.wantOnDisk, string(got), "a rejected edit writes nothing")
+				return
+			}
+			require.NoError(t, err)
+			for _, want := range tt.wantIn {
+				require.Contains(t, note.Content, want)
+			}
+			for _, unwanted := range tt.wantNotIn {
+				require.NotContains(t, note.Content, unwanted)
+			}
+		})
+	}
 }
 
 func TestSetNoteProperties(t *testing.T) {

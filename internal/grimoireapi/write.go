@@ -83,29 +83,38 @@ func (a *API) UpdateNote(ctx context.Context, vault, path, content string) (Note
 	return a.GetNote(ctx, vault, path)
 }
 
-// ErrEditNotFound is returned by EditNote when oldText doesn't occur in the
-// note's body; ErrEditAmbiguous when it occurs more than once. Both mean the
-// edit was rejected without touching the note — the caller must supply a unique
-// anchor. They alias the service's sentinels (the check lives inside its
-// serialized read→write span).
+// Edit is one replacement EditNote applies: the anchor to replace and its
+// replacement. It aliases the service's type, like the sentinels below, so the
+// same pair travels from the wire down to the write.
+type Edit = app.Edit
+
+// ErrEditNotFound is returned by EditNote when an edit's anchor doesn't occur in
+// the note's body; ErrEditAmbiguous when it occurs more than once; ErrNoEdits
+// when no edit was given. All mean the note was left untouched — the caller must
+// supply a unique anchor. They alias the service's sentinels (the checks live
+// inside its serialized read→write span).
 var (
 	ErrEditNotFound  = app.ErrEditNotFound
 	ErrEditAmbiguous = app.ErrEditAmbiguous
+	ErrNoEdits       = app.ErrNoEdits
 )
 
-// EditNote applies a surgical string replacement to a note's Markdown body:
-// oldText must occur exactly once (so the edit is unambiguous), and is replaced
-// by newText. The frontmatter is left untouched. This is the cheap, safe way to
-// change part of a large note without resending its whole body: the read,
-// replace, and atomic write happen server-side as one serialized span, and a
-// non-unique anchor is rejected (ErrEditNotFound / ErrEditAmbiguous) rather than
-// guessed at. Returns the updated note.
-func (a *API) EditNote(ctx context.Context, vault, path, oldText, newText string) (Note, error) {
+// EditNote applies surgical string replacements to a note's Markdown body, in
+// the order given: each edit's Old must occur exactly once in the body as the
+// preceding edits left it (so the edit is unambiguous, and a later edit may
+// anchor on text an earlier one wrote), and is replaced by its New. The
+// frontmatter is left untouched. This is the cheap, safe way to change parts of
+// a large note without resending its whole body: the read, replaces, and atomic
+// write happen server-side as one serialized span — the whole sequence lands or
+// none of it does — and a non-unique anchor is rejected (ErrEditNotFound /
+// ErrEditAmbiguous, naming the pair) rather than guessed at. Returns the updated
+// note.
+func (a *API) EditNote(ctx context.Context, vault, path string, edits []Edit) (Note, error) {
 	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return Note{}, err
 	}
-	if err := svc.ReplaceInBody(ctx, path, oldText, newText); err != nil {
+	if err := svc.ReplaceInBody(ctx, path, edits); err != nil {
 		return Note{}, err
 	}
 	return a.GetNote(ctx, vault, path)

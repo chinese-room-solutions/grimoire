@@ -56,10 +56,14 @@ Replace an existing note's body. Content carrying its own frontmatter block
 replaces the frontmatter too; content without one leaves it untouched.
 Prefer note edit for a small change — this resends the whole note.`},
 
-	{"note edit", "note edit PATH --old S --new S", "replace a unique string in a note", vaultRequired, `
-Replace one exact, unique occurrence of --old with --new, leaving the
-frontmatter alone. Exit 3 if --old is absent, exit 4 if it occurs more than
-once — lengthen the anchor and retry rather than guessing.`},
+	{"note edit", "note edit PATH --old S --new S [--old S --new S ...]", "replace unique strings in a note", vaultRequired, `
+Replace exact, unique occurrences of --old with --new, leaving the frontmatter
+alone. Both flags repeat and pair up in the order given, so one command can
+carry several edits; they apply in sequence as one atomic server-side span, so
+a later pair may anchor on text an earlier one wrote and a rejected pair leaves
+the note untouched. Exit 3 if an --old is absent, exit 4 if it occurs more than
+once — the message names the pair, so lengthen that anchor and retry rather
+than guessing.`},
 
 	{"note delete", "note delete PATH", "delete a note (to the trash)", vaultRequired, `
 Delete a note. It goes to the vault's trash, recoverable with trash restore,

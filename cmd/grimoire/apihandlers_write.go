@@ -64,6 +64,23 @@ func requireField(w http.ResponseWriter, value, name string, logger zerolog.Logg
 	return true
 }
 
+// requireEdits writes a 400 and returns false unless the edit list carries at
+// least one pair, each with a non-empty anchor — an empty anchor matches
+// everywhere, so it is never a legitimate edit.
+func requireEdits(w http.ResponseWriter, edits []grimoireapi.Edit, logger zerolog.Logger) bool {
+	if len(edits) == 0 {
+		writeAPIError(w, http.StatusBadRequest, "missing required field edits", logger)
+		return false
+	}
+	for i, e := range edits {
+		if e.Old == "" {
+			writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("edit %d: missing required field old_text", i+1), logger)
+			return false
+		}
+	}
+	return true
+}
+
 func apiCreateNoteHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -104,14 +121,13 @@ func apiUpdateNoteHandler(api *grimoireapi.API, logger zerolog.Logger) http.Hand
 func apiEditNoteHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Path    string `json:"path"`
-			OldText string `json:"old_text"`
-			NewText string `json:"new_text"`
+			Path  string             `json:"path"`
+			Edits []grimoireapi.Edit `json:"edits"`
 		}
-		if !decodeBody(w, r, &in, logger) || !requireField(w, in.Path, "path", logger) || !requireField(w, in.OldText, "old_text", logger) {
+		if !decodeBody(w, r, &in, logger) || !requireField(w, in.Path, "path", logger) || !requireEdits(w, in.Edits, logger) {
 			return
 		}
-		note, err := api.EditNote(r.Context(), requestVault(r), in.Path, in.OldText, in.NewText)
+		note, err := api.EditNote(r.Context(), requestVault(r), in.Path, in.Edits)
 		if err != nil {
 			writeServiceError(w, err, logger, "edit note")
 			return

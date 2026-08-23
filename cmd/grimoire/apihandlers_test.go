@@ -94,30 +94,81 @@ func TestAPIEditNote(t *testing.T) {
 
 	// A unique anchor edits in place.
 	rec := doJSON(t, mux, http.MethodPatch, "/api/v1/note/edit",
-		map[string]any{"path": "n.md", "old_text": "bravo", "new_text": "DELTA"})
+		map[string]any{"path": "n.md", "edits": []any{
+			map[string]any{"old_text": "bravo", "new_text": "DELTA"},
+		}})
 	require.Equal(t, http.StatusOK, rec.Code)
 	var note grimoireapi.Note
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &note))
 	require.Contains(t, note.Content, "alpha DELTA charlie")
 
-	// A missing anchor is 404.
+	// Several pairs apply in order, in one request.
 	rec = doJSON(t, mux, http.MethodPatch, "/api/v1/note/edit",
-		map[string]any{"path": "n.md", "old_text": "nope", "new_text": "x"})
+		map[string]any{"path": "n.md", "edits": []any{
+			map[string]any{"old_text": "alpha", "new_text": "ONE"},
+			map[string]any{"old_text": "charlie", "new_text": "THREE"},
+			map[string]any{"old_text": "ONE DELTA", "new_text": "ONE TWO"},
+		}})
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &note))
+	require.Contains(t, note.Content, "ONE TWO THREE")
+
+	// A missing anchor is 404, naming the pair.
+	rec = doJSON(t, mux, http.MethodPatch, "/api/v1/note/edit",
+		map[string]any{"path": "n.md", "edits": []any{
+			map[string]any{"old_text": "nope", "new_text": "x"},
+		}})
 	require.Equal(t, http.StatusNotFound, rec.Code)
+	require.Contains(t, rec.Body.String(), "edit 1")
+}
+
+// A pair that fails part-way through a sequence rolls the whole request back.
+func TestAPIEditNotePartialFailureWritesNothing(t *testing.T) {
+	mux := newAPIMux(t, map[string]string{"n.md": "alpha bravo\n"})
+	rec := doJSON(t, mux, http.MethodPatch, "/api/v1/note/edit",
+		map[string]any{"path": "n.md", "edits": []any{
+			map[string]any{"old_text": "alpha", "new_text": "ONE"},
+			map[string]any{"old_text": "missing", "new_text": "x"},
+		}})
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	require.Contains(t, rec.Body.String(), "edit 2")
+
+	rec = doJSON(t, mux, http.MethodGet, "/api/v1/note?path=n.md", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var note grimoireapi.Note
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &note))
+	require.Equal(t, "alpha bravo\n", note.Content)
 }
 
 func TestAPIEditNoteAmbiguous(t *testing.T) {
 	mux := newAPIMux(t, map[string]string{"n.md": "dup and dup\n"})
 	rec := doJSON(t, mux, http.MethodPatch, "/api/v1/note/edit",
-		map[string]any{"path": "n.md", "old_text": "dup", "new_text": "x"})
+		map[string]any{"path": "n.md", "edits": []any{
+			map[string]any{"old_text": "dup", "new_text": "x"},
+		}})
 	require.Equal(t, http.StatusConflict, rec.Code)
 }
 
 func TestAPIEditNoteMissingFields(t *testing.T) {
-	mux := newAPIMux(t, map[string]string{"n.md": "body\n"})
-	rec := doJSON(t, mux, http.MethodPatch, "/api/v1/note/edit",
-		map[string]any{"path": "n.md"}) // no old_text.
-	require.Equal(t, http.StatusBadRequest, rec.Code)
+	for _, tt := range []struct {
+		name string
+		body map[string]any
+	}{
+		{"no edits key", map[string]any{"path": "n.md"}},
+		{"empty edits list", map[string]any{"path": "n.md", "edits": []any{}}},
+		{"an edit without old_text", map[string]any{"path": "n.md", "edits": []any{
+			map[string]any{"new_text": "x"},
+		}}},
+		{"no path", map[string]any{"edits": []any{
+			map[string]any{"old_text": "a", "new_text": "b"},
+		}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := newAPIMux(t, map[string]string{"n.md": "body\n"})
+			rec := doJSON(t, mux, http.MethodPatch, "/api/v1/note/edit", tt.body)
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+		})
+	}
 }
 
 func TestAPICreateNoteMissingPath(t *testing.T) {

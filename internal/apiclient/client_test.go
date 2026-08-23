@@ -207,14 +207,16 @@ func TestClientWrites(t *testing.T) {
 			want:       grimoireapi.Note{Path: "n.md", Content: "new"},
 		},
 		{
-			name: "edit note sends old and new text",
+			name: "edit note sends the pairs as one edits array",
 			handler: func(w http.ResponseWriter, _ *http.Request) {
 				writeJSON(t, w, grimoireapi.Note{Path: "n.md", Content: "edited"})
 			},
-			call:       func(c *Client) (any, error) { return c.EditNote(ctx, "n.md", "a", "b") },
+			call: func(c *Client) (any, error) {
+				return c.EditNote(ctx, "n.md", []grimoireapi.Edit{{Old: "a", New: "b"}, {Old: "c", New: "d"}})
+			},
 			wantMethod: http.MethodPatch,
 			wantPath:   "/api/v1/note/edit",
-			wantBody:   `{"new_text":"b","old_text":"a","path":"n.md"}`,
+			wantBody:   `{"edits":[{"old_text":"a","new_text":"b"},{"old_text":"c","new_text":"d"}],"path":"n.md"}`,
 			want:       grimoireapi.Note{Path: "n.md", Content: "edited"},
 		},
 		{

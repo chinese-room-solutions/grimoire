@@ -756,32 +756,59 @@ func (s *Service) WriteNote(ctx context.Context, rel, source string) error {
 	return nil
 }
 
-// ErrEditNotFound is returned by ReplaceInBody when oldText doesn't occur in the
-// note's body; ErrEditAmbiguous when it occurs more than once. Both mean the edit
-// was rejected without touching the note — the caller must supply a unique anchor.
+// Edit is one surgical replacement in a note's Markdown body: Old is the anchor
+// to replace, New what replaces it. A sequence of them is applied in order, each
+// against the body as the previous ones left it.
+type Edit struct {
+	Old string `json:"old_text"`
+	New string `json:"new_text"`
+}
+
+// ErrEditNotFound is returned by ReplaceInBody when an edit's anchor doesn't
+// occur in the note's body; ErrEditAmbiguous when it occurs more than once;
+// ErrNoEdits when no edit was given at all. All mean the note was left
+// untouched — the caller must supply a unique anchor.
 var (
 	ErrEditNotFound  = errors.New("old text not found in note body")
 	ErrEditAmbiguous = errors.New("old text occurs more than once in note body")
+	ErrNoEdits       = errors.New("no edits given")
 )
 
-// ReplaceInBody applies a surgical string replacement to a note's Markdown body:
-// oldText must occur exactly once (so the edit is unambiguous) and is replaced by
-// newText; the frontmatter is left untouched. The read, check, and atomic write
-// happen as one serialized span (writeMu), so a concurrent edit can't slip in
-// between the read and the write and get lost.
-func (s *Service) ReplaceInBody(ctx context.Context, rel, oldText, newText string) error {
+// editError tags a rejected edit with which pair failed, in the message (so the
+// caller can relay it) and in the error context (so a log carries the anchor).
+func editError(sentinel error, rel string, i int, edit Edit) error {
+	return ctxerr.With(
+		fmt.Errorf("edit %d: %w", i+1, sentinel),
+		map[string]any{"note": rel, "edit": i, "old": edit.Old},
+	)
+}
+
+// ReplaceInBody applies surgical string replacements to a note's Markdown body,
+// in order: each edit's Old must occur exactly once in the body as the preceding
+// edits left it (so the edit is unambiguous, and a later edit may anchor on text
+// an earlier one wrote) and is replaced by its New; the frontmatter is left
+// untouched. The read, checks, and atomic write happen as one serialized span
+// (writeMu), so the whole sequence lands or none of it does, and a concurrent
+// edit can't slip in between the read and the write and get lost.
+func (s *Service) ReplaceInBody(ctx context.Context, rel string, edits []Edit) error {
+	if len(edits) == 0 {
+		return ctxerr.With(ErrNoEdits, map[string]any{"note": rel})
+	}
 	var newBody string
 	err := s.rewriteNote(rel, func(current string) (string, error) {
 		_, body := frontmatter.Split(current)
-		switch strings.Count(body, oldText) {
-		case 0:
-			return "", ctxerr.With(ErrEditNotFound, map[string]any{"note": rel})
-		case 1:
-			// unique anchor — proceed.
-		default:
-			return "", ctxerr.With(ErrEditAmbiguous, map[string]any{"note": rel})
+		for i, e := range edits {
+			switch strings.Count(body, e.Old) {
+			case 0:
+				return "", editError(ErrEditNotFound, rel, i, e)
+			case 1:
+				// unique anchor — proceed.
+			default:
+				return "", editError(ErrEditAmbiguous, rel, i, e)
+			}
+			body = strings.Replace(body, e.Old, e.New, 1)
 		}
-		newBody = strings.Replace(body, oldText, newText, 1)
+		newBody = body
 		return frontmatter.ReplaceBody(current, newBody), nil
 	})
 	if err != nil {
