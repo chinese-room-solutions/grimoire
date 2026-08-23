@@ -100,7 +100,15 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
   instead of failing with exit 4.
 - `note props PATH --set key=v1,v2` replaces the frontmatter wholesale. Repeat
   `--set` per key; include the keys you want to keep.
-- `note rename FROM TO` moves a note (adds `.md`, creates parents).
+- `note rename FROM TO` moves a note (adds `.md`, creates parents) and retargets
+  every `[[wikilink]]` in the vault that pointed at it, so nothing is left
+  dangling — headings, aliases and `![[embeds]]` are kept, a link written as a
+  path stays a path, and brackets inside code blocks or code spans are left as
+  code. It prints `updated N wikilinks in M notes` (omitted when nothing linked
+  to the note); `--json` carries the same as `linksUpdated`/`notesUpdated`.
+  Don't hand-fix inbound links after a rename — only a link written inside a
+  note's frontmatter is left as it was, since a property value is data, not a
+  link the reader follows.
 - `note get PATH` prints raw Markdown and nothing else, so it pipes.
 
 ## Linking notes

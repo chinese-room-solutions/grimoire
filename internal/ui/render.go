@@ -20,6 +20,7 @@ import (
 	"github.com/chinese-room-solutions/grimoire/internal/fence"
 	"github.com/chinese-room-solutions/grimoire/internal/frontmatter"
 	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
+	"github.com/chinese-room-solutions/grimoire/internal/wikilink"
 	"github.com/chinese-room-solutions/mass-sdk/uikit"
 	"github.com/yuin/goldmark"
 	highlighting "github.com/yuin/goldmark-highlighting/v2"
@@ -67,50 +68,17 @@ func codeWrapper(w util.BufWriter, c highlighting.CodeBlockContext, entering boo
 // of navigating.
 const NoteLinkScheme = "grimoire-note:"
 
-// wikilink matches Obsidian-style [[Target]], [[Target#Heading]] and either with
-// an |Alias. The heading is one heading's own text, not a breadcrumb — that is
-// what the preview scrolls by. A target may not contain '#'.
-var wikilink = regexp.MustCompile(`\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?\]\]`)
-
 // rewriteWikilinks turns every wikilink form into a Markdown link to the note
 // scheme.
 func rewriteWikilinks(nr NoteRenderer, source string) string {
-	return replaceWikilinks(source, func(m string) string { return noteLink(nr, m) })
+	return wikilink.Replace(source, func(m string) string { return noteLink(nr, m) })
 }
 
 // flattenWikilinks reduces every wikilink form to the text it displays, for a
 // render that must not link out (see snippetHTML). Search snippets are rendered
 // without a vault to ask, so their links keep the target as written.
 func flattenWikilinks(source string) string {
-	return replaceWikilinks(source, func(m string) string { return wikilinkLabel(NoteRenderer{}, m) })
-}
-
-// replaceWikilinks rewrites every wikilink outside code through repl, skipping
-// code: `[[ -f x ]]` in a bash fence or [[nodiscard]] in a code span is code,
-// not a link, and rewriting it would change what the block displays, runs, and
-// hashes.
-func replaceWikilinks(source string, repl func(string) string) string {
-	if !strings.Contains(source, "[[") {
-		return source
-	}
-	segs, err := codeSegments(source)
-	if err != nil {
-		// Without the code ranges a rewrite would mangle code, so leave the note as
-		// written: its wikilinks stay literal, which beats broken blocks.
-		return source
-	}
-	var b strings.Builder
-	prev := 0
-	for _, seg := range segs {
-		if seg.start < prev {
-			continue
-		}
-		b.WriteString(wikilink.ReplaceAllStringFunc(source[prev:seg.start], repl))
-		b.WriteString(source[seg.start:seg.stop])
-		prev = seg.stop
-	}
-	b.WriteString(wikilink.ReplaceAllStringFunc(source[prev:], repl))
-	return b.String()
+	return wikilink.Replace(source, func(m string) string { return wikilinkLabel(NoteRenderer{}, m) })
 }
 
 // noteLink renders one matched wikilink as a Markdown link. Both parts are
@@ -118,10 +86,10 @@ func replaceWikilinks(source string, repl func(string) string) string {
 // either can't pass for the fragment separator; the click handler splits on the
 // first literal '#' and decodes each side.
 func noteLink(nr NoteRenderer, m string) string {
-	g := wikilink.FindStringSubmatch(m)
-	href := NoteLinkScheme + url.PathEscape(strings.TrimSpace(g[1]))
-	if heading := strings.TrimSpace(g[2]); heading != "" {
-		href += "#" + url.PathEscape(heading)
+	l := wikilink.Parse(m)
+	href := NoteLinkScheme + url.PathEscape(l.Target)
+	if l.Heading != "" {
+		href += "#" + url.PathEscape(l.Heading)
 	}
 	return "[" + wikilinkLabel(nr, m) + "](" + href + ")"
 }
@@ -131,82 +99,20 @@ func noteLink(nr NoteRenderer, m string) string {
 // "note › heading" form the search hits and the preview breadcrumb use. The href
 // still carries the target as written; only the label reads better.
 func wikilinkLabel(nr NoteRenderer, m string) string {
-	g := wikilink.FindStringSubmatch(m)
-	if alias := strings.TrimSpace(g[3]); alias != "" {
-		return alias
+	l := wikilink.Parse(m)
+	if l.Alias != "" {
+		return l.Alias
 	}
-	label := strings.TrimSpace(g[1])
+	label := l.Target
 	if nr.NoteTitle != nil {
 		if title, ok := nr.NoteTitle(label); ok && title != "" {
 			label = title
 		}
 	}
-	if heading := strings.TrimSpace(g[2]); heading != "" {
-		return label + " › " + heading
+	if l.Heading != "" {
+		return label + " › " + l.Heading
 	}
 	return label
-}
-
-// srcSegment is a half-open byte range of a note's source.
-type srcSegment struct{ start, stop int }
-
-// codeSegments returns the source ranges that hold code — fenced and indented
-// blocks, and inline code spans — in document order. It parses with the renderer's
-// own parser, so what counts as code here is what the reader will see as code.
-func codeSegments(source string) ([]srcSegment, error) {
-	src := []byte(source)
-	doc := md.Parser().Parse(text.NewReader(src))
-	var out []srcSegment
-	err := ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
-		var seg srcSegment
-		var ok bool
-		switch n.(type) {
-		case *ast.FencedCodeBlock, *ast.CodeBlock:
-			seg, ok = linesSegment(n.Lines())
-		case *ast.CodeSpan:
-			seg, ok = childrenSegment(n)
-		}
-		if ok {
-			out = append(out, seg)
-		}
-		return ast.WalkContinue, nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("walking the note for code ranges: %w", err)
-	}
-	return out, nil
-}
-
-// linesSegment spans a block node's source lines, from the first line's start to
-// the last line's end.
-func linesSegment(lines *text.Segments) (srcSegment, bool) {
-	if lines == nil || lines.Len() == 0 {
-		return srcSegment{}, false
-	}
-	return srcSegment{lines.At(0).Start, lines.At(lines.Len() - 1).Stop}, true
-}
-
-// childrenSegment spans an inline node's text children, which is where a code
-// span keeps its content (the backticks themselves are not in the AST).
-func childrenSegment(n ast.Node) (srcSegment, bool) {
-	seg, ok := srcSegment{}, false
-	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-		t, isText := c.(*ast.Text)
-		if !isText {
-			continue
-		}
-		if !ok || t.Segment.Start < seg.start {
-			seg.start = t.Segment.Start
-		}
-		if !ok || t.Segment.Stop > seg.stop {
-			seg.stop = t.Segment.Stop
-		}
-		ok = true
-	}
-	return seg, ok
 }
 
 // Property is a frontmatter key and its value(s) for the properties panel.

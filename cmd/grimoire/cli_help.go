@@ -74,7 +74,13 @@ The index is pruned before returning; a failed prune exits 1 with a warning.`},
 Move a note, creating parent folders as needed and adding .md if missing.
 It refuses to replace an existing note unless --overwrite, which displaces the
 occupant (to the trash when it is on). The index follows by itself:
-the old path is pruned, the new one indexed.`},
+the old path is pruned, the new one indexed.
+Every [[wikilink]] in the vault that pointed at the note is retargeted, so a
+rename leaves no dangling links: headings, aliases and ![[embeds]] are kept, a
+link written as a path stays a path, and brackets inside code blocks or code
+spans are left as code, as is a link written in a note's frontmatter (a property
+value is data, not a link). The second line reports how many links were
+rewritten in how many notes (omitted when nothing linked to the note).`},
 
 	{"note props", "note props PATH --set key=v1,v2", "replace a note's frontmatter (repeatable)", vaultRequired, `
 Replace a note's YAML frontmatter. Repeat --set per key; comma-separated values

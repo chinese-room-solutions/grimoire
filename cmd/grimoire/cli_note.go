@@ -347,7 +347,9 @@ func deleteMessage(res grimoireapi.DeleteResult) string {
 	return fmt.Sprintf("deleted %s", res.Path)
 }
 
-// runNoteRename handles `grimoire note rename FROM TO [--overwrite]`.
+// runNoteRename handles `grimoire note rename FROM TO [--overwrite]`. Inbound
+// wikilinks follow the note, so the confirmation also reports how many were
+// retargeted.
 func (e *cliEnv) runNoteRename(args []string) int {
 	fs := flag.NewFlagSet("note rename", flag.ContinueOnError)
 	overwrite := fs.Bool("overwrite", false, "displace an existing note at TO")
@@ -373,6 +375,13 @@ func (e *cliEnv) runNoteRename(args []string) int {
 		return exitOK
 	}
 	e.outf("renamed to %s\n", res.Path)
+	if res.LinksUpdated > 0 {
+		e.outf(
+			"updated %d wikilink%s in %d note%s\n",
+			res.LinksUpdated, plural(res.LinksUpdated, "", "s"),
+			res.NotesUpdated, plural(res.NotesUpdated, "", "s"),
+		)
+	}
 	if res.ReplacedTrashed {
 		e.outf("displaced note trashed (restore id: %s)\n", res.ReplacedTrashID)
 	}

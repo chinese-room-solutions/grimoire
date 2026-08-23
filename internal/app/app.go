@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -41,6 +42,7 @@ import (
 	"github.com/chinese-room-solutions/grimoire/internal/session"
 	"github.com/chinese-room-solutions/grimoire/internal/store"
 	"github.com/chinese-room-solutions/grimoire/internal/uistate"
+	"github.com/chinese-room-solutions/grimoire/internal/wikilink"
 	"github.com/chinese-room-solutions/grimoire/pkg/officedoc"
 	"github.com/chinese-room-solutions/mass-sdk/fsutil"
 	"github.com/rs/zerolog"
@@ -1167,30 +1169,119 @@ func (s *Service) DeleteNote(ctx context.Context, rel string) error {
 	return nil
 }
 
+// RenameResult is a rename's outcome: the slash path the note was written to,
+// and how many inbound [[wikilinks]] were retargeted at it — LinksUpdated links
+// across NotesUpdated notes (both zero when nothing pointed at the note).
+type RenameResult struct {
+	Path         string
+	NotesUpdated int
+	LinksUpdated int
+}
+
 // RenameNote moves a note to a new vault-relative path (e.g. for an inline
 // rename), creating parent folders as needed, and reindexes both paths — the old
 // key is pruned, the new one indexed. The ".md" extension is added to the target
-// if missing. It never overwrites an existing note (ErrNoteExists). Returns the
-// slash path actually written.
-func (s *Service) RenameNote(ctx context.Context, oldRel, newRel string) (string, error) {
+// if missing. It never overwrites an existing note (ErrNoteExists).
+//
+// Every [[wikilink]] in the vault that pointed at the note follows it: the links
+// are retargeted in place after the move (see retargetLinks), so a rename never
+// leaves dangling links behind. Wikilinks inside code blocks and code spans are
+// left alone.
+func (s *Service) RenameNote(ctx context.Context, oldRel, newRel string) (RenameResult, error) {
 	newRel = ensureMarkdownExt(newRel)
 	oldClean, err := s.vaultPath(oldRel)
 	if err != nil {
-		return "", err
+		return RenameResult{}, err
 	}
 	newClean, err := s.vaultPath(newRel)
 	if err != nil {
-		return "", err
+		return RenameResult{}, err
 	}
 	if newClean == oldClean {
-		return filepath.ToSlash(newRel), nil // no-op rename.
+		return RenameResult{Path: filepath.ToSlash(newRel)}, nil // no-op rename.
 	}
+	// The vault as it stood before the move: a link is inbound exactly when it
+	// resolved to the old path then, which nothing can answer once the file has
+	// moved.
+	s.mu.Lock()
+	vault := s.cfg.Vault
+	s.mu.Unlock()
+	before := s.notePaths(vault)
+
 	if err := s.renameNoteFile(oldRel, newRel, oldClean, newClean); err != nil {
-		return "", err
+		return RenameResult{}, err
 	}
 	s.reindexNote(oldRel)
 	s.reindexNote(newRel)
-	return filepath.ToSlash(newRel), nil
+
+	res := RenameResult{Path: filepath.ToSlash(newRel)}
+	res.NotesUpdated, res.LinksUpdated = s.retargetLinks(vault, before, oldRel, newRel)
+	return res, nil
+}
+
+// retargetLinks points the vault's [[wikilinks]] at a note that has just moved
+// from oldRel to newRel, and reports how many notes it rewrote and how many
+// links in them. before is the note list as it stood ahead of the move, so a
+// link counts as inbound exactly when ResolveNote would have resolved it to the
+// old path (resolveNoteIn is that same rule). The renamed note is walked like
+// any other — a note may link to itself. Only note bodies are rewritten, and
+// within them only links outside code blocks and code spans. Each rewrite goes
+// through rewriteNote, so it is serialized and atomic like every other note
+// edit, and every note actually changed is reindexed.
+//
+// Best effort by design: the file has already moved, so a note that can't be
+// read or written is logged and skipped rather than failing or undoing the
+// rename. The counts report only what was rewritten.
+func (s *Service) retargetLinks(vault string, before []string, oldRel, newRel string) (notes, links int) {
+	oldPath := filepath.ToSlash(oldRel)
+	matches := func(target string) bool {
+		rel, ok := resolveNoteIn(before, target)
+		return ok && strings.EqualFold(rel, oldPath)
+	}
+	newPath := trimMarkdownExt(filepath.ToSlash(newRel))
+	newName := path.Base(newPath)
+	// Only the body is rewritten: a target in the frontmatter is a property value,
+	// not a link the reader follows, and rewriting it would edit the note's data.
+	retarget := func(source string) (string, int) {
+		_, body := frontmatter.Split(source)
+		updated, n := wikilink.Retarget(body, newName, newPath, matches)
+		if n == 0 {
+			return source, 0
+		}
+		return frontmatter.ReplaceBody(source, updated), n
+	}
+
+	for _, rel := range s.notePaths(vault) {
+		// Which notes to touch at all is decided on this read: rewriteNote always
+		// writes, so rewriting unconditionally would restamp every note in the
+		// vault. The rewrite then redoes the retarget against the content it read
+		// under the lock, so a concurrent edit isn't overwritten from a stale read.
+		source, err := s.ReadNote(rel)
+		if err != nil {
+			s.logger.Warn().Err(err).Str("note", rel).Msg("reading note to retarget its wikilinks")
+			continue
+		}
+		if _, n := retarget(source); n == 0 {
+			continue
+		}
+		changed := 0
+		err = s.rewriteNote(rel, func(current string) (string, error) {
+			updated, n := retarget(current)
+			changed = n
+			return updated, nil
+		})
+		if err != nil {
+			s.logger.Warn().Err(err).Str("note", rel).Msg("retargeting wikilinks after a rename")
+			continue
+		}
+		if changed == 0 {
+			continue // a concurrent edit took the links out between the two reads.
+		}
+		notes++
+		links += changed
+		s.reindexNote(rel)
+	}
+	return notes, links
 }
 
 // renameNoteFile is RenameNote's serialized filesystem span: the existence check,
@@ -1338,7 +1429,13 @@ func (s *Service) ResolveNote(target string) (string, bool) {
 	if vault == "" {
 		return "", false
 	}
+	return resolveNoteIn(s.notePaths(vault), target)
+}
 
+// resolveNoteIn is ResolveNote's matching rule against a given list of
+// vault-relative note paths, so a caller holding its own snapshot of the vault
+// (RenameNote's pre-move walk) resolves exactly the way the live resolver does.
+func resolveNoteIn(paths []string, target string) (string, bool) {
 	name := target
 	if i := strings.IndexByte(name, '|'); i >= 0 { // drop "|alias".
 		name = name[:i]
@@ -1357,7 +1454,7 @@ func (s *Service) ResolveNote(target string) (string, bool) {
 		wantBase = wantBase[i+1:]
 	}
 
-	for _, rel := range s.notePaths(vault) {
+	for _, rel := range paths {
 		slash := strings.ToLower(rel)
 		if trimMarkdownExt(slash) == wantPath || trimMarkdownExt(filepath.Base(slash)) == wantBase {
 			return rel, true

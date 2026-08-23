@@ -271,21 +271,27 @@ type RenameResult struct {
 	Note
 	ReplacedTrashed bool   `json:"replacedTrashed,omitempty"`
 	ReplacedTrashID string `json:"replacedTrashID,omitempty"`
+	// LinksUpdated and NotesUpdated report the inbound [[wikilinks]] the rename
+	// retargeted at the note's new location: how many links, in how many notes.
+	// Both are zero when nothing linked to it.
+	LinksUpdated int `json:"linksUpdated,omitempty"`
+	NotesUpdated int `json:"notesUpdated,omitempty"`
 }
 
 // RenameNote moves a note from one vault-relative path to another. With
 // overwrite=false it refuses to replace an existing note at the target
 // (ErrNoteExists); overwrite=true removes the target first — honouring the
 // vault's trash setting like every other agent deletion, so the displaced note
-// is recoverable when trashing is on (its trash id rides in the result). Returns
-// the note at its new path.
+// is recoverable when trashing is on (its trash id rides in the result). Every
+// [[wikilink]] in the vault that pointed at the note is retargeted at its new
+// path; the result counts them. Returns the note at its new path.
 func (a *API) RenameNote(ctx context.Context, vault, from, to string, overwrite bool) (RenameResult, error) {
 	svc, err := a.service(ctx, vault)
 	if err != nil {
 		return RenameResult{}, err
 	}
 	var res RenameResult
-	written, err := svc.RenameNote(ctx, from, to)
+	moved, err := svc.RenameNote(ctx, from, to)
 	if err != nil {
 		if errorsIsNoteExists(err) && overwrite {
 			// Displace the occupant (to the trash when the mode allows), then retry.
@@ -294,13 +300,14 @@ func (a *API) RenameNote(ctx context.Context, vault, from, to string, overwrite 
 				return RenameResult{}, delErr
 			}
 			res.ReplacedTrashed, res.ReplacedTrashID = trashed, trashID
-			written, err = svc.RenameNote(ctx, from, to)
+			moved, err = svc.RenameNote(ctx, from, to)
 		}
 		if err != nil {
 			return RenameResult{}, err
 		}
 	}
-	res.Note, err = a.GetNote(ctx, vault, written)
+	res.LinksUpdated, res.NotesUpdated = moved.LinksUpdated, moved.NotesUpdated
+	res.Note, err = a.GetNote(ctx, vault, moved.Path)
 	if err != nil {
 		return RenameResult{}, err
 	}
