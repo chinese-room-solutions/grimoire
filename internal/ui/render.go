@@ -95,24 +95,25 @@ func noteLink(nr NoteRenderer, m string) string {
 }
 
 // wikilinkLabel is the text one matched wikilink displays: its alias, else the
-// target note's own title — suffixed with the heading it points into, in the same
-// "note › heading" form the search hits and the preview breadcrumb use. The href
-// still carries the target as written; only the label reads better.
+// target note's own title. A link into a heading keeps the target as written
+// instead, in the "note › heading" form the search hits and the preview
+// breadcrumb use — those name the file too, and the note's own title beside a
+// heading reads as two titles rather than a place inside a note. The href
+// carries the target as written either way; only the label reads better.
 func wikilinkLabel(nr NoteRenderer, m string) string {
 	l := wikilink.Parse(m)
 	if l.Alias != "" {
 		return l.Alias
 	}
-	label := l.Target
+	if l.Heading != "" {
+		return l.Target + " › " + l.Heading
+	}
 	if nr.NoteTitle != nil {
-		if title, ok := nr.NoteTitle(label); ok && title != "" {
-			label = title
+		if title, ok := nr.NoteTitle(l.Target); ok && title != "" {
+			return title
 		}
 	}
-	if l.Heading != "" {
-		return label + " › " + l.Heading
-	}
-	return label
+	return l.Target
 }
 
 // Property is a frontmatter key and its value(s) for the properties panel.
