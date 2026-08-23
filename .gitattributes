@@ -1,0 +1,14 @@
+# Check every text file out with LF on all three platforms. Git for Windows
+# defaults to core.autocrlf=true — the GitHub Actions windows image sets it
+# system-wide — which would hand `templ generate` CRLF .templ sources; templ
+# bakes those \r\n into the generated Go string literals, so the tree goes dirty
+# mid-build and `git describe --dirty` stamps the release binary "-dirty".
+* text=auto eol=lf
+
+# Never line-ending-convert these, whatever the content sniffer decides.
+*.docx binary
+*.ico  binary
+*.odt  binary
+*.pdf  binary
+*.png  binary
+*.syso binary
