@@ -27,11 +27,15 @@ import (
 // Vaults on different models can't be compared at all, so each model's results
 // stay a group of their own.
 
-// rrfK is the Reciprocal Rank Fusion constant, matching the store's own: a leg
-// contributes 1/(rrfK+rank) at 1-based rank. Re-fusing one vault's hits with it
-// reproduces that vault's order, so a single-vault cross-vault search ranks
-// exactly like a plain store search.
-const rrfK = 60
+// rrfK and ftsWeight mirror the store's own fusion: a leg contributes
+// 1/(rrfK+rank) at 1-based rank, the keyword leg's contribution multiplied by
+// ftsWeight. Re-fusing one vault's hits with them reproduces that vault's
+// order, so a single-vault cross-vault search ranks exactly like a plain
+// store search.
+const (
+	rrfK      = 40
+	ftsWeight = 3
+)
 
 // vaultHit is a search hit plus its provenance: the vault it came from (its
 // canonical absolute path), which is what a caller needs to label, preview, or
@@ -295,7 +299,7 @@ func fuseGroup(
 	for rank, h := range groupKeywordLeg(results, vaults, model) {
 		r := at(h)
 		r.hit.FTSRank = rank + 1
-		r.fts = 1 / float64(rrfK+rank+1)
+		r.fts = ftsWeight / float64(rrfK+rank+1)
 		r.score += r.fts
 	}
 

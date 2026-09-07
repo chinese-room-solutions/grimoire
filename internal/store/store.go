@@ -38,8 +38,8 @@ var migrationsFS embed.FS
 
 // formatVersion is bumped whenever the schema or the embed-text recipe (see
 // index.embedText) changes, so stale indexes rebuild instead of mixing old and
-// new embeddings.
-const formatVersion = 2
+// new embeddings. v3: FTS tokenizer gained porter stemming.
+const formatVersion = 3
 
 // ErrIncompatible is returned by Open when the store on disk was built with a
 // different fingerprint (format version, embedding dimension, or document
@@ -83,9 +83,20 @@ type SearchOptions struct {
 	TopRatio float64 // relative band vs the best vector hit; see above.
 }
 
-// rrfK is the standard Reciprocal Rank Fusion constant: score contributions
-// are 1/(rrfK+rank), damping the gap between neighboring ranks.
-const rrfK = 60
+// rrfK is the Reciprocal Rank Fusion constant: score contributions are
+// 1/(rrfK+rank), damping the gap between neighboring ranks. Tuned against
+// eval/ (see the searcheval harness): 40 sharpens the top of the fusion —
+// rank 1 beats rank 5 by more — which measured better than the standard 60
+// on MRR and nDCG alike.
+const rrfK = 40
+
+// ftsWeight multiplies the keyword leg's RRF contribution. An exact
+// (stemmed) term match is a precise signal; the top of a compressed
+// similarity band is not — at equal weights the vector leg's noise buried
+// keyword-rank-1 answers (measured on eval/: a query whose FTS leg held the
+// target at rank 1 still lost the top slot to vector noise). 3 measured best
+// across all query kinds, degrading none.
+const ftsWeight = 3
 
 // cacheRow is one chunk's entry in the in-memory vector cache.
 type cacheRow struct {
@@ -623,7 +634,7 @@ func (s *Store) fuse(vecHits []scored, ftsIDs []int64) ([]Hit, error) {
 	}
 	for rank, id := range ftsIDs {
 		f := at(id)
-		contrib := 1 / float64(rrfK+rank+1)
+		contrib := ftsWeight / float64(rrfK+rank+1)
 		f.score += contrib
 		f.fts = contrib
 		f.ftsRank = rank + 1
