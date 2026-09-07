@@ -482,5 +482,199 @@
       "reference/abbreviations.md": 3,
       "databases/command-query-separation.md": 2
     }
+  },
+  {
+    "id": "q46",
+    "query": "handing config files to containers without baking them into the image",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "kubernetes/configmaps-and-secrets.md": 3,
+      "security/secrets-rotation.md": 1,
+      "kubernetes/rbac-and-service-accounts.md": 1
+    }
+  },
+  {
+    "id": "q47",
+    "query": "making a model small enough to run on my own machine",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "ml/quantization.md": 3,
+      "ml/fine-tuning.md": 2
+    }
+  },
+  {
+    "id": "q48",
+    "query": "keeping all the machines on the same clock",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "networking/ntp.md": 3
+    }
+  },
+  {
+    "id": "q49",
+    "query": "improving retrieval quality by rescoring the top results",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "ml/rerankers.md": 3,
+      "ml/vector-search.md": 2,
+      "ml/rag.md": 2
+    }
+  },
+  {
+    "id": "q50",
+    "query": "changing the database schema while the service is live",
+    "kind": "semantic-paraphrase",
+    "relevant": {
+      "databases/schema-migrations.md": 3,
+      "journal/release-process.md": 2,
+      "journal/2026-07-14.md": 2,
+      "databases/btree-indexes.md": 1,
+      "databases/postgres-replication.md": 1
+    }
+  },
+  {
+    "id": "q51",
+    "query": "x-kubernetes-preserve-unknown-fields",
+    "kind": "keyword-exact",
+    "relevant": {
+      "kubernetes/custom-resource-definitions.md": 3,
+      "kubernetes/operators.md": 1
+    }
+  },
+  {
+    "id": "q52",
+    "query": "max_client_conn",
+    "kind": "keyword-exact",
+    "relevant": {
+      "databases/connection-pooling.md": 3,
+      "databases/postgres-tuning.md": 1,
+      "databases/postgres-on-kubernetes.md": 1
+    }
+  },
+  {
+    "id": "q53",
+    "query": "makestep",
+    "kind": "keyword-exact",
+    "relevant": {
+      "networking/ntp.md": 3
+    }
+  },
+  {
+    "id": "q54",
+    "query": "context deadline exceeded when querying postgres",
+    "kind": "cross-topic",
+    "relevant": {
+      "go/context-propagation.md": 3,
+      "databases/connection-pooling.md": 2,
+      "go/error-handling.md": 1,
+      "databases/postgres-tuning.md": 1,
+      "go/http-services.md": 1
+    }
+  },
+  {
+    "id": "q55",
+    "query": "pulling private images on k3s",
+    "kind": "cross-topic",
+    "relevant": {
+      "homelab/container-registry.md": 3,
+      "kubernetes/rbac-and-service-accounts.md": 2,
+      "kubernetes/troubleshooting-pods.md": 1,
+      "journal/release-process.md": 1
+    }
+  },
+  {
+    "id": "q56",
+    "query": "rotating the database password without downtime",
+    "kind": "cross-topic",
+    "relevant": {
+      "security/secrets-rotation.md": 3,
+      "kubernetes/configmaps-and-secrets.md": 2,
+      "databases/connection-pooling.md": 1,
+      "databases/postgres-on-kubernetes.md": 1
+    }
+  },
+  {
+    "id": "q57",
+    "query": "client certificates",
+    "kind": "ambiguous",
+    "relevant": {
+      "networking/mutual-tls.md": 3,
+      "networking/tls.md": 2,
+      "security/ssh-keys.md": 1
+    }
+  },
+  {
+    "id": "q58",
+    "query": "migrations",
+    "kind": "ambiguous",
+    "relevant": {
+      "databases/schema-migrations.md": 3,
+      "journal/release-process.md": 2,
+      "databases/postgres-replication.md": 1
+    }
+  },
+  {
+    "id": "q59",
+    "query": "hydration",
+    "kind": "ambiguous",
+    "relevant": {
+      "cooking/bread-hydration.md": 3,
+      "cooking/sourdough.md": 2
+    }
+  },
+  {
+    "id": "q60",
+    "query": "how many database connections should I allow?",
+    "kind": "natural-question",
+    "relevant": {
+      "databases/connection-pooling.md": 3,
+      "databases/postgres-tuning.md": 2,
+      "databases/postgres-on-kubernetes.md": 1
+    }
+  },
+  {
+    "id": "q61",
+    "query": "what makes a postmortem blameless?",
+    "kind": "natural-question",
+    "relevant": {
+      "sre/postmortems.md": 3,
+      "journal/2026-07-14.md": 1
+    }
+  },
+  {
+    "id": "q62",
+    "query": "should I shoot raw or JPEG?",
+    "kind": "natural-question",
+    "relevant": {
+      "photography/raw-workflow.md": 3,
+      "photography/exposure.md": 1
+    }
+  },
+  {
+    "id": "q63",
+    "query": "CRD validation",
+    "kind": "abbreviation",
+    "relevant": {
+      "kubernetes/custom-resource-definitions.md": 3,
+      "kubernetes/operators.md": 2,
+      "reference/abbreviations.md": 1,
+      "kubernetes/rbac-and-service-accounts.md": 1
+    }
+  },
+  {
+    "id": "q64",
+    "query": "TOTP",
+    "kind": "abbreviation",
+    "relevant": {
+      "security/password-managers.md": 3
+    }
+  },
+  {
+    "id": "q65",
+    "query": "Network Time Protocol",
+    "kind": "abbreviation",
+    "relevant": {
+      "networking/ntp.md": 3
+    }
   }
 ]

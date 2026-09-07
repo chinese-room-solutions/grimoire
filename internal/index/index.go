@@ -86,6 +86,18 @@ func (ix *Indexer) SetConcurrency(n int) {
 	ix.concurrency = n
 }
 
+// SetChunkOptions overrides the chunking sizes. A zero MaxChars resets to
+// chunk.DefaultOptions.
+func (ix *Indexer) SetChunkOptions(o chunk.Options) {
+	if o.MaxChars <= 0 {
+		o = chunk.DefaultOptions()
+	}
+	if o.Overlap < 0 || o.Overlap >= o.MaxChars {
+		o.Overlap = o.MaxChars / 8
+	}
+	ix.chunkOpt = o
+}
+
 // Stats summarizes an index run.
 type Stats struct {
 	Indexed int // notes (re)embedded this run.
