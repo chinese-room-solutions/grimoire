@@ -3101,11 +3101,19 @@
       repaint();
     }
     // Collect ranges for every case-insensitive occurrence of q in the note.
+    // #g-raw-body — the editor's stash of the note's source, rendered inside the
+    // same container — is skipped: its text duplicates the rendered body, and a
+    // range in it paints nowhere (half the matches would be invisible ghosts).
     function findRanges(q) {
       var ranges = [];
       if (!q) return ranges;
       var needle = q.toLowerCase();
-      var walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null);
+      var raw = getEl("g-raw-body");
+      var walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
+        acceptNode: function (n) {
+          return raw && raw.contains(n) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+        }
+      });
       var node;
       while ((node = walker.nextNode())) {
         var text = node.nodeValue.toLowerCase();
