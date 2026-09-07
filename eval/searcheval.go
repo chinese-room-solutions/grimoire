@@ -20,6 +20,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/KernelPryanic/golog"
 	"github.com/chinese-room-solutions/grimoire/internal/app"
+	"github.com/chinese-room-solutions/grimoire/internal/chunk"
 	"github.com/chinese-room-solutions/grimoire/internal/embed"
 	"github.com/chinese-room-solutions/grimoire/internal/index"
 	"github.com/chinese-room-solutions/grimoire/internal/store"
@@ -46,6 +48,7 @@ const (
 	variantOr       = "or"
 	variantAndOr    = "and-or"
 	variantStopdrop = "stopdrop"
+	variantPrefix   = "prefix"
 )
 
 // defaultBM25 are the store's own FTS5 column weights (path, heading, text):
@@ -72,9 +75,13 @@ type options struct {
 	poolK      int
 	ftsVariant string
 	bm25       [3]float64
+	chunkMax   int
+	chunkOver  int
 
 	jsonOut bool
 	dump    string
+	locate  string
+	passage bool
 	parity  bool
 }
 
@@ -82,13 +89,15 @@ type options struct {
 // untuned legs run is expected to reproduce prod, so only then is parity
 // checked automatically.
 func (o options) tuned() bool {
-	return o.rrfK != 60 || o.vecWeight != 1 || o.ftsWeight != 1 ||
+	return o.rrfK != 40 || o.vecWeight != 1 || o.ftsWeight != 3 ||
 		!o.band || o.topRatio != app.SearchTopRatio || o.minSim != app.SearchFloor ||
 		o.poolK != resultK || o.ftsVariant != variantOr || o.bm25 != defaultBM25
 }
 
 // ownKeywordLeg reports whether the keyword leg must come from the harness's own
 // SQL rather than from the store — any variant but plain OR, or reweighted BM25.
+// prefix mirrors the store's leg (stopwords dropped, OR join) with a trailing *
+// on every term, so it needs its own MATCH expression.
 func (o options) ownKeywordLeg() bool {
 	return o.ftsVariant != variantOr || o.bm25 != defaultBM25
 }
@@ -108,9 +117,9 @@ func parseFlags() (options, error) {
 	flag.StringVar(&o.gateway, "gateway", "http://127.0.0.1:39456", "OpenAI-compatible embeddings endpoint")
 	flag.StringVar(&o.model, "model", "qwen3-embedding-0-6b/Qwen3-Embedding-0.6B-Q8_0.gguf", "embedding model id")
 	flag.StringVar(&o.mode, "mode", modeProd, "search mode: prod (baseline) or legs (re-fused here)")
-	flag.Float64Var(&o.rrfK, "rrf-k", 60, "legs: RRF constant in 1/(k+rank)")
+	flag.Float64Var(&o.rrfK, "rrf-k", 40, "legs: RRF constant in 1/(k+rank)")
 	flag.Float64Var(&o.vecWeight, "vec-weight", 1, "legs: multiplier on the vector leg's RRF contribution")
-	flag.Float64Var(&o.ftsWeight, "fts-weight", 1, "legs: multiplier on the keyword leg's RRF contribution")
+	flag.Float64Var(&o.ftsWeight, "fts-weight", 3, "legs: multiplier on the keyword leg's RRF contribution")
 	flag.BoolVar(&o.band, "band", true, "legs: apply the relevance band to the vector leg")
 	flag.Float64Var(&o.topRatio, "top-ratio", app.SearchTopRatio, "legs: band width as a ratio of the best vector hit")
 	flag.Float64Var(&o.minSim, "min-sim", app.SearchFloor, "legs: absolute similarity floor for the vector leg")
@@ -118,8 +127,12 @@ func parseFlags() (options, error) {
 	flag.StringVar(&o.ftsVariant, "fts-variant", variantOr,
 		"legs: keyword leg — or (the store's own), and-or, or stopdrop")
 	bm25 := flag.String("bm25-weights", "2,1.5,1", "legs: BM25 column weights path,heading,text")
+	flag.IntVar(&o.chunkMax, "chunk-max", 0, "chunk window size override (0 = store default); forces a rebuild")
+	flag.IntVar(&o.chunkOver, "chunk-overlap", 0, "chunk overlap override (0 = keep default)")
 	flag.BoolVar(&o.jsonOut, "json", false, "emit the whole report as JSON")
 	flag.StringVar(&o.dump, "dump", "", "print the top-10 detail for a query id, or all")
+	flag.StringVar(&o.locate, "locate", "", "print where each graded note of a query id sits in each leg")
+	flag.BoolVar(&o.passage, "passage", false, "score the returned passages against the query by cosine")
 	flag.BoolVar(&o.parity, "parity", false, "only check that untuned legs reproduces prod")
 	flag.Parse()
 
@@ -127,10 +140,10 @@ func parseFlags() (options, error) {
 		return o, fmt.Errorf("unknown mode %q, want %s or %s", o.mode, modeProd, modeLegs)
 	}
 	switch o.ftsVariant {
-	case variantOr, variantAndOr, variantStopdrop:
+	case variantOr, variantAndOr, variantStopdrop, variantPrefix:
 	default:
-		return o, fmt.Errorf("unknown fts-variant %q, want %s, %s or %s",
-			o.ftsVariant, variantOr, variantAndOr, variantStopdrop)
+		return o, fmt.Errorf("unknown fts-variant %q, want %s, %s, %s or %s",
+			o.ftsVariant, variantOr, variantAndOr, variantStopdrop, variantPrefix)
 	}
 	parts := strings.Split(*bm25, ",")
 	if len(parts) != 3 {
@@ -159,13 +172,26 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("probing embedding dimension at %s: %w", o.gateway, err)
 	}
+	// A chunk-size override changes every chunk, so the content-hash shortcut
+	// would skip re-embedding: drop the index and build it fresh.
+	if o.chunkMax > 0 {
+		for _, p := range []string{o.db, o.db + "-wal", o.db + "-shm"} {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("removing index for chunk override: %w", err)
+			}
+		}
+	}
 	st, err := openStore(o.db, dim, emb.DocPrefix())
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
 
-	stats, err := index.New(o.vault, st, emb, logger).Sync(ctx, nil, false)
+	ix := index.New(o.vault, st, emb, logger)
+	if o.chunkMax > 0 {
+		ix.SetChunkOptions(chunk.Options{MaxChars: o.chunkMax, Overlap: o.chunkOver})
+	}
+	stats, err := ix.Sync(ctx, nil, false)
 	if err != nil {
 		return fmt.Errorf("indexing %s: %w", o.vault, err)
 	}
@@ -186,6 +212,12 @@ func run() error {
 	}
 	if o.parity {
 		return reportParity(results)
+	}
+	if o.locate != "" {
+		return reportLocate(ctx, s, emb, queries, o)
+	}
+	if o.passage {
+		return reportPassage(ctx, results, emb, o)
 	}
 	for i := range results {
 		results[i].notes = collapse(results[i].hits(o.mode))
@@ -231,6 +263,7 @@ type result struct {
 	legs   []store.Hit
 	notes  []noteHit
 	scores scores
+	qvec   []float32 // the query's embedding, kept for the passage check.
 }
 
 func (r result) hits(mode string) []store.Hit {
@@ -253,7 +286,7 @@ func search(
 		if err != nil {
 			return nil, fmt.Errorf("embedding query %q: %w", q.ID, err)
 		}
-		r := result{query: q}
+		r := result{query: q, qvec: qvec}
 		if both || o.mode == modeProd {
 			if r.prod, err = s.prod(q.Query, qvec); err != nil {
 				return nil, fmt.Errorf("prod search %q: %w", q.ID, err)
@@ -301,6 +334,136 @@ func slicesEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// reportLocate answers "where was the target, actually?" for one query: for
+// every graded note it prints the note's best (lowest) rank in each leg over
+// the whole corpus — pool far beyond the fused top-10, so a note missing from
+// the results shows whether a leg lost it or fusion did.
+func reportLocate(ctx context.Context, s *searcher, emb *embed.Embedder, queries []query, o options) error {
+	var q query
+	found := false
+	for _, cand := range queries {
+		if cand.ID == o.locate {
+			q, found = cand, true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("no query id %q", o.locate)
+	}
+	qvec, err := emb.EmbedQuery(ctx, q.Query)
+	if err != nil {
+		return fmt.Errorf("embedding query %q: %w", q.ID, err)
+	}
+	// A pool covering every chunk: ranks are then corpus-true. SearchLegs
+	// returns the raw legs unfused and skips the band, which is what locating
+	// needs.
+	opts := store.SearchOptions{K: 500, MinSim: -1, TopRatio: s.o.topRatio}
+	vec, fts, err := s.st.SearchLegs(q.Query, qvec, opts)
+	if err != nil {
+		return fmt.Errorf("legs for %q: %w", q.ID, err)
+	}
+	best := map[string][2]int{} // path → {bestVecRank, bestFTSRank}, 0 = absent.
+	rank := func(hits []store.Hit, which int) {
+		for _, h := range hits {
+			r := h.VecRank
+			if which == 1 {
+				r = h.FTSRank
+			}
+			b := best[h.Path]
+			if which == 0 && (b[0] == 0 || r < b[0]) {
+				b[0] = r
+			}
+			if which == 1 && (b[1] == 0 || r < b[1]) {
+				b[1] = r
+			}
+			best[h.Path] = b
+		}
+	}
+	rank(vec, 0)
+	rank(fts, 1)
+
+	paths := make([]string, 0, len(q.Relevant))
+	for p := range q.Relevant {
+		paths = append(paths, p)
+	}
+	sort.Slice(paths, func(i, j int) bool { return q.Relevant[paths[i]] > q.Relevant[paths[j]] })
+	t := newTable("GRADE", "PATH", "VEC", "FTS")
+	for _, p := range paths {
+		b := best[p]
+		t.row(strconv.Itoa(q.Relevant[p]), p, strconv.Itoa(b[0]), strconv.Itoa(b[1]))
+	}
+	fmt.Printf("locate %s: %q\n", q.ID, q.Query)
+	return t.flush()
+}
+
+// reportPassage is the prompt-vs-result check: it re-embeds each query's
+// returned passages as bare text (no title/heading prefix) and scores them by
+// cosine against the query vector. The ranking metrics judge "the right note
+// surfaced"; this judges "the passage itself is about the query" — a result can
+// rank the right note via an exact keyword match while the shown chunk is the
+// wrong section of it. Hit-1 cosine below app.SearchFloor is flagged, the same
+// floor the vector leg applies to its own candidates.
+func reportPassage(ctx context.Context, results []result, emb *embed.Embedder, o options) error {
+	t := newTable("QUERY", "HIT1-COS", "MEAN5-COS", "HIT1")
+	var sum1, sum5 float64
+	var n int
+	for _, r := range results {
+		hits := r.hits(o.mode)
+		if len(hits) == 0 {
+			t.row(r.query.ID, "-", "-", "")
+			continue
+		}
+		texts := make([]string, len(hits))
+		for i, h := range hits {
+			texts[i] = h.Text
+		}
+		vecs, err := emb.Embed(ctx, texts)
+		if err != nil {
+			return fmt.Errorf("embedding passages for %q: %w", r.query.ID, err)
+		}
+		cos1 := cosine(r.qvec, vecs[0])
+		top := min(len(hits), 5)
+		var sum float64
+		for _, v := range vecs[:top] {
+			sum += cosine(r.qvec, v)
+		}
+		mean5 := sum / float64(top)
+		sum1 += cos1
+		sum5 += mean5
+		n++
+		flag := ""
+		if cos1 < app.SearchFloor {
+			flag = "  <floor"
+		}
+		t.row(r.query.ID, strconv.FormatFloat(cos1, 'f', 4, 64),
+			strconv.FormatFloat(mean5, 'f', 4, 64), hits[0].Path+flag)
+	}
+	if err := t.flush(); err != nil {
+		return err
+	}
+	fmt.Printf("\npassage check over %d queries (mode %s): mean hit-1 cosine %.4f, mean top-5 cosine %.4f\n",
+		n, o.mode, sum1/float64(n), sum5/float64(n))
+	return nil
+}
+
+// cosine is the cosine similarity of two raw vectors (zero when either has no
+// direction).
+func cosine(a, b []float32) float64 {
+	if len(a) == 0 || len(b) == 0 || len(a) != len(b) {
+		return 0
+	}
+	var dot, na, nb float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		na += float64(a[i]) * float64(a[i])
+		nb += float64(b[i]) * float64(b[i])
+	}
+	if na == 0 || nb == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
 
 // reportParity is the --parity run: it prints the disagreements and fails when

@@ -160,8 +160,31 @@ func abs(n int) int {
 // expression and the column weights without touching production code.
 func (s *searcher) keywordLeg(query string, pool int) ([]store.Hit, error) {
 	terms := ftsTerms(query)
-	if s.o.ftsVariant == variantStopdrop {
+	switch s.o.ftsVariant {
+	case variantStopdrop:
 		terms = dropStopwords(terms)
+	case variantPrefix:
+		// The store's own recipe (stopwords dropped, OR join) with each term
+		// as a prefix phrase: "slo" matches "slos", "deployment" matches
+		// "deployments".
+		terms = dropStopwords(terms)
+		starred := make([]string, len(terms))
+		for i, t := range terms {
+			starred[i] = `"` + strings.ReplaceAll(t, `"`, `""`) + `" *`
+		}
+		expr := strings.Join(starred, " OR ")
+		if expr == "" {
+			return nil, nil
+		}
+		db, err := s.readOnly()
+		if err != nil {
+			return nil, err
+		}
+		ids, err := s.matchIDs(db, expr, searchPool(s.o.poolK))
+		if err != nil {
+			return nil, err
+		}
+		return s.loadHits(db, ids)
 	}
 	if len(terms) == 0 {
 		return nil, nil

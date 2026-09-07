@@ -42,7 +42,7 @@ your next command runs.
 - `reindex PATH...` to repair one note's index entry (a delete that reported
   `indexWarning`, or a pass that failed while the gateway was down).
 
-A full `reindex` before searching is wasted minutes. It is not a warm-up step.
+A full `reindex` before searching is wasted minutes, not a warm-up step.
 
 ## Finding things
 
@@ -94,6 +94,11 @@ A full `reindex` before searching is wasted minutes. It is not a warm-up step.
   left untouched. Exit 3 = anchor absent, exit 4 = anchor ambiguous; the message
   names the pair (`edit 2: ...`), so lengthen that anchor and retry rather than
   guessing.
+- Single-quote `--old`/`--new`/`--content` values containing backticks (or `$`,
+  `"`, `\`). In double quotes, POSIX shells run backticked text as a command and
+  splice its output into the argument; PowerShell drops each backtick as an
+  escape character. Single quotes are literal in both; embed `'` as `'\''`
+  (POSIX) or `''` (PowerShell).
 - `note update PATH` replaces the whole body (`--content S`, `-f FILE`, or
   stdin) — only when you mean to rewrite the note.
 - `note create PATH` takes the body the same three ways; `--overwrite` replaces
