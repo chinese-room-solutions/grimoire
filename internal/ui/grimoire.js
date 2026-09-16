@@ -3200,6 +3200,155 @@
     }).observe(body, { childList: true, subtree: true, characterData: true });
   }
 
+  // ── Image lightbox ──
+  // Clicking an image in the note body (an embed or a run block's output)
+  // opens it over the whole window, fitted (never upscaled past 100%). The
+  // wheel and the +/− buttons zoom, a double-click toggles fit/100%, a drag
+  // pans, and Esc, the × or a backdrop click closes. All state is plain DOM
+  // on one static element the page provides — no signals, so opening is
+  // synchronous like the preview/graph overlays.
+  function initLightbox() {
+    var box = getEl("g-lightbox");
+    var img = getEl("g-lightbox-img");
+    var label = getEl("g-lightbox-zoom");
+    var body = getEl("g-preview-body");
+    if (!box || !img || !label || !body) return;
+
+    var MIN = 0.02, MAX = 40, STEP = 1.25; // scale bounds; buttons step ×1.25.
+    var scale = 1, fit = 1, x = 0, y = 0;  // current/fit scale and pan offset.
+
+    function isOpen() { return box.classList.contains("g-lightbox-open"); }
+
+    function apply() {
+      img.style.transform = "translate(" + x + "px," + y + "px) scale(" + scale + ")";
+      label.textContent = Math.round(scale * 100) + "%";
+    }
+
+    // An SVG without intrinsic dimensions reports naturalWidth 0; its laid-out
+    // box stands in so the fit math still has numbers.
+    function imgW() { return img.naturalWidth || img.clientWidth || 1; }
+    function imgH() { return img.naturalHeight || img.clientHeight || 1; }
+
+    // fitAll sizes the image to the window (never past 100%) and centers it —
+    // the state opening in and a double-click return to.
+    function fitAll() {
+      fit = Math.min((box.clientWidth - 32) / imgW(), (box.clientHeight - 32) / imgH(), 1);
+      scale = fit;
+      x = (box.clientWidth - imgW() * scale) / 2;
+      y = (box.clientHeight - imgH() * scale) / 2;
+      apply();
+    }
+
+    // zoomAt scales by factor around the lightbox-relative point (cx, cy),
+    // keeping the image point under it exactly where it is: the offset from
+    // the image origin scales with the zoom, so the pan compensates.
+    function zoomAt(cx, cy, factor) {
+      var ns = Math.min(MAX, Math.max(MIN, scale * factor));
+      if (ns === scale) return;
+      x = cx - (cx - x) * (ns / scale);
+      y = cy - (cy - y) * (ns / scale);
+      scale = ns;
+      apply();
+    }
+
+    function show(src) {
+      // onload before src: a cached image can fire load the moment src lands.
+      img.onload = fitAll;
+      img.src = src;
+      box.classList.add("g-lightbox-open");
+    }
+    function hide() {
+      box.classList.remove("g-lightbox-open");
+      img.removeAttribute("src"); // drop the reference, not just the pixels.
+    }
+
+    // Any image in the note body opens the lightbox. preventDefault first so
+    // an embed wrapped in a link doesn't also navigate.
+    body.addEventListener("click", function (e) {
+      if (!e.target || e.target.tagName !== "IMG") return;
+      e.preventDefault();
+      show(e.target.currentSrc || e.target.src);
+    });
+
+    // Drag pans; a press that never moved and started on the backdrop (not
+    // the image, not the bar) closes — the image itself only ever drags,
+    // since clicking what you're inspecting shouldn't dismiss it. move/up
+    // sit on the window (NOT pointer capture): capturing retargets the
+    // release, which both breaks the hit-test above and eats the image's
+    // own dblclick.
+    var drag = null; // { sx, sy, x0, y0, moved, backdrop }
+    box.addEventListener("pointerdown", function (e) {
+      if (e.button !== 0 || e.target.closest(".g-lightbox-bar")) return;
+      drag = { sx: e.clientX, sy: e.clientY, x0: x, y0: y, moved: false, backdrop: e.target === box };
+      box.classList.add("g-lightbox-panning");
+    });
+    window.addEventListener("pointermove", function (e) {
+      if (!drag) return;
+      var dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+      x = drag.x0 + dx;
+      y = drag.y0 + dy;
+      apply();
+    });
+    window.addEventListener("pointerup", function () {
+      if (!drag) return;
+      var backdrop = drag.backdrop, moved = drag.moved;
+      drag = null;
+      box.classList.remove("g-lightbox-panning");
+      if (!moved && backdrop) hide();
+    });
+    window.addEventListener("pointercancel", function () {
+      drag = null;
+      box.classList.remove("g-lightbox-panning");
+    });
+
+    // The wheel zooms at the cursor and must not scroll the note behind.
+    // deltaMode 1 is lines (WebKit), ~16px each; the factor is exponential so
+    // equal notches feel equal at any zoom.
+    box.addEventListener("wheel", function (e) {
+      e.preventDefault();
+      var dy = e.deltaY * (e.deltaMode === 1 ? 16 : 1);
+      var r = box.getBoundingClientRect();
+      zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-dy * 0.0018));
+    }, { passive: false });
+
+    // Double-click: back to fit if zoomed past it, else to 100% at the window
+    // centre (zoomAt with the reciprocal factor lands exactly on 1).
+    img.addEventListener("dblclick", function (e) {
+      e.preventDefault();
+      if (scale > fit + 0.001) { fitAll(); return; }
+      var r = box.getBoundingClientRect();
+      zoomAt(r.width / 2, r.height / 2, 1 / scale);
+    });
+
+    // Buttons zoom from the window centre — a fixed anchor, so repeat clicks
+    // walk the scale without the image drifting.
+    box.querySelectorAll(".g-lightbox-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var r = box.getBoundingClientRect();
+        zoomAt(r.width / 2, r.height / 2, btn.dataset.zoom === "in" ? STEP : 1 / STEP);
+      });
+    });
+    var closeBtn = getEl("g-lightbox-close");
+    if (closeBtn) closeBtn.addEventListener("click", hide);
+
+    // Esc closes, and only the lightbox. Registered in the CAPTURE phase and
+    // before initKeyboardNav's capture handler (init runs this first), so an
+    // open lightbox consumes the key before the layers below it — the
+    // keyboard-nav selection, the find bar, dialogs — drop theirs. Topmost
+    // overlay wins, per the app's Esc layering.
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" || !isOpen()) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      hide();
+    }, true);
+
+    // A window resize re-fits; the zoom state it drops is cheaper to rebuild
+    // than to keep honest against a moving viewport.
+    window.addEventListener("resize", function () { if (isOpen()) fitAll(); });
+  }
+
   // Keep the latest turn in view as results stream and turns append.
   function initAutoScroll() {
     var stream = getEl("g-stream");
@@ -4908,6 +5057,7 @@
     initSessions();
     initTurnMenu();
     initFind();
+    initLightbox();
     initFiles();
     initTrash();
     initFileActions();

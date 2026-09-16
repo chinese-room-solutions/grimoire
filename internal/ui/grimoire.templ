@@ -498,6 +498,25 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 		<!-- Extensions: browse and manage themes and kernels. -->
 		@extensionsDialog()
 
+		<!-- Image lightbox: clicking an image in a note's rendered body (an
+		     embed or a run block's output) opens it over the whole window.
+		     The wheel, the +/− buttons and a double-click (toggling
+		     fit/100%) zoom; a drag pans; Esc, the ×, or a click on the
+		     backdrop closes. Visibility is a plain class (g-lightbox-open)
+		     toggled directly by initLightbox in grimoire.js — the same
+		     synchronous treatment the preview and graph overlays get, not a
+		     Datastar signal. position:fixed so it covers the window like the
+		     dialogs, not just the panel area. -->
+		<div id="g-lightbox" class="g-lightbox">
+			<img id="g-lightbox-img" class="g-lightbox-img" alt="" draggable="false"/>
+			<div class="g-lightbox-bar">
+				<span id="g-lightbox-zoom" class="g-lightbox-zoom"></span>
+				<sl-icon-button class="g-lightbox-btn" data-zoom="out" name="zoom-out" title="Zoom out" style="font-size:1rem"></sl-icon-button>
+				<sl-icon-button class="g-lightbox-btn" data-zoom="in" name="zoom-in" title="Zoom in" style="font-size:1rem"></sl-icon-button>
+				<sl-icon-button id="g-lightbox-close" name="x-lg" title="Close (Esc)" style="font-size:1rem"></sl-icon-button>
+			</div>
+		</div>
+
 		@templ.Raw(script())
 	</div>
 }

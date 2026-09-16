@@ -1726,12 +1726,27 @@ var styleBlock = `<style>
 #app-grimoire .markdown-body .g-callout-question,#app-grimoire .markdown-body .g-callout-faq,#app-grimoire .markdown-body .g-callout-example{--cl:var(--mass-text-muted);--cl-tint:var(--mass-bg-hover)}
 #app-grimoire .markdown-body table{border-collapse:collapse;margin:0.6em 0}
 #app-grimoire .markdown-body th,#app-grimoire .markdown-body td{border:1px solid var(--mass-border);padding:0.35rem 0.6rem;text-align:left}
-#app-grimoire .markdown-body img{max-width:100%}
+#app-grimoire .markdown-body img{max-width:100%;cursor:zoom-in} /* opens the lightbox (initLightbox, grimoire.js) */
 /* A missing image embed, rendered in place of the <img>: a subdued warning chip
    carrying the alt text (or the path), with the missing path on hover. Sized
    below body text so a broken embed reads as a margin note, not as content. */
 #app-grimoire .markdown-body .g-img-missing{display:inline-flex;align-items:center;gap:0.35rem;max-width:100%;padding:0.1rem 0.5rem;border:1px solid color-mix(in srgb,var(--mass-warning) 40%,transparent);border-radius:999px;background:var(--mass-warning-soft);color:var(--mass-warning);font-size:0.78rem;overflow-wrap:anywhere}
 #app-grimoire .markdown-body .g-img-missing sl-icon{flex-shrink:0;font-size:0.9rem}
+
+/* The image lightbox (initLightbox, grimoire.js): a full-window modal, above
+   everything in the app — the note body behind it stays as it was. The image
+   keeps its natural size and is placed wholly by a transform (translate +
+   scale, origin 0 0), so zoom-to-cursor stays linear math; JS owns the scale
+   and clamps it. A click on the backdrop closes; the image itself only ever
+   drags. */
+#app-grimoire .g-lightbox{display:none;position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.85);cursor:zoom-in}
+#app-grimoire .g-lightbox.g-lightbox-open{display:block}
+#app-grimoire .g-lightbox-img{position:absolute;left:0;top:0;transform-origin:0 0;user-select:none;-webkit-user-drag:none;cursor:grab}
+#app-grimoire .g-lightbox.g-lightbox-panning .g-lightbox-img{cursor:grabbing}
+/* Control bar: a chip top-right, panel-coloured so its icons keep theme
+   contrast over the dark backdrop whatever the theme. */
+#app-grimoire .g-lightbox-bar{position:absolute;top:0.7rem;right:0.8rem;display:flex;align-items:center;gap:0.15rem;padding:0.2rem 0.45rem;border:1px solid var(--mass-border);border-radius:999px;background:color-mix(in srgb,var(--mass-bg-panel) 92%,transparent)}
+#app-grimoire .g-lightbox-zoom{min-width:3.4em;text-align:center;font-size:0.78rem;color:var(--mass-text-muted);font-variant-numeric:tabular-nums}
 
 /* A search hit's snippet: the chunk rendered as Markdown. It carries
    .markdown-body too, so code, tables and callouts look as they do in a note;
