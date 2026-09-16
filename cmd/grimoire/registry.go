@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,12 @@ type vaultRegistry struct {
 	// runtimes is keyed by vaultdir.Canonical(path), so equivalent spellings of
 	// the same vault collapse onto one runtime.
 	runtimes map[string]*vaultRuntime
+	// renames holds the canonical keys of vaults whose folder is mid-rename,
+	// both the old and the new path. While a key is held, runtime() refuses to
+	// build a runtime for it: one created on the new path before the state move
+	// would bring the new hash dirs into existence and break the move, and one
+	// on the old path would hold handles the move needs released (Windows).
+	renames map[string]bool
 	// folderPicker is the native folder dialog, relayed to the attached GUI
 	// window; nil until one is wired.
 	folderPicker func(ctx context.Context, title string) (string, bool, error)
@@ -60,6 +67,7 @@ func newVaultRegistry(shared *grimoireapp.Shared, logger zerolog.Logger) *vaultR
 		logger:   logger,
 		shared:   shared,
 		runtimes: map[string]*vaultRuntime{},
+		renames:  map[string]bool{},
 	}
 }
 
@@ -84,6 +92,9 @@ func (reg *vaultRegistry) runtime(_ context.Context, vault string) (*grimoireapp
 	defer reg.mu.Unlock()
 	if rt, ok := reg.runtimes[key]; ok {
 		return rt.svc, nil
+	}
+	if reg.renames[key] {
+		return nil, fmt.Errorf("%w: %s is being renamed", errVaultUnavailable, vault)
 	}
 	if reg.closed {
 		return nil, fmt.Errorf("%w: the daemon is shutting down", errVaultUnavailable)
@@ -130,6 +141,95 @@ func (reg *vaultRegistry) open(ctx context.Context, vault string) error {
 		return err
 	}
 	return vaultdir.SetLastVault(svc.Vault())
+}
+
+// renameVault renames a vault's folder to newName (a bare folder name, so the
+// vault stays in its parent folder) and carries Grimoire's per-vault state —
+// the registry, the last-vault pointer, the data and index dirs — to the new
+// identity, so nothing reindexes and nothing is lost. It returns the new path.
+//
+// Both the old and the new path are marked as mid-rename until the state move
+// has run, so no concurrent request can build a runtime on a folder whose
+// identity is about to change. A resident runtime is retired before the folder
+// moves (its open stores hold handles the move needs released, on Windows) and
+// the new path is re-warmed afterwards — without making the renamed vault the
+// default, which only an explicit open moves.
+func (reg *vaultRegistry) renameVault(ctx context.Context, vault, newName string) (string, error) {
+	key, err := vaultdir.Canonical(vault)
+	if err != nil {
+		return "", err
+	}
+	newPath := filepath.Join(filepath.Dir(key), newName)
+	newKey, _ := vaultdir.Canonical(newPath) // can't fail: key is absolute and newName is a bare name.
+
+	reg.mu.Lock()
+	if reg.renames[key] || reg.renames[newKey] {
+		reg.mu.Unlock()
+		return "", ctxerr.With(fmt.Errorf("%w: %s is being renamed", errVaultUnavailable, vault), map[string]any{"vault": vault})
+	}
+	reg.renames[key] = true
+	reg.renames[newKey] = true
+	wasResident := reg.runtimes[key] != nil
+	reg.mu.Unlock()
+	unmark := func() {
+		reg.mu.Lock()
+		delete(reg.renames, key)
+		delete(reg.renames, newKey)
+		reg.mu.Unlock()
+	}
+	defer unmark()
+
+	if info, err := os.Stat(key); err != nil || !info.IsDir() {
+		return "", ctxerr.With(fmt.Errorf("%w: %s", errVaultUnavailable, vault), map[string]any{"vault": vault})
+	}
+	// A case-only rename keeps the key, and the folder both spellings name is
+	// the one being renamed — there is no second folder to collide with.
+	if newKey != key {
+		if _, err := os.Lstat(newPath); err == nil {
+			return "", ctxerr.With(fmt.Errorf("a folder named %s already exists next to it", newName), map[string]any{"vault": vault})
+		}
+	}
+
+	if wasResident {
+		reg.close(vault)
+	}
+
+	// warm re-opens a runtime for a path after its rename settled. Best effort:
+	// the next request for the vault warms it lazily anyway.
+	warm := func(path string) {
+		if _, err := reg.runtime(ctx, path); err != nil {
+			reg.logger.Warn().Err(err).Str("vault", path).Msg("re-warming vault runtime after rename")
+		}
+	}
+
+	if err := os.Rename(key, newPath); err != nil {
+		// The common cause is another program holding the folder (or something
+		// in it) open. Nothing moved: the old path is as valid as it ever was.
+		unmark()
+		warm(vault)
+		return "", ctxerr.With(fmt.Errorf("renaming the vault failed — another program may have the folder open: %w", err), map[string]any{"vault": vault})
+	}
+	var stateErr error
+	if err := vaultdir.MoveVaultState(key, newPath); err != nil {
+		// The folder HAS moved; rolling the rename back could destroy user
+		// data. Record the failure, leave the state where it is, and keep
+		// going — the registry must still point at the folder that exists.
+		stateErr = ctxerr.With(fmt.Errorf("the vault was renamed but its saved state was left behind at the old data dir: %w", err), map[string]any{"vault": vault})
+	}
+	unmark() // the new path's dirs are settled; a runtime may be built on it now.
+
+	if err := vaultdir.Rename(key, newPath); err != nil {
+		warm(newPath)
+		return "", ctxerr.With(fmt.Errorf("the vault folder moved to %s but the vault list may still show the old path: %w", newPath, err), map[string]any{"vault": vault})
+	}
+	if wasResident {
+		warm(newPath)
+	}
+	if stateErr != nil {
+		return "", stateErr
+	}
+	reg.logger.Info().Str("vault", newPath).Msg("vault renamed")
+	return newPath, nil
 }
 
 // live snapshots the resident runtimes, keyed by canonical vault path, for

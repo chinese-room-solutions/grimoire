@@ -139,6 +139,26 @@
       });
     }
 
+    // Renaming moves the folder on disk. The answer names the new path: when
+    // the renamed vault is this page's, the page must navigate onto its new
+    // ?vault= — every tab and the file tree belong to that identity — and
+    // otherwise the list alone re-renders.
+    function rename(path, name) {
+      promptRename(name, function (newName) {
+        var body = new URLSearchParams();
+        body.append("path", path);
+        body.append("name", newName);
+        fetch(apiURL("api/vaults/rename"), { method: "POST", body: body })
+          .then(function (r) { return r.json(); })
+          .then(function (res) {
+            if (!res || !res.ok) return;
+            if (path === pageVault()) { location.assign(vaultURL(res.path)); return; }
+            refresh();
+          })
+          .catch(function () { /* rename failed; the folder and the list are unchanged. */ });
+      });
+    }
+
     function init() {
       var addBtn = getEl("g-vault-add");
       if (addBtn) addBtn.addEventListener("click", function () {
@@ -159,6 +179,10 @@
         var row = e.target.closest(".g-vault-row");
         if (!row) return;
         var path = row.getAttribute("data-vault-path") || "";
+        if (e.target.closest(".g-vault-rename")) {
+          rename(path, row.querySelector(".g-vault-name").textContent);
+          return;
+        }
         if (e.target.closest(".g-vault-forget")) {
           forget(path, row.querySelector(".g-vault-name").textContent);
           return;
@@ -196,6 +220,44 @@
     if (confirm) confirm.onclick = function () { close(); onConfirm(); };
     if (cancel) cancel.onclick = close;
     dialog.show();
+  }
+
+  // promptRename asks for the vault's new name, prefilled with the current one
+  // (selected, so typing replaces it wholesale). Fresh handlers per ask, like
+  // confirmForget — a stale confirm must not rename the wrong vault.
+  function promptRename(name, onConfirm) {
+    var dialog = getEl("g-rename-dialog");
+    var input = getEl("g-rename-input");
+    if (!dialog || !input) return;
+    var body = getEl("g-rename-body");
+    if (body) {
+      body.textContent = "Rename “" + name + "”. The folder, its notes, and its " +
+        "index move together — the vault stays in the same parent folder.";
+    }
+    input.value = name;
+    var confirm = getEl("g-rename-confirm");
+    var cancel = getEl("g-rename-cancel");
+    function close() {
+      dialog.hide();
+      if (confirm) confirm.onclick = null;
+      if (cancel) cancel.onclick = null;
+      input.onkeydown = null;
+    }
+    function submit() {
+      var value = (input.value || "").trim();
+      if (!value) return;
+      close();
+      onConfirm(value);
+    }
+    if (confirm) confirm.onclick = submit;
+    if (cancel) cancel.onclick = close;
+    input.onkeydown = function (e) { if (e.key === "Enter") submit(); };
+    dialog.show();
+    // sl-input exposes focus on the host; the native input (for selecting the
+    // prefilled text) as .input.
+    if (typeof input.focus === "function") input.focus();
+    var native = input.input || input;
+    if (typeof native.select === "function") native.select();
   }
 
   // Hover calm-down for the scrollable lists: while content wheel-scrolls under a

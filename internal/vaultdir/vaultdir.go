@@ -395,6 +395,107 @@ func Forget(vault string) error {
 	return writeLastVault(root, next)
 }
 
+// MoveVaultState carries a vault's per-vault state from oldPath's identity to
+// newPath's after its folder was renamed: both hashed dirs move — the durable
+// data dir (config, saved runs, UI state) and the index cache dir — so nothing
+// reindexes and no saved runs are lost. Content in the vault itself is keyed by
+// vault-relative paths, which the move never touches. A side whose source dir
+// doesn't exist is skipped (the vault was never opened, or the OS purged the
+// cache); identical hashes (a case-only rename on a case-insensitive
+// filesystem) move nothing.
+func MoveVaultState(oldPath, newPath string) error {
+	oldData, err := DataPath(oldPath)
+	if err != nil {
+		return err
+	}
+	newData, err := DataPath(newPath)
+	if err != nil {
+		return err
+	}
+	oldCache, err := CachePath(oldPath)
+	if err != nil {
+		return err
+	}
+	newCache, err := CachePath(newPath)
+	if err != nil {
+		return err
+	}
+	if err := moveHashDir(oldData, newData); err != nil {
+		return err
+	}
+	return moveHashDir(oldCache, newCache)
+}
+
+// moveHashDir moves one <root>/vaults/<hash> dir from oldDir to newDir. A
+// missing source and an unchanged hash are no-ops; an existing target belongs
+// to another vault — moving would silently merge the two, so it is an error
+// naming both dirs. os.Rename suffices: both dirs share the vaults/ parent,
+// so the move can't cross filesystems.
+func moveHashDir(oldDir, newDir string) error {
+	if oldDir == newDir {
+		return nil
+	}
+	if _, err := os.Stat(oldDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("checking vault state dir %s: %w", oldDir, err)
+	}
+	if _, err := os.Lstat(newDir); err == nil {
+		return fmt.Errorf("vault state dir %s already exists; another vault owns it, refusing to merge it with %s", newDir, oldDir)
+	}
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return fmt.Errorf("moving vault state %s to %s: %w", oldDir, newDir, err)
+	}
+	return nil
+}
+
+// Rename rewrites the known-vaults registry after a vault's folder moved from
+// oldPath to newPath: the entry matching oldPath canonically is replaced with
+// newPath at the same position — the order feeds the recents list — and an
+// oldPath nobody recorded appends newPath. The last-vault pointer follows when
+// it named the renamed vault; one naming another vault stays put. On a
+// case-insensitive filesystem a case-only change matches canonically, so the
+// recorded spelling is updated in place rather than duplicated.
+func Rename(oldPath, newPath string) error {
+	oldKey, err := canonical(oldPath)
+	if err != nil {
+		return err
+	}
+	root, err := Root()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(root, knownVaultsFile)
+	existing, err := readLines(path)
+	if err != nil {
+		return err
+	}
+	updated := existing
+	replaced := false
+	for i, v := range existing {
+		if k, err := canonical(v); err == nil && k == oldKey {
+			updated[i] = strings.TrimSpace(newPath)
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		updated = append(updated, strings.TrimSpace(newPath))
+	}
+	if err := writeKnownVaults(path, updated); err != nil {
+		return err
+	}
+	last, err := LastVault()
+	if err != nil {
+		return err
+	}
+	if k, err := canonical(last); err != nil || k != oldKey {
+		return nil // the pointer names another vault (or none).
+	}
+	return writeLastVault(root, newPath)
+}
+
 // writeLastVault records vault in the pointer file, atomically so a crash can't
 // leave a truncated path behind. An empty vault removes the pointer instead —
 // that's "no vault to reopen", which LastVault also reports for a missing file.

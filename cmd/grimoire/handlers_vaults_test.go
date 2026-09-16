@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -24,11 +27,14 @@ type vaultsEnv struct {
 func newVaultsEnv(t *testing.T) vaultsEnv {
 	t.Helper()
 	reg := newTestRegistry(t)
-	api := grimoireapi.New(reg.runtimeOrLast, reg.open).WithVaultRegistry(reg.live, reg.close)
+	api := grimoireapi.New(reg.runtimeOrLast, reg.open).
+		WithVaultRegistry(reg.live, reg.close).
+		WithVaultRename(reg.renameVault)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/vaults/add", openVaultHandler(reg, zerolog.Nop()))
 	mux.HandleFunc("GET /api/vaults/render", vaultsRenderHandler(api, zerolog.Nop()))
 	mux.HandleFunc("POST /api/vaults/forget", forgetVaultHandler(api, zerolog.Nop()))
+	mux.HandleFunc("POST /api/vaults/rename", renameVaultHandler(api, zerolog.Nop()))
 	return vaultsEnv{mux: mux, reg: reg}
 }
 
@@ -114,4 +120,80 @@ func TestVaultsForgetHandler(t *testing.T) {
 
 	rec = env.postForm(t, "/api/vaults/forget", "")
 	require.Equal(t, http.StatusBadRequest, rec.Code, "a forget needs to name a vault")
+}
+
+// TestVaultsRenameHandler covers the tab's rename: the folder moves on disk,
+// the list follows, and the last-vault pointer moves only when it named the
+// renamed vault. A resident vault is retired for the move and re-warmed at its
+// new path.
+func TestVaultsRenameHandler(t *testing.T) {
+	env := newVaultsEnv(t)
+	ctx := context.Background()
+	keep, target := tempVault(t), tempVault(t)
+	require.NoError(t, env.reg.open(ctx, keep))
+	require.NoError(t, env.reg.open(ctx, target)) // target is the current one.
+	require.Len(t, env.reg.live(), 2)
+
+	// The daemon answers with the canonical spelling of the new path (the old
+	// path's casing folds on Windows), so derive the expectation from the
+	// registry's own key.
+	newPath := filepath.Join(filepath.Dir(mustCanonical(t, target)), "renamed")
+	rec := env.postForm(t, "/api/vaults/rename",
+		"path="+url.QueryEscape(target)+"&name=renamed")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{"ok":true,"path":`+strconv.Quote(newPath)+`}`, rec.Body.String())
+
+	require.DirExists(t, newPath, "the folder itself is renamed")
+	require.NoDirExists(t, target)
+	body := env.render(t)
+	require.Contains(t, body, `data-vault-path="`+newPath, "the list names the new path")
+	require.NotContains(t, body, `data-vault-path="`+target, "and drops the old one")
+	last, err := vaultdir.LastVault()
+	require.NoError(t, err)
+	require.Equal(t, newPath, last, "renaming the current vault repoints the default at the new path")
+	require.Contains(t, env.reg.live(), mustCanonical(t, newPath), "a resident vault is re-warmed at its new path")
+
+	// Renaming a vault that isn't the default must not move the default.
+	rec = env.postForm(t, "/api/vaults/rename",
+		"path="+url.QueryEscape(keep)+"&name=keep-renamed")
+	require.Equal(t, http.StatusOK, rec.Code)
+	last, err = vaultdir.LastVault()
+	require.NoError(t, err)
+	require.Equal(t, newPath, last, "renaming another vault leaves the default alone")
+
+	// A folder already occupying the new name is a conflict, not a merge.
+	require.NoError(t, os.MkdirAll(filepath.Join(filepath.Dir(target), "occupied"), 0o755))
+	rec = env.postForm(t, "/api/vaults/rename",
+		"path="+url.QueryEscape(newPath)+"&name=occupied")
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.DirExists(t, newPath, "the conflicting rename moved nothing")
+}
+
+// TestVaultsRenameHandlerValidation: a name that isn't a bare folder name is
+// rejected before anything touches the disk, and a missing field or a vault
+// whose folder is gone is reported rather than ignored — unlike forget, a
+// failed rename leaves the end state unchanged.
+func TestVaultsRenameHandlerValidation(t *testing.T) {
+	env := newVaultsEnv(t)
+	ctx := context.Background()
+	vault := tempVault(t)
+	require.NoError(t, env.reg.open(ctx, vault))
+
+	for _, tc := range []struct {
+		name, body string
+		wantCode   int
+	}{
+		{"a separator in the name", "path=" + url.QueryEscape(vault) + "&name=sub%2Frenamed", http.StatusInternalServerError},
+		{"a parent hop", "path=" + url.QueryEscape(vault) + "&name=..", http.StatusInternalServerError},
+		{"an empty name", "path=" + url.QueryEscape(vault) + "&name=", http.StatusBadRequest},
+		{"an empty path", "path=&name=renamed", http.StatusBadRequest},
+		{"a missing folder", "path=" + url.QueryEscape(filepath.Join(t.TempDir(), "gone")) + "&name=renamed", http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := env.postForm(t, "/api/vaults/rename", tc.body)
+			require.Equal(t, tc.wantCode, rec.Code)
+			require.DirExists(t, vault, "nothing moved")
+			require.Len(t, env.reg.live(), 1, "the vault's own runtime is untouched")
+		})
+	}
 }

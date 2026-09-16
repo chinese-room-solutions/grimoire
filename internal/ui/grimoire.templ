@@ -490,6 +490,17 @@ templ grimoirePage(settingsHTML, theme string, st State) {
 			<sl-button id="g-forget-confirm" slot="footer" variant="primary">Forget</sl-button>
 		</sl-dialog>
 
+		<!-- Renaming a vault moves its folder on disk. The input is prefilled
+		     with the current name (selected, so typing replaces it); JS keeps
+		     fresh handlers per ask so a stale confirm can't rename the wrong
+		     vault. -->
+		<sl-dialog id="g-rename-dialog" label="Rename vault" class="mass-dialog">
+			<span id="g-rename-body"></span>
+			<sl-input id="g-rename-input" autocomplete="off" spellcheck="false" style="margin-top:0.5rem"></sl-input>
+			<sl-button id="g-rename-cancel" slot="footer" variant="default">Cancel</sl-button>
+			<sl-button id="g-rename-confirm" slot="footer" variant="primary">Rename</sl-button>
+		</sl-dialog>
+
 		<!-- Keyboard shortcuts reference, opened from the sidebar header (or "?"). -->
 		<sl-dialog id="g-shortcuts-dialog" label="Keyboard shortcuts" class="mass-dialog">
 			@shortcutsDialog()
@@ -1336,6 +1347,9 @@ templ VaultList(vaults []VaultRow) {
 			<sl-dropdown class="g-vault-row-menu" placement="bottom-end" hoist>
 				<sl-icon-button slot="trigger" name="three-dots-vertical" title="Vault actions" tabindex="-1"></sl-icon-button>
 				<sl-menu>
+					if v.Available {
+						<sl-menu-item class="g-vault-rename" value="rename">Rename…</sl-menu-item>
+					}
 					<sl-menu-item class="g-vault-forget" value="forget">Forget</sl-menu-item>
 				</sl-menu>
 			</sl-dropdown>

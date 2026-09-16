@@ -131,6 +131,7 @@ func grimoireRoutes(reg *vaultRegistry, api *grimoireapi.API, ctl *daemonControl
 	mux.HandleFunc("POST /api/vaults/add", openVaultHandler(reg, logger))
 	mux.HandleFunc("GET /api/vaults/render", vaultsRenderHandler(api, logger))
 	mux.HandleFunc("POST /api/vaults/forget", forgetVaultHandler(api, logger))
+	mux.HandleFunc("POST /api/vaults/rename", renameVaultHandler(api, logger))
 	mux.HandleFunc("POST /api/settings", settings.Handler())
 	// The MASS connection (endpoint/token/CA) is global — available even in the
 	// empty state, so it can be fixed before any vault is open.
@@ -432,6 +433,31 @@ func forgetVaultHandler(api *grimoireapi.API, logger zerolog.Logger) http.Handle
 			return
 		}
 		writeJSONString(w, `{"ok":true}`)
+	}
+}
+
+// renameVaultHandler renames the posted path's vault folder to the posted name
+// (both form-encoded). It answers {"ok":true,"path":…} — the page navigates onto
+// the new path when the renamed vault is its own, and re-renders the list
+// otherwise, so the answer has to name where the vault went.
+func renameVaultHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimSpace(r.FormValue("path"))
+		name := strings.TrimSpace(r.FormValue("name"))
+		if path == "" || name == "" {
+			http.Error(w, "path and name are required", http.StatusBadRequest)
+			return
+		}
+		v, err := api.RenameVault(r.Context(), path, name)
+		if err != nil {
+			logger.Warn().Err(err).Str("vault", path).Str("name", name).Msg("renaming vault")
+			http.Error(w, "could not rename the vault", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, struct {
+			OK   bool   `json:"ok"`
+			Path string `json:"path"`
+		}{OK: true, Path: v.Path}, logger)
 	}
 }
 

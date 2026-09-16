@@ -16,6 +16,7 @@ func mountAPIVault(mux *http.ServeMux, api *grimoireapi.API, logger zerolog.Logg
 	mux.HandleFunc("POST /api/v1/vault/open", apiOpenVaultHandler(api, logger))
 	mux.HandleFunc("POST /api/v1/vault/switch", apiOpenVaultHandler(api, logger))
 	mux.HandleFunc("POST /api/v1/vault/forget", apiForgetVaultHandler(api, logger))
+	mux.HandleFunc("POST /api/v1/vault/rename", apiRenameVaultHandler(api, logger))
 }
 
 // apiForgetVaultHandler drops the vault at the posted {"path"} from the list
@@ -60,6 +61,34 @@ func apiOpenVaultHandler(api *grimoireapi.API, logger zerolog.Logger) http.Handl
 		v, err := api.OpenVault(r.Context(), body.Path)
 		if err != nil {
 			writeServiceError(w, err, logger, "open vault")
+			return
+		}
+		writeJSON(w, v, logger)
+	}
+}
+
+// apiRenameVaultHandler renames the vault at the posted {"path"} to the bare
+// folder name {"name"} — it stays in its parent folder — and returns the vault
+// at its new path. The vault's saved state and its index move with the folder,
+// so nothing reindexes.
+func apiRenameVaultHandler(api *grimoireapi.API, logger zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Path string `json:"path"`
+			Name string `json:"name"`
+		}
+		if !decodeBody(w, r, &body, logger) {
+			return
+		}
+		if !requireField(w, body.Path, "path", logger) {
+			return
+		}
+		if !requireField(w, body.Name, "name", logger) {
+			return
+		}
+		v, err := api.RenameVault(r.Context(), body.Path, body.Name)
+		if err != nil {
+			writeServiceError(w, err, logger, "rename vault")
 			return
 		}
 		writeJSON(w, v, logger)

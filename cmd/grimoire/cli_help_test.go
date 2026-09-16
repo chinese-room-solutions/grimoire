@@ -80,6 +80,7 @@ func TestCommandListCoversEveryVerb(t *testing.T) {
 	verbs := []string{
 		"search", "note get", "note create", "note update", "note edit", "note delete",
 		"note rename", "note props", "vault tree", "vault list", "vault current", "vault forget",
+		"vault rename",
 		"resolve", "folder create", "folder delete", "folder rename", "import",
 		"reindex", "kernel list", "kernel install", "kernel remove",
 		"theme list", "theme install", "theme remove",

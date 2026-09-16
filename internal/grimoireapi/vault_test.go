@@ -271,6 +271,31 @@ func TestOpenVaultRequiresPath(t *testing.T) {
 	require.Error(t, err)
 }
 
+// The rename validations reject a caller's mistakes before any hook runs; a
+// static API with no rename hook reports ErrRenameUnsupported for a name that
+// would otherwise go through. No service is built, so nothing is left open.
+func TestRenameVaultValidation(t *testing.T) {
+	api := NewStatic(nil)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, path, newName string
+	}{
+		{"empty path", "", "renamed"},
+		{"blank name", "/vaults/a", "  "},
+		{"a path in the name", "/vaults/a", "sub/renamed"},
+		{"a parent hop", "/vaults/a", ".."},
+		{"this folder", "/vaults/a", "."},
+		{"a NUL byte", "/vaults/a", "re\x00named"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := api.RenameVault(ctx, tc.path, tc.newName)
+			require.Error(t, err)
+		})
+	}
+	_, err := api.RenameVault(ctx, "/vaults/a", "renamed")
+	require.ErrorIs(t, err, ErrRenameUnsupported)
+}
+
 func TestOpenVaultUnsupportedWhenStatic(t *testing.T) {
 	// A static API has no open hook: there is no vault to switch to.
 	api := NewStatic(app.New(testShared(t), t.TempDir(), t.TempDir(), t.TempDir(), zerolog.Nop()))

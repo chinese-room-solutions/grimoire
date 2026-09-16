@@ -74,7 +74,7 @@ grimoire --vault PATH [--json] <command> [args]
 | --- | --- |
 | **search** | `search QUERY [-k N]` (across every vault at once) |
 | **note** | `note get PATH` · `note create PATH` · `note update PATH` · `note edit PATH --old S --new S ...` · `note delete PATH` · `note rename FROM TO` (retargets the `[[wikilinks]]` that pointed at the note, code blocks excepted) · `note props PATH --set key=v1,v2` |
-| **vault** | `vault tree` · `vault list` · `vault current` · `vault forget PATH` |
+| **vault** | `vault tree` · `vault list` · `vault current` · `vault forget PATH` · `vault rename PATH NEW-NAME` |
 | **resolve** | `resolve TARGET` (a wikilink or bare name → a note path) |
 | **folder** | `folder create PATH` · `folder delete PATH` · `folder rename FROM TO` |
 | **trash** | `trash list` · `trash restore ID` · `trash delete ID` · `trash empty` |
@@ -155,7 +155,7 @@ exits `2` rather than guessing. There is no last-used fallback: that pointer
 follows the app's window, so a vault switched there would silently redirect a
 running script's next write. `--vault` never moves the pointer either, so an
 agent working across vaults can't change which one the app reopens. The
-app-level verbs (`vault list|current|forget`, `kernel`, `theme`, `skill`,
+app-level verbs (`vault list|current|forget|rename`, `kernel`, `theme`, `skill`,
 `screenshot`, `serve`) take no vault at all.
 
 `grimoire vault list` prints the vaults Grimoire knows about with their state —
@@ -164,7 +164,9 @@ indexed it — with a `*` on the one the app has open; it's where the `--vault`
 paths come from. `grimoire vault current` reports that same vault: what the app
 reopens, not a default for the CLI. `grimoire vault forget PATH` drops one from
 the list and stops serving it; nothing on disk is touched, so opening the path
-again brings it back.
+again brings it back. `grimoire vault rename PATH NEW-NAME` renames the vault's
+folder (a bare name, in the same parent) and carries the vault's list entry,
+saved state, and search index with it, so nothing reindexes.
 
 **One daemon serves every vault**, and each request names the vault it acts on.
 If none is running, the CLI **spawns a headless daemon on demand** (no window),

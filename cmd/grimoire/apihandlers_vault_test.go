@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"testing"
 
 	"github.com/chinese-room-solutions/grimoire/internal/grimoireapi"
@@ -24,7 +25,9 @@ func newVaultMux(t *testing.T) *http.ServeMux {
 func newVaultMuxReg(t *testing.T) (*http.ServeMux, *vaultRegistry) {
 	t.Helper()
 	reg := newTestRegistry(t)
-	api := grimoireapi.New(reg.runtimeOrLast, reg.open).WithVaultRegistry(reg.live, reg.close)
+	api := grimoireapi.New(reg.runtimeOrLast, reg.open).
+		WithVaultRegistry(reg.live, reg.close).
+		WithVaultRename(reg.renameVault)
 	mux := http.NewServeMux()
 	mountAPI(mux, api, testControl(), zerolog.Nop())
 	return mux, reg
@@ -122,4 +125,48 @@ func TestAPIVaultOpsUnsupportedWhenStatic(t *testing.T) {
 	mux := newAPIMux(t, nil)
 	rec := doJSON(t, mux, http.MethodPost, "/api/v1/vault/open", map[string]string{"path": "/x"})
 	require.Equal(t, http.StatusNotImplemented, rec.Code)
+	rec = doJSON(t, mux, http.MethodPost, "/api/v1/vault/rename", map[string]string{"path": "/x", "name": "y"})
+	require.Equal(t, http.StatusNotImplemented, rec.Code, "a static API has no folder to rename")
+}
+
+// TestAPIRenameVault covers the JSON rename: the folder moves, the vault is
+// answered at its new path, and the caller's mistakes are turned away before
+// anything touches the disk.
+func TestAPIRenameVault(t *testing.T) {
+	mux, reg := newVaultMuxReg(t)
+	vault := tempVault(t)
+	require.Equal(t, http.StatusOK,
+		doJSON(t, mux, http.MethodPost, "/api/v1/vault/open", map[string]string{"path": vault}).Code)
+
+	newPath := filepath.Join(filepath.Dir(mustCanonical(t, vault)), "renamed")
+	rec := doJSON(t, mux, http.MethodPost, "/api/v1/vault/rename", map[string]string{"path": vault, "name": "renamed"})
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got grimoireapi.Vault
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, newPath, got.Path)
+	require.Equal(t, "renamed", got.Name)
+	require.True(t, got.Available)
+	require.DirExists(t, newPath)
+	require.NoDirExists(t, vault)
+	require.Contains(t, reg.live(), mustCanonical(t, newPath), "a resident vault is re-warmed at its new path")
+
+	// A missing field or a non-folder name is the caller's mistake (400);
+	// an unavailable vault is 503 like every other vault op.
+	for _, tc := range []struct {
+		name string
+		body map[string]string
+		want int
+	}{
+		{"no path", map[string]string{"name": "x"}, http.StatusBadRequest},
+		{"no name", map[string]string{"path": newPath}, http.StatusBadRequest},
+		{"a path in the name", map[string]string{"path": newPath, "name": "a/b"}, http.StatusBadRequest},
+		{"a parent hop", map[string]string{"path": newPath, "name": ".."}, http.StatusBadRequest},
+		{"a missing folder", map[string]string{"path": "/definitely/not/here", "name": "x"}, http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doJSON(t, mux, http.MethodPost, "/api/v1/vault/rename", tc.body)
+			require.Equal(t, tc.want, rec.Code)
+		})
+	}
+	require.DirExists(t, newPath, "no rejected call moved anything")
 }

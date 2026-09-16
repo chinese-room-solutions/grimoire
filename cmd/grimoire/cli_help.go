@@ -103,11 +103,19 @@ and the one it reopens next. CLI commands do not fall back to it: every
 vault-scoped command names its vault with --vault.`},
 
 	{"vault forget", "vault forget PATH", "drop a vault from the list", vaultNone, `
-Drop a vault from the list Grimoire keeps and stop serving it. Nothing is
-deleted: the folder, its notes, and its saved index all stay on disk, and
-opening the path again brings the vault back exactly as it was. Forgetting the
-vault the app has open repoints it at another known one. A path Grimoire
-doesn't know is a no-op.`},
+	Drop a vault from the list Grimoire keeps and stop serving it. Nothing is
+	deleted: the folder, its notes, and its saved index all stay on disk, and
+	opening the path again brings the vault back exactly as it was. Forgetting the
+	vault the app has open repoints it at another known one. A path Grimoire
+	doesn't know is a no-op.`},
+
+	{"vault rename", "vault rename PATH NEW-NAME", "rename a vault's folder", vaultNone, `
+	Rename the vault's folder to NEW-NAME (a bare name — the vault stays in its
+	parent folder) and move everything Grimoire keeps for it with it: the list
+	entry, the vault the app reopens when it named this one, the saved runs and
+	UI state, and the search index, so nothing reindexes. Fails when a folder
+	named NEW-NAME already exists next to it, or when another program holds the
+	folder open.`},
 
 	{"resolve", "resolve TARGET", "resolve a wikilink/name to a note path", vaultRequired, `
 Resolve a wikilink or bare note name ("My Note", "My Note|alias", a relative
