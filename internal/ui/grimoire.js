@@ -193,6 +193,16 @@
         if (row.classList.contains("g-vault-row-current")) return;
         location.assign(vaultURL(path));
       });
+      // Right-click opens the row's overflow menu where the pointer is, the way
+      // a native context menu would.
+      list.addEventListener("contextmenu", function (e) {
+        var row = e.target.closest(".g-vault-row");
+        if (!row) return;
+        var menu = row.querySelector(".g-vault-row-menu");
+        if (!menu) return;
+        e.preventDefault();
+        menu.show();
+      });
     }
     return { init: init };
   })();

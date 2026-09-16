@@ -1278,6 +1278,11 @@ var styleBlock = `<style>
 #app-grimoire .g-vault-row-menu{color:var(--mass-text-muted);opacity:0;transition:opacity 0.1s}
 #app-grimoire .g-vault-row:hover .g-vault-row-menu,#app-grimoire .g-vault-row-menu[open]{opacity:1}
 #app-grimoire .g-vault-row-menu sl-icon-button::part(base){padding:0.1rem}
+/* A two-item menu, kept compact: Shoelace's sl-menu pads its host top and bottom
+   (the thin empty lines above the first item and below the last) and sizes items
+   at body text, so the panel opens taller than the two rows it holds. */
+#app-grimoire .g-vault-row-menu sl-menu{padding:0}
+#app-grimoire .g-vault-row-menu sl-menu-item::part(base){padding:0.3rem 0.9rem;font-size:0.8rem}
 
 /* Files: vault folder tree */
 #app-grimoire .g-files-section{gap:0.4rem}

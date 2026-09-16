@@ -3381,7 +3381,7 @@ func VaultList(vaults []VaultRow) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if v.Available {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 242, "<sl-menu-item class=\"g-vault-rename\" value=\"rename\">Rename…</sl-menu-item> ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 242, "<sl-menu-item class=\"g-vault-rename\" value=\"rename\">Rename</sl-menu-item> ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
