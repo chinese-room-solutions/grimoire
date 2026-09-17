@@ -348,3 +348,194 @@ func TestMigrationNoLegacyIsNoOp(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, last)
 }
+
+// seedVaultState records a vault and plants a marker file in each of its two
+// dirs, so a move is observable by where the markers land.
+func seedVaultState(t *testing.T, vault string) (dataDir, cacheDir string) {
+	t.Helper()
+	require.NoError(t, SetLastVault(vault))
+	dataDir, err := For(vault)
+	require.NoError(t, err)
+	cacheDir, err = CacheFor(vault)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "runs.db"), []byte("runs"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(cacheDir, "index-m.db"), []byte("index"), 0o600))
+	return dataDir, cacheDir
+}
+
+func TestRename(t *testing.T) {
+	tests := []struct {
+		name      string
+		vaults    []string // vault folders to create and record, in order.
+		last      int      // index the last-vault pointer is left on; -1 for none.
+		rename    int      // index of the vault being renamed.
+		newName   string   // its new folder name.
+		wantKnown []string // the registry afterwards, in order.
+		wantLast  string   // the pointer afterwards, "" for cleared.
+	}{
+		{
+			name:      "a known vault is replaced in order",
+			vaults:    []string{"first", "second", "third"},
+			last:      2,
+			rename:    1,
+			newName:   "renamed",
+			wantKnown: []string{"first", "renamed", "third"},
+			wantLast:  "third",
+		},
+		{
+			name:      "an unknown vault is appended",
+			vaults:    []string{"first"},
+			last:      0,
+			rename:    2, // no such recording: ghost/renamed is new.
+			newName:   "renamed",
+			wantKnown: []string{"first", "renamed"},
+			wantLast:  "first",
+		},
+		{
+			name:      "the pointed-at vault is repointed",
+			vaults:    []string{"first", "second"},
+			last:      1,
+			rename:    1,
+			newName:   "renamed",
+			wantKnown: []string{"first", "renamed"},
+			wantLast:  "renamed",
+		},
+		{
+			name:      "a pointer at another vault stays put",
+			vaults:    []string{"first", "second"},
+			last:      0,
+			rename:    1,
+			newName:   "renamed",
+			wantKnown: []string{"first", "renamed"},
+			wantLast:  "first",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			useTempDirs(t)
+			base := t.TempDir()
+			vaults := make([]string, len(tc.vaults))
+			for i, name := range tc.vaults {
+				vaults[i] = filepath.Join(base, name)
+				require.NoError(t, os.MkdirAll(vaults[i], 0o755))
+				require.NoError(t, SetLastVault(vaults[i]))
+			}
+			if tc.last >= 0 {
+				require.NoError(t, SetLastVault(vaults[tc.last]))
+			}
+
+			oldName := "ghost"
+			if tc.rename < len(tc.vaults) {
+				oldName = tc.vaults[tc.rename]
+			}
+			oldPath := filepath.Join(base, oldName)
+			newPath := filepath.Join(base, tc.newName)
+			require.NoError(t, os.MkdirAll(oldPath, 0o755))
+			require.NoError(t, os.Rename(oldPath, newPath))
+			require.NoError(t, Rename(oldPath, newPath))
+
+			wantKnown := make([]string, 0, len(tc.wantKnown))
+			for _, name := range tc.wantKnown {
+				wantKnown = append(wantKnown, filepath.Join(base, name))
+			}
+			recorded, err := RecordedVaults()
+			require.NoError(t, err)
+			require.Equal(t, wantKnown, recorded)
+
+			wantLast := ""
+			if tc.wantLast != "" {
+				wantLast = filepath.Join(base, tc.wantLast)
+			}
+			last, err := LastVault()
+			require.NoError(t, err)
+			require.Equal(t, wantLast, last)
+		})
+	}
+}
+
+// On a case-sensitive filesystem a case-only rename is a different key, so the
+// in-place-update half of the case test can't run there.
+func TestRenameCaseOnlyUpdatesSpellingOnce(t *testing.T) {
+	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+		t.Skip("needs a case-insensitive filesystem")
+	}
+	useTempDirs(t)
+	base := t.TempDir()
+	vault := filepath.Join(base, "second")
+	require.NoError(t, os.MkdirAll(vault, 0o755))
+	require.NoError(t, SetLastVault(vault))
+
+	newPath := filepath.Join(base, "SECOND")
+	require.NoError(t, Rename(vault, newPath))
+
+	recorded, err := RecordedVaults()
+	require.NoError(t, err)
+	require.Equal(t, []string{newPath}, recorded, "one entry, with the new spelling")
+}
+
+func TestMoveVaultState(t *testing.T) {
+	t.Run("moves both sides", func(t *testing.T) {
+		useTempDirs(t)
+		base := t.TempDir()
+		oldPath, newPath := filepath.Join(base, "old"), filepath.Join(base, "new")
+		require.NoError(t, os.MkdirAll(oldPath, 0o755))
+		oldData, oldCache := seedVaultState(t, oldPath)
+
+		require.NoError(t, MoveVaultState(oldPath, newPath))
+
+		newData, err := DataPath(newPath)
+		require.NoError(t, err)
+		newCache, err := CachePath(newPath)
+		require.NoError(t, err)
+		require.FileExists(t, filepath.Join(newData, "runs.db"))
+		require.FileExists(t, filepath.Join(newCache, "index-m.db"))
+		require.NoDirExists(t, oldData)
+		require.NoDirExists(t, oldCache)
+	})
+
+	t.Run("skips a side whose source is missing", func(t *testing.T) {
+		useTempDirs(t)
+		base := t.TempDir()
+		oldPath, newPath := filepath.Join(base, "old"), filepath.Join(base, "new")
+		require.NoError(t, os.MkdirAll(oldPath, 0o755))
+		seedVaultState(t, oldPath)
+		// Drop the cache side: the OS may purge it at any time.
+		oldCache, err := CachePath(oldPath)
+		require.NoError(t, err)
+		require.NoError(t, os.RemoveAll(oldCache))
+
+		require.NoError(t, MoveVaultState(oldPath, newPath))
+
+		newData, err := DataPath(newPath)
+		require.NoError(t, err)
+		require.DirExists(t, newData, "the data side still moves")
+	})
+
+	t.Run("no-ops when the hashes are equal", func(t *testing.T) {
+		useTempDirs(t)
+		vault := t.TempDir()
+		dataDir, cacheDir := seedVaultState(t, vault)
+		// Any two spellings that canonicalize the same (here: a redundant
+		// segment) hash the same, so nothing may move.
+		sameVault := filepath.Join(vault, "sub", "..")
+
+		require.NoError(t, MoveVaultState(vault, sameVault))
+		require.DirExists(t, dataDir)
+		require.DirExists(t, cacheDir)
+	})
+
+	t.Run("errors when the target dir already exists", func(t *testing.T) {
+		useTempDirs(t)
+		base := t.TempDir()
+		oldPath, newPath := filepath.Join(base, "old"), filepath.Join(base, "new")
+		require.NoError(t, os.MkdirAll(oldPath, 0o755))
+		require.NoError(t, os.MkdirAll(newPath, 0o755))
+		seedVaultState(t, oldPath)
+		seedVaultState(t, newPath) // another vault owns the target hash dir
+
+		err := MoveVaultState(oldPath, newPath)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "already exists")
+		require.Contains(t, err.Error(), "refusing to merge")
+	})
+}

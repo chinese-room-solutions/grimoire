@@ -15,7 +15,7 @@ import (
 // runVault dispatches the `grimoire vault <sub>` verbs.
 func (e *cliEnv) runVault(args []string) int {
 	if len(args) == 0 {
-		e.usageErrf("vault needs a subcommand (tree|list|current|forget)")
+		e.usageErrf("vault needs a subcommand (tree|list|current|forget|rename)")
 		return exitUsage
 	}
 	switch args[0] {
@@ -27,6 +27,8 @@ func (e *cliEnv) runVault(args []string) int {
 		return e.runVaultCurrent(args[1:])
 	case "forget":
 		return e.runVaultForget(args[1:])
+	case "rename":
+		return e.runVaultRename(args[1:])
 	default:
 		e.usageErrf("unknown vault subcommand %q", args[0])
 		return exitUsage
@@ -153,6 +155,30 @@ func (e *cliEnv) runVaultForget(args []string) int {
 		return exitOK
 	}
 	e.outf("forgot %s\n", args[0])
+	return exitOK
+}
+
+// runVaultRename handles `grimoire vault rename PATH NEW-NAME`: renames the
+// vault's folder, and everything Grimoire keeps for the vault follows it.
+func (e *cliEnv) runVaultRename(args []string) int {
+	if len(args) != 2 {
+		e.usageErrf("vault rename takes exactly PATH and NEW-NAME arguments")
+		return exitUsage
+	}
+	var vault grimoireapi.Vault
+	err := e.doWrite(context.Background(), func(ctx context.Context, c *apiclient.Client) error {
+		var callErr error
+		vault, callErr = c.RenameVault(ctx, args[0], args[1])
+		return callErr
+	})
+	if err != nil {
+		return e.report(err)
+	}
+	if e.json {
+		e.writeJSON(e.out, vault)
+		return exitOK
+	}
+	e.outf("renamed to %s\n", vault.Path)
 	return exitOK
 }
 

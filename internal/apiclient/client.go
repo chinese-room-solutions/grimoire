@@ -123,6 +123,16 @@ func (c *Client) ForgetVault(ctx context.Context, path string) error {
 	return c.sendJSON(ctx, http.MethodPost, "/vault/forget", map[string]string{"path": path}, nil)
 }
 
+// RenameVault renames the vault at path's folder to the bare folder name,
+// returning the vault at its new path. The vault's saved state and its index
+// move with the folder, so nothing reindexes.
+func (c *Client) RenameVault(ctx context.Context, path, name string) (grimoireapi.Vault, error) {
+	body := map[string]string{"path": path, "name": name}
+	var out grimoireapi.Vault
+	err := c.sendJSON(ctx, http.MethodPost, "/vault/rename", body, &out)
+	return out, err
+}
+
 // Resolve maps a wikilink/name to a note path. A non-match is a normal answer
 // (Found=false), not an error.
 func (c *Client) Resolve(ctx context.Context, target string) (grimoireapi.Resolution, error) {

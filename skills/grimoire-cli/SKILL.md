@@ -26,8 +26,9 @@ have guessed is the one the app has open, and the user can repoint that while
 your script runs. `grimoire vault list` gives you the paths.
 
 `search` is the exception: it covers **every** vault, and `--vault` narrows it
-to one. `vault list`, `vault current`, `vault forget PATH`, `kernel *`,
-`theme *`, `skill *` and `update` are app-level and take no vault.
+to one. `vault list`, `vault current`, `vault forget PATH`,
+`vault rename PATH NEW-NAME`, `kernel *`, `theme *`, `skill *` and `update` are
+app-level and take no vault.
 
 ## Indexing is automatic — don't reindex
 
@@ -83,6 +84,10 @@ A full `reindex` before searching is wasted minutes, not a warm-up step.
   opening the path again restores everything. Forgetting the vault the app has
   open repoints it at another known one; a path Grimoire doesn't know is a
   no-op. Use it to tidy the list, never to remove notes.
+- `vault rename PATH NEW-NAME` — renames the vault's folder (arguments, not
+  `--vault`) to a bare NEW-NAME in the same parent, and carries the vault's
+  saved state and search index with it, so nothing reindexes. Fails when a
+  folder named NEW-NAME already exists next to it.
 
 ## Editing
 

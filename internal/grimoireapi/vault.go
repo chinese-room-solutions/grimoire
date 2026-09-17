@@ -3,7 +3,9 @@ package grimoireapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,6 +17,15 @@ import (
 // ErrSwitchUnsupported is returned by OpenVault on an API whose vault is fixed
 // for its lifetime (no open hook was wired) — there is nothing to switch.
 var ErrSwitchUnsupported = errors.New("vault switching is not supported by this instance")
+
+// ErrRenameUnsupported is returned by RenameVault on an API whose vault is
+// fixed for its lifetime (no rename hook was wired) — there is no folder to
+// rename.
+var ErrRenameUnsupported = errors.New("vault renaming is not supported by this instance")
+
+// ErrBadVaultName is returned by RenameVault when the requested name can't be a
+// folder name — the caller's mistake, rejected before anything touches the disk.
+var ErrBadVaultName = errors.New("vault name must be a bare folder name")
 
 // Vault is one vault's status: what it's called, where it is, and what state
 // Grimoire has it in. It answers both "which vaults can I navigate to" (an agent
@@ -110,6 +121,37 @@ func (a *API) CurrentVault(ctx context.Context) (Vault, bool) {
 		return Vault{}, false
 	}
 	return a.describe(current), true
+}
+
+// RenameVault renames the vault at path's folder to newName — a bare folder
+// name, so the vault stays in its parent folder — and returns the vault at its
+// new path. Everything Grimoire keeps for the vault follows the folder: its
+// config and saved runs, its UI state, its search index, and its place in the
+// vault list, so nothing reindexes and nothing is lost.
+func (a *API) RenameVault(ctx context.Context, path, newName string) (Vault, error) {
+	if path == "" {
+		return Vault{}, errors.New("vault path is required")
+	}
+	name := strings.TrimSpace(newName)
+	if name == "" {
+		return Vault{}, fmt.Errorf("%w: it is empty", ErrBadVaultName)
+	}
+	// A name that is its own base and neither dot can't hold a separator, on
+	// any OS — it names exactly the folder next to the current one.
+	if filepath.Base(name) != name || name == "." || name == ".." {
+		return Vault{}, fmt.Errorf("%w: %q is a path, not a folder name", ErrBadVaultName, name)
+	}
+	if strings.ContainsRune(name, 0) {
+		return Vault{}, fmt.Errorf("%w: it contains a NUL byte", ErrBadVaultName)
+	}
+	if a.rename == nil {
+		return Vault{}, ErrRenameUnsupported
+	}
+	newPath, err := a.rename(ctx, path, name)
+	if err != nil {
+		return Vault{}, err
+	}
+	return a.describe(newPath), nil
 }
 
 // describe is vaultStatus for a single vault, so one vault reports the same

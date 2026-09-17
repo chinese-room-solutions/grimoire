@@ -46,6 +46,10 @@ type API struct {
 	// closeVault stops a vault's resident runtime; nil where there is none to
 	// stop. ForgetVault calls it before dropping the vault from the registry.
 	closeVault func(vault string)
+	// rename renames a vault's folder and carries its per-vault state to the
+	// new identity, returning the vault's new absolute path; nil where
+	// renaming isn't supported (a fixed-vault API).
+	rename func(ctx context.Context, oldPath, newName string) (string, error)
 }
 
 // SearchFanout runs one query across every vault the daemon serves and returns
@@ -77,6 +81,14 @@ func (a *API) WithSearchFanout(fn SearchFanout) *API {
 // reports only what's on disk and forgetting leaves nothing to stop.
 func (a *API) WithVaultRegistry(live func() map[string]*app.Service, closeVault func(vault string)) *API {
 	a.live, a.closeVault = live, closeVault
+	return a
+}
+
+// WithVaultRename installs the vault-rename seam and returns the API, so a
+// daemon that owns the vault registry can rename a vault's folder and move its
+// state with it. Without it RenameVault reports ErrRenameUnsupported.
+func (a *API) WithVaultRename(fn func(ctx context.Context, oldPath, newName string) (string, error)) *API {
+	a.rename = fn
 	return a
 }
 

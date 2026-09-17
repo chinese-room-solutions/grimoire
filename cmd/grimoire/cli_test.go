@@ -278,6 +278,7 @@ func TestVaultUseFor(t *testing.T) {
 		{[]string{"vault", "list"}, vaultNone},
 		{[]string{"vault", "current"}, vaultNone},
 		{[]string{"vault", "forget", "/v"}, vaultNone},
+		{[]string{"vault", "rename", "/v", "renamed"}, vaultNone},
 		{[]string{"kernel", "list"}, vaultNone},
 		{[]string{"theme", "install", "theme-x"}, vaultNone},
 		{[]string{"skill", "show"}, vaultNone},
@@ -583,6 +584,30 @@ func TestCLIVaultForget(t *testing.T) {
 	e, _, errBuf := b.env(t, false)
 	require.Equal(t, exitUsage, e.dispatch([]string{"vault", "forget"}))
 	require.Contains(t, errBuf.String(), "exactly one PATH")
+}
+
+// TestCLIVaultRename checks the verb reaches the rename endpoint with both
+// arguments and prints the new path; a wrong arity is a usage error before any
+// request goes out.
+func TestCLIVaultRename(t *testing.T) {
+	b := newCLIBackend(t, map[string]http.HandlerFunc{
+		"POST /api/v1/vault/rename": func(w http.ResponseWriter, _ *http.Request) {
+			stubJSON(t, w, map[string]any{"name": "renamed", "path": "/v/renamed"})
+		},
+	})
+
+	e, out, _ := b.env(t, false)
+	require.Equal(t, exitOK, e.dispatch([]string{"vault", "rename", "/v", "renamed"}))
+	require.JSONEq(t, `{"path":"/v","name":"renamed"}`, b.lastBody)
+	require.Equal(t, "renamed to /v/renamed\n", out.String())
+
+	e, out, _ = b.env(t, true)
+	require.Equal(t, exitOK, e.dispatch([]string{"vault", "rename", "/v", "renamed"}))
+	require.JSONEq(t, `{"name":"renamed","path":"/v/renamed","current":false,"available":false}`, out.String())
+
+	e, _, errBuf := b.env(t, false)
+	require.Equal(t, exitUsage, e.dispatch([]string{"vault", "rename", "/v"}))
+	require.Contains(t, errBuf.String(), "exactly PATH and NEW-NAME")
 }
 
 func TestCLITrashList(t *testing.T) {

@@ -142,7 +142,8 @@ func apiScreenshotHandler(api *grimoireapi.API, logger zerolog.Logger) http.Hand
 func writeServiceError(w http.ResponseWriter, err error, logger zerolog.Logger, op string) {
 	switch {
 	case errors.Is(err, app.ErrOutsideVault), errors.Is(err, grimoireapi.ErrKernelBuiltin),
-		errors.Is(err, grimoireapi.ErrKernelVaultManaged), errors.Is(err, grimoireapi.ErrThemeBuiltin):
+		errors.Is(err, grimoireapi.ErrKernelVaultManaged), errors.Is(err, grimoireapi.ErrThemeBuiltin),
+		errors.Is(err, grimoireapi.ErrBadVaultName):
 		writeAPIError(w, http.StatusBadRequest, err.Error(), logger)
 	case errors.Is(err, app.ErrNoVault), errors.Is(err, errVaultUnavailable), errors.Is(err, app.ErrNoModel),
 		errors.Is(err, app.ErrStoreNotReady), errors.Is(err, app.ErrNoScreenshot),
@@ -160,7 +161,7 @@ func writeServiceError(w http.ResponseWriter, err error, logger zerolog.Logger, 
 		// The registry answered but its archive was unusable — an upstream fault,
 		// reported verbatim so the operator sees what was wrong with the package.
 		writeAPIError(w, http.StatusBadGateway, err.Error(), logger)
-	case errors.Is(err, grimoireapi.ErrSwitchUnsupported):
+	case errors.Is(err, grimoireapi.ErrSwitchUnsupported), errors.Is(err, grimoireapi.ErrRenameUnsupported):
 		writeAPIError(w, http.StatusNotImplemented, err.Error(), logger)
 	default:
 		// A missing note surfaces as a read error; report it as 404 when the op is a
