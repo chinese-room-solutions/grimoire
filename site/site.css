@@ -1,0 +1,283 @@
+/* Grimoire landing page — candlelit-occult layout on top of the SDK theme
+   variables (vendor/theme.css). All colors come from --mass-* tokens; the
+   block below retunes them from the dark base's cold carbon to a candlelit
+   study, so the whole page follows. */
+
+/* -- Candlelit token overrides ---------------------------------------------- */
+/* The dark base also carries a Carbon block (inverted fills + neon glows)
+   scoped to html:not([data-theme]):not(.sl-theme-light) at (0,2,1) — higher
+   than html.sl-theme-dark — so the page's html tag carries the extra .candle
+   class: same specificity as that block, and this sheet loads after
+   vendor/theme.css, so these values win. Amber accent, moss success, warm
+   brown surfaces; the glow tokens ride the accent. */
+html.sl-theme-dark.candle {
+  color-scheme: dark;
+  --mass-bg-base:    #171310;
+  --mass-bg-panel:   #211b15;
+  --mass-bg-hover:   #2b241c;
+  --mass-bg-active:  rgba(217, 164, 74, 0.3);
+  --mass-border:     #3a3128;
+  --mass-scrollbar-thumb: #8a7c68;
+  --mass-text:       #ece2d0;
+  --mass-text-muted: #b1a390;
+  --mass-text-faint: #82755f;
+  --mass-accent:       #d9a44a;
+  --mass-accent-soft:  color-mix(in srgb, var(--mass-accent) 18%, transparent);
+  --mass-accent-fill:  #d9a44a;
+  --mass-success:      #96b078;
+  --mass-success-soft: color-mix(in srgb, var(--mass-success) 14%, transparent);
+  --mass-success-fill: #55703c;
+  --mass-fill-text: #241b0f;
+  --mass-glow-primary: 0 0 6px rgba(217,164,74,.45), 0 0 14px rgba(217,164,74,.18);
+  --mass-glow-focus:   0 0 5px rgba(217,164,74,.4), 0 0 12px rgba(217,164,74,.14);
+  --mass-glow-panel:   0 0 14px rgba(217,164,74,.10);
+  --mass-glow-heading: 0 0 9px rgba(217,164,74,.22);
+  --mass-glow-tab:     0 0 8px rgba(217,164,74,.45);
+  --mass-glow-logo:    drop-shadow(0 0 4px rgba(217,164,74,.4));
+}
+
+* { box-sizing: border-box; margin: 0; }
+body {
+  /* theme.css paints the background on BOTH html and body (the body one
+     !important). The .smoke backdrop at z-index -1 sits between them in paint
+     order, so body must stay transparent or it covers the embers;
+     !important + later load order beats theme.css:428. */
+  background: transparent !important;
+  color: var(--mass-text);
+  font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+a { color: var(--mass-accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+
+/* Display face for the brand mark and headings: Cormorant Garamond 600
+   (latin subset, OFL — fonts/OFL.txt). The runes and digits the brand cycle
+   diffuses through fall back to the serif stack. */
+@font-face {
+  font-family: "Cormorant Garamond";
+  src: url("fonts/CormorantGaramond-600.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+h1, h2, h3 {
+  font-family: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+  font-weight: 600;
+}
+
+/* Candlelit backdrop: fixed embers canvas (site.js) + CSS smoke glow.
+   body's background propagates to the root canvas, so z-index -1 lands
+   between it and the content — no other stacking changes needed. */
+.smoke { position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  /* Scroll-driven dim: full-strength behind the hero, subdued once
+     text-heavy sections take over. No-op (stays full) where
+     animation-timeline is unsupported. */
+  animation: smoke-dim linear both; animation-timeline: scroll();
+}
+@keyframes smoke-dim {
+  0% { opacity: 1; }
+  18% { opacity: 0.45; }
+  100% { opacity: 0.45; }
+}
+.smoke canvas { display: block; width: 100%; height: 100%; }
+/* Candle glow: a warm halo anchored to the hero region, drifting very slowly
+   like smoke. Subtler than the accent it rides — both stops come from the
+   accent token so the whole thing retunes with the theme. */
+.smoke::before {
+  content: ""; position: absolute; inset: -20% -10%;
+  background:
+    radial-gradient(42% 30% at 50% 14%, color-mix(in srgb, var(--mass-accent) 11%, transparent), transparent 70%),
+    radial-gradient(30% 24% at 22% 26%, color-mix(in srgb, var(--mass-accent) 7%, transparent), transparent 70%),
+    radial-gradient(30% 24% at 78% 26%, color-mix(in srgb, var(--mass-success) 6%, transparent), transparent 70%);
+  animation: smoke-drift 46s ease-in-out infinite alternate;
+}
+@keyframes smoke-drift {
+  from { transform: translate3d(-2%, -1%, 0) scale(1); }
+  to   { transform: translate3d(2%, 2%, 0) scale(1.06); }
+}
+
+header {
+  position: sticky; top: 0; z-index: 10;
+  background: color-mix(in srgb, var(--mass-bg-base) 88%, transparent);
+  backdrop-filter: blur(8px); border-bottom: 1px solid var(--mass-border);
+}
+header .wrap { display: flex; align-items: center; justify-content: center; height: 56px; }
+nav { display: flex; gap: 18px; font-size: 14px; }
+nav a { color: var(--mass-text-muted); }
+
+.hero { padding: 88px 0 64px; text-align: center; }
+/* The brand mark diffuses between GRIMOIRE / runes / the loopback address
+   (site.js). Cormorant carries it; the amber glow rides the theme accent.
+   Proportional glyphs jitter the width mid-scramble — centered, it reads as
+   candlelight rather than a glitch. */
+.brand-cycle {
+  font-family: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+  font-weight: 600;
+  font-size: 84px; line-height: 1;
+  letter-spacing: 0.08em; margin-bottom: 30px; white-space: pre;
+  color: var(--mass-text);
+  text-shadow: 0 0 18px var(--mass-accent-soft), 0 0 42px var(--mass-accent-soft);
+}
+.brand-cycle.flicker { opacity: 0.72; transform: skewX(-4deg); }
+.hero h1 { font-size: 40px; letter-spacing: -0.01em; }
+.hero p.sub { color: var(--mass-text-muted); font-size: 19px; max-width: 640px; margin: 14px auto 0; }
+.cta { margin-top: 34px; display: flex; gap: 14px; justify-content: center; }
+.btn { display: inline-block; padding: 10px 22px; border-radius: 8px; font-weight: 600; font-size: 15px; }
+.btn.primary {
+  background: var(--mass-accent-fill); color: var(--mass-fill-text);
+  box-shadow: 0 0 22px color-mix(in srgb, var(--mass-accent) 25%, transparent);
+}
+.btn.primary:hover { background: color-mix(in srgb, var(--mass-accent-fill) 88%, #000); text-decoration: none; }
+.btn.ghost { border: 1px solid var(--mass-border); color: var(--mass-text); }
+.pill {
+  display: inline-block; margin-top: 20px; font-size: 13px; padding: 3px 12px; border-radius: 999px;
+  background: var(--mass-accent-soft); color: var(--mass-accent);
+}
+
+section { padding: 56px 0; border-top: 1px solid var(--mass-border); }
+h2 { font-size: 27px; margin-bottom: 24px; }
+
+/* Sigil circle (#how): the daemon hub relaying knowledge pulses to the nodes
+   around it. site.js builds the SVG nodes; everything tints from theme
+   tokens. */
+.sigil-frame {
+  position: relative; margin-bottom: 26px; padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--mass-accent) 25%, transparent);
+  border-radius: 8px;
+}
+.sigil-frame::before {
+  content: "VAULT // THE CIRCLE"; position: absolute; top: 0; left: 16px;
+  transform: translateY(-50%); padding: 0 8px; background: var(--mass-bg-base);
+  font: 10px ui-monospace, monospace; letter-spacing: 0.22em;
+  color: var(--mass-text-faint);
+}
+.sigil { display: block; width: 100%; height: auto; }
+/* The circle the nodes sit on, like a drawn sigil. */
+.sigil .ring {
+  fill: none; stroke: color-mix(in srgb, var(--mass-accent) 22%, transparent);
+  stroke-width: 1; stroke-dasharray: 3 5;
+}
+.sigil .link { stroke: color-mix(in srgb, var(--mass-accent) 30%, transparent); stroke-width: 1; }
+.sigil .node { fill: var(--mass-text); }
+.sigil .node-ring { fill: none; stroke: color-mix(in srgb, var(--mass-accent) 55%, transparent); }
+.sigil .hub-core { fill: var(--mass-accent); }
+.sigil text { fill: var(--mass-text-faint); font: 10px ui-monospace, monospace; letter-spacing: 0.08em; }
+.sigil .hub-glow { fill: var(--mass-accent); opacity: 0.25; filter: blur(6px); }
+/* Knowledge pulses ride CSS motion paths; each gets --p (its link's path)
+   + --d (delay). */
+.sigil .pulse {
+  fill: var(--mass-accent); filter: drop-shadow(0 0 4px var(--mass-accent));
+  offset-path: var(--p); offset-distance: 0%; opacity: 0;
+  animation: pulse-travel 3.6s linear infinite; animation-delay: var(--d, 0s);
+}
+@keyframes pulse-travel {
+  0% { offset-distance: 0%; opacity: 0; }
+  12% { opacity: 1; }
+  82% { opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+/* The daemon: three gyroscopic arcs counter-rotating around the core. */
+.sigil .arc {
+  fill: none; stroke: var(--mass-accent); stroke-linecap: round; opacity: 0.8;
+  transform-origin: var(--cx) var(--cy);
+}
+.sigil .arc.a1 { animation: arc-spin 9s linear infinite; }
+.sigil .arc.a2 { animation: arc-spin 14s linear infinite reverse; opacity: 0.45; }
+.sigil .arc.a3 { animation: arc-spin 26s linear infinite; opacity: 0.3; }
+@keyframes arc-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .smoke::before, .sigil .arc { animation: none; }
+  .sigil .pulse { animation: none; opacity: 0; }
+}
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.card {
+  background: color-mix(in srgb, var(--mass-accent) 4%, var(--mass-bg-panel));
+  border: 1px solid var(--mass-border);
+  border-radius: 10px; padding: 20px;
+}
+.card h3 { font-size: 19px; margin-bottom: 8px; }
+.card p { color: var(--mass-text-muted); font-size: 14.5px; }
+
+/* Quickstart platform tabs (Datastar $qs signal; defaults to the visitor's OS). */
+.tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+.tab {
+  padding: 6px 18px; border-radius: 8px; cursor: pointer; font-size: 14px;
+  background: none; border: 1px solid var(--mass-border); color: var(--mass-text-muted);
+}
+.tab.active {
+  color: var(--mass-accent); border-color: var(--mass-accent);
+  background: var(--mass-accent-soft);
+}
+
+pre {
+  background: color-mix(in srgb, var(--mass-accent) 4%, var(--mass-bg-panel));
+  border: 1px solid var(--mass-border); border-radius: 10px;
+  padding: 18px 20px; overflow-x: auto;
+  font: 13.5px/1.7 ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+}
+pre .c { color: var(--mass-text-faint); }
+pre .k { color: var(--mass-accent); }
+/* Click-to-copy command lines (site.js): hover shows the affordance, a click
+   flashes the confirmation. */
+pre .cmd { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin-left: -4px; }
+pre .cmd:hover { background: var(--mass-accent-soft); }
+pre .cmd:hover::after, pre .cmd.copied::after {
+  content: "copy"; margin-left: 10px; font-size: 11px;
+  color: var(--mass-text-faint);
+}
+pre .cmd.copied::after { content: "✓"; color: var(--mass-success); }
+/* The tick rides the line, so on a long command it scrolls out of view — the
+   click also floats a short-lived "copied" at the pointer, which never does.
+   Fixed-positioned and pointer-events-free so it can't block the next click. */
+.copy-pop {
+  position: fixed; z-index: 60; pointer-events: none;
+  font: 600 12px/1 ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  letter-spacing: 0.04em; color: var(--mass-success);
+  text-shadow: 0 0 12px var(--mass-success-soft);
+  animation: copy-pop 1170ms ease-out forwards;
+}
+@keyframes copy-pop {
+  0%   { opacity: 0; transform: translate(-50%, 2px) scale(0.92); filter: blur(0); }
+  18%  { opacity: 1; transform: translate(-50%, -8px) scale(1); filter: blur(0); }
+  100% { opacity: 0; transform: translate(-50%, -34px) scale(1.06); filter: blur(4px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .copy-pop { animation: copy-pop-still 910ms ease-out forwards; }
+  @keyframes copy-pop-still {
+    0% { opacity: 0; transform: translate(-50%, -8px); }
+    20%, 70% { opacity: 1; transform: translate(-50%, -8px); }
+    100% { opacity: 0; transform: translate(-50%, -8px); }
+  }
+}
+
+table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--mass-border); }
+th { color: var(--mass-text-muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
+tr.os-mine td:first-child::after {
+  content: "your platform"; margin-left: 10px; font-size: 11.5px; padding: 1px 8px;
+  border-radius: 999px; background: var(--mass-success-soft); color: var(--mass-success);
+  vertical-align: 1px;
+}
+.soon { color: var(--mass-text-faint); font-size: 13px; font-style: italic; }
+
+.dl-group { margin-bottom: 34px; }
+.dl-group h3 { font-size: 19px; margin-bottom: 4px; }
+.dl-group p.d, #downloads p.d, #quickstart p.d { color: var(--mass-text-muted); font-size: 14px; margin-bottom: 12px; }
+#quickstart p.d { margin-top: 18px; }
+#downloads pre + p.d { margin-top: 22px; }
+
+footer {
+  border-top: 1px solid var(--mass-border); padding: 30px 0 44px;
+  color: var(--mass-text-faint); font-size: 13.5px;
+}
+
+@media (max-width: 760px) {
+  nav { display: none; }
+  .hero { padding: 56px 0 44px; }
+  .brand-cycle { font-size: 56px; }
+  .hero h1 { font-size: 30px; }
+}
+/* The 720-unit viewBox scales node labels below legibility on small screens. */
+@media (max-width: 560px) {
+  .sigil text { display: none; }
+}

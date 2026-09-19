@@ -24,6 +24,9 @@ profile.cov
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
+# Landing-page vendor assets staged by `make site` (SDK theme + Datastar)
+/site/vendor/
+
 # Go workspace file
 go.work
 go.work.sum

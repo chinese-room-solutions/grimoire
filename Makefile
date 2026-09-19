@@ -1,4 +1,4 @@
-.PHONY: build build-debug build-setup package run lint test e2e templ icon clean help
+.PHONY: build build-debug build-setup package site site-serve run lint test e2e templ icon clean help
 
 # VERSION is git-describe (tag/commit/dirty), baked into both the app and the
 # installer via -ldflags. No hardcoded version.
@@ -83,6 +83,24 @@ else
 endif
 endif
 
+# -- Landing page (site/) ------------------------------------------------------
+#
+# Stage the vendor assets the GitHub Pages site needs — the SDK theme and the
+# SDK-vendored Datastar — from the pinned mass-sdk module into the gitignored
+# site/vendor/ (the pages workflow runs this before uploading site/ as the
+# Pages artifact). The recipes are plain `go run` (cmd/site) so they work
+# under cmd.exe too, not just a POSIX shell.
+
+site:
+	@go run ./cmd/site
+
+# Serve the landing page locally: stage, then serve site/ over HTTP (the
+# Datastar module script won't load over file://). Override with
+# `make site-serve SITE_ADDR=127.0.0.1:9000`.
+SITE_ADDR ?= 127.0.0.1:8931
+site-serve:
+	@go run ./cmd/site -serve -addr $(SITE_ADDR)
+
 run: build
 	$(BIN)
 
@@ -108,5 +126,7 @@ help:
 	@echo "    build        Build the Grimoire GUI app ($(BIN))"
 	@echo "    build-setup  Build the terminal installer ($(SETUP_BIN))"
 	@echo "    package      Build the single-file self-extracting installer in $(DIST_DIR)/"
+	@echo "    site         Stage the landing page's vendor assets (site/vendor/)"
+	@echo "    site-serve   Stage + serve the landing page locally (SITE_ADDR=127.0.0.1:8931)"
 	@echo "    e2e          Browser smoke tests (needs local chromedriver + Chrome)"
 	@echo "    run / lint / test / templ / icon / clean"
