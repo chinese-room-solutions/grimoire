@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	ui "github.com/chinese-room-solutions/grimoire/internal/ui"
+	"github.com/chinese-room-solutions/grimoire/assets"
 	"github.com/chinese-room-solutions/mass-sdk/install"
 	"github.com/chinese-room-solutions/mass-sdk/selfupdate"
 	"github.com/chinese-room-solutions/mass-sdk/term"
@@ -20,7 +20,7 @@ import (
 // "" and the install proceeds with a generic icon.
 func stageIconFile() string {
 	path := filepath.Join(os.TempDir(), "grimoire-setup-icon.png")
-	if err := os.WriteFile(path, ui.IconPNG, 0o644); err != nil {
+	if err := os.WriteFile(path, assets.IconPNG, 0o644); err != nil {
 		return ""
 	}
 	return path

@@ -647,9 +647,6 @@ func callout(inner string) string {
 //go:embed grimoire.js
 var grimoireJS string
 
-//go:embed icon.png
-var IconPNG []byte
-
 // State seeds the page with the current vault, models, and index size.
 type State struct {
 	// HasVault reports whether a vault is bound. When false the page renders the

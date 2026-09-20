@@ -30,11 +30,11 @@ DIST_DIR := dist
 templ:
 	go tool templ generate
 
-# Rebuild the embedded resource icon from internal/ui/icon.png. The committed
-# .syso files are linked into the exe by `go build`; run this only when the
-# source icon changes.
+# Rebuild the embedded resource icon from assets/icon.png (and the site
+# favicon with it). The committed .syso files are linked into the exe by
+# `go build`; run this only when the source icon changes.
 icon:
-	go run ./cmd/grimoire/mkico internal/ui/icon.png cmd/grimoire/icon.ico
+	go run ./cmd/grimoire/mkico assets/icon.png cmd/grimoire/icon.ico site/favicon.png
 	go generate ./cmd/grimoire
 
 build: templ
@@ -69,7 +69,7 @@ ifeq ($(OS),Windows_NT)
 	@echo "Installer: $(DIST_DIR)/grimoire-setup.exe"
 else
 	go run ./cmd/grimoire-pack --host $(SETUP_BIN) --out $(DIST_DIR)/grimoire-setup \
-		--container --icon internal/ui/icon.png $(BIN)
+		--container --icon assets/icon.png $(BIN)
 ifeq ($(shell uname -s),Darwin)
 	@# Zip the .app with ditto so recipients get a transfer-safe archive: a raw
 	@# .app sent over chat/AirDrop/cloud loses the executable bits on its launcher

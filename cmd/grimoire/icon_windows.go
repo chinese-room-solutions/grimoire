@@ -9,6 +9,6 @@ package main
 // generic exe icon. `go build` links any *.syso in the main package automatically.
 //
 // Regenerate after changing the icon: `go generate ./cmd/grimoire`. icon.ico is
-// produced from internal/ui/icon.png by `make icon`.
+// produced from assets/icon.png by `make icon`.
 //go:generate go run github.com/akavel/rsrc@latest -ico icon.ico -arch amd64 -o rsrc_windows_amd64.syso
 //go:generate go run github.com/akavel/rsrc@latest -ico icon.ico -arch 386 -o rsrc_windows_386.syso

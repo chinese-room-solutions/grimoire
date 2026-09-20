@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/KernelPryanic/golog"
-	ui "github.com/chinese-room-solutions/grimoire/internal/ui"
+	"github.com/chinese-room-solutions/grimoire/assets"
 	"github.com/chinese-room-solutions/grimoire/internal/vaultdir"
 	masgui "github.com/chinese-room-solutions/mass-sdk/gui"
 	"github.com/chinese-room-solutions/mass-sdk/tray"
@@ -142,7 +142,7 @@ func runGUI(logger zerolog.Logger, vault string) {
 		URL:     url,
 		Width:   defaultWindow,
 		Height:  defaultHeight,
-		IconPNG: ui.IconPNG,
+		IconPNG: assets.IconPNG,
 		Theme:   initialTheme(),
 	})
 	if wv == nil {
@@ -162,7 +162,7 @@ func runGUI(logger zerolog.Logger, vault string) {
 	// teardown below executes.
 	trayStart, trayEnd, _ := tray.Register(tray.Options{
 		Title:    appTitle,
-		IconPNG:  ui.IconPNG,
+		IconPNG:  assets.IconPNG,
 		OnShow:   wv.Show,
 		OnToggle: wv.Toggle,
 		OnQuit:   wv.Terminate,

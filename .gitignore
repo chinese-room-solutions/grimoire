@@ -37,3 +37,7 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Raw generated icon sources; assets/icon.png is the processed icon the app uses
+/assets/big.png
+/assets/compact.png
