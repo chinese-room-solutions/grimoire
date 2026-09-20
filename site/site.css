@@ -80,8 +80,7 @@ header .themes { position: absolute; right: 24px; top: 50%; transform: translate
 .swatch[aria-pressed="true"] { outline: 2px solid var(--mass-accent); outline-offset: 1px; }
 
 .hero { padding: 88px 0 64px; text-align: center; }
-/* The brand mark (site.js) throws rare glitch flickers. Cormorant carries it;
-   the glow rides the theme accent. */
+/* The hero brand mark. Cormorant carries it; the glow rides the theme accent. */
 .brand-mark {
   font-family: "Cormorant Garamond", Georgia, "Times New Roman", serif;
   font-weight: 600;
@@ -90,7 +89,6 @@ header .themes { position: absolute; right: 24px; top: 50%; transform: translate
   color: var(--mass-text);
   text-shadow: 0 0 18px var(--mass-accent-soft), 0 0 42px var(--mass-accent-soft);
 }
-.brand-mark.flicker { opacity: 0.72; transform: skewX(-4deg); }
 .hero h1 { font-size: 40px; letter-spacing: -0.01em; }
 .hero p.sub { color: var(--mass-text-muted); font-size: 19px; max-width: 640px; margin: 14px auto 0; }
 .cta { margin-top: 34px; display: flex; gap: 14px; justify-content: center; }

@@ -1,5 +1,5 @@
 // Grimoire landing page behaviors: the constellation backdrop, the SDK-style
-// theme picker, the brand flicker, and live release data. Static-host
+// theme picker, and live release data. Static-host
 // friendly — everything fails soft when the GitHub API is unreachable
 // (offline, rate-limited, or the repos are still private).
 (function () {
@@ -208,9 +208,9 @@
   };
 
   function applyTheme(name) {
-    // Unknown or retired name falls back to dark, and is normalized so it does
-    // not get written back to storage.
-    if (!THEMES[name]) name = "dark";
+    // Unknown or retired name falls back to light (Cream), and is normalized
+    // so it does not get written back to storage.
+    if (!THEMES[name]) name = "light";
     var info = THEMES[name];
     var h = document.documentElement;
     Array.prototype.slice.call(h.classList).forEach(function (c) {
@@ -232,26 +232,10 @@
     var fromQuery = new URLSearchParams(location.search).get("theme");
     var saved = null;
     try { saved = localStorage.getItem("grimoire-site-theme"); } catch (e) { /* private mode */ }
-    applyTheme(fromQuery || saved || "dark");
+    applyTheme(fromQuery || saved || "light");
     document.querySelectorAll("[data-theme-pick]").forEach(function (b) {
       b.addEventListener("click", function () { applyTheme(b.getAttribute("data-theme-pick")); });
     });
-  }
-
-  // --- Brand flicker ------------------------------------------------------------
-  // The hero mark stays GRIMOIRE and throws rare glitch flickers between long
-  // quiet stretches. Static under prefers-reduced-motion.
-  function initBrandFlicker() {
-    var el = document.querySelector("[data-brand-flicker]");
-    if (!el) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-
-    (function flicker() {
-      setTimeout(function () {
-        el.classList.add("flicker");
-        setTimeout(function () { el.classList.remove("flicker"); flicker(); }, 60 + Math.random() * 140);
-      }, 1200 + Math.random() * 2600);
-    })();
   }
 
   // --- Live release data ------------------------------------------------------
@@ -344,7 +328,7 @@
     });
   }
 
-  function initPage() { initGraph(); initTheme(); initBrandFlicker(); wireReleases(); initCopy(); }
+  function initPage() { initGraph(); initTheme(); wireReleases(); initCopy(); }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", initPage);
   } else {

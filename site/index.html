@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" class="sl-theme-dark" data-theme="dark">
+<html lang="en" class="sl-theme-light" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,15 +7,15 @@
 <meta name="description" content="Grimoire is a Human-AI memory layer: a local Markdown vault (Obsidian-compatible) shared by you and your AI agents, indexed into a vector store for hybrid semantic + keyword search. Embeddings via a MASS gateway — local-first.">
 <link rel="icon" type="image/png" href="favicon.png">
 <script>
-// Stamp the stored theme before any CSS paints, or the light reader gets a
-// dark flash. Dark is the default — the site is designed around it. Mirrors
-// site.js's THEMES registry: a theme is the Shoelace base class plus an
-// overlay for pluggable themes.
+// Stamp the stored theme before any CSS paints, or the dark reader gets a
+// light flash. Light (Cream) is the default. Mirrors site.js's THEMES
+// registry: a theme is the Shoelace base class plus an overlay for
+// pluggable themes.
 (function () {
   var t = null;
   try { t = localStorage.getItem("grimoire-site-theme"); } catch (e) { /* private mode */ }
-  if (t !== "light" && t !== "synthwave") return;
-  document.documentElement.className = t === "light" ? "sl-theme-light" : "sl-theme-dark sl-theme-synthwave";
+  if (t !== "dark" && t !== "synthwave") return;
+  document.documentElement.className = t === "dark" ? "sl-theme-dark" : "sl-theme-dark sl-theme-synthwave";
   document.documentElement.setAttribute("data-theme", t);
 })();
 </script>
@@ -51,7 +51,7 @@
 </header>
 
 <div class="hero wrap">
-  <div class="brand-mark" data-brand-flicker aria-label="Grimoire">GRIMOIRE</div>
+  <div class="brand-mark" aria-label="Grimoire">GRIMOIRE</div>
   <h1>A Human-AI memory layer over your Markdown vault</h1>
   <p class="sub">A shared, local knowledge base that both you and your AI agents read and write.
   The memory itself is plain Markdown in a folder you own — a fresh vault or an existing Obsidian
@@ -119,6 +119,10 @@
 
 <section id="quickstart"><div class="wrap">
   <h2>Quickstart</h2>
+  <p>Grimoire needs a <a href="https://chinese-room-solutions.github.io/mass/">MASS gateway</a> to embed —
+  self-hosted and free, vaults and editing work without it. Install it from the
+  <a href="https://github.com/chinese-room-solutions/mass">MASS repository</a>, then point Grimoire's
+  settings at it (step 4 below).</p>
   <div class="tabs" role="tablist" aria-label="Platform">
     <button class="tab" data-class="{active: $qs === 'linux'}" data-on:click="$qs = 'linux'">Linux</button>
     <button class="tab" data-class="{active: $qs === 'darwin'}" data-on:click="$qs = 'darwin'">macOS</button>
@@ -189,9 +193,10 @@
 
   <div class="dl-group">
     <h3>Memory stack — MASS</h3>
-    <p class="d">Grimoire embeds and re-embeds through a MASS gateway. Everything else stays local.</p>
+    <p class="d">Required for semantic search and the similarity graph: Grimoire embeds and re-embeds
+    through a MASS gateway.</p>
     <div class="cards">
-      <div class="card"><h3><a href="https://github.com/chinese-room-solutions/mass">MASS gateway</a></h3>
+      <div class="card"><h3><a href="https://chinese-room-solutions.github.io/mass/">MASS gateway</a></h3>
         <p>The self-hosted orchestrator that serves Grimoire's embeddings — a MASS endpoint with the
         llama-cpp runtime and a GGUF embedding model, on localhost or another box on your network.</p></div>
       <div class="card"><h3><a href="https://github.com/chinese-room-solutions/mass-sdk">mass-sdk</a></h3>
