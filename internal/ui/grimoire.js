@@ -4224,8 +4224,7 @@
         var lzoom = view.scale > lthreshold;
         var lnormal = lzoom ? Math.min(1, (view.scale - lthreshold) * 3) : 0;
         // A hovered node's lit neighbours read as *secondary* to the hovered node
-        // itself: dimmer label and no bold/halo, so the hovered title stands out.
-        var neighbour = hover && llit && lnd !== hover;
+        // itself: dimmer label and a thinner halo, so the hovered title stands out.
         var labelAlpha;
         if (lmatch) labelAlpha = 1;                  // matched (or hovered) node.
         else if (hover) labelAlpha = llit ? 0.75 : (lzoom ? 0.12 : 0);
@@ -4235,29 +4234,24 @@
         ctx.globalAlpha = labelAlpha;
         ctx.textAlign = "center";
         var lr = radiusOf(lnd);
-        // Neighbours label *below* their dot so they sit a touch lower than the
-        // hovered node's own title (drawn above its dot). Everything else labels
-        // above by a fixed gap that's independent of the (large, hub) radius so it
-        // never overlaps the dot.
+        // Every label sits above its own dot, offset by the node's radius, so
+        // text never paints over a dot — hovered nodes and their lit
+        // neighbours included.
         var gap = lr + 4 / view.scale;
-        var lx = lnd.x, ly = neighbour ? lnd.y + 2 / view.scale : lnd.y - gap;
-        // The hovered/matched node draws bold with a dark halo (stroke) so it stays
-        // legible over the bright dots and edges. Neighbours and faint labels stay
-        // plain so the hovered title clearly leads.
+        var lx = lnd.x, ly = lnd.y - gap;
+        // Every label draws over a dark halo (stroke) so it stays legible over
+        // the bright dots and edges. The hovered/matched title leads with a
+        // thicker halo plus bold accent text; the rest get a thin halo and
+        // stay plain so the hovered title clearly stands out.
         var prominent = lmatch;
-        if (prominent) {
-          ctx.font = "bold " + (12 / view.scale) + "px sans-serif";
-          ctx.lineWidth = 3 / view.scale;
-          ctx.lineJoin = "round";
-          ctx.strokeStyle = colors.matchHalo;
-          ctx.strokeText(lnd.title, lx, ly);
-          ctx.fillStyle = colors.matchText;
-          ctx.fillText(lnd.title, lx, ly);
-        } else {
-          ctx.font = (11 / view.scale) + "px sans-serif";
-          ctx.fillStyle = colors.nodeText;
-          ctx.fillText(lnd.title, lx, ly);
-        }
+        ctx.font = prominent ? "bold " + (12 / view.scale) + "px sans-serif"
+                             : (11 / view.scale) + "px sans-serif";
+        ctx.lineWidth = (prominent ? 3 : 1.5) / view.scale;
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = colors.matchHalo;
+        ctx.strokeText(lnd.title, lx, ly);
+        ctx.fillStyle = prominent ? colors.matchText : colors.nodeText;
+        ctx.fillText(lnd.title, lx, ly);
       }
       ctx.globalAlpha = 1;
       ctx.restore();
