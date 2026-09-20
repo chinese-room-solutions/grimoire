@@ -1,12 +1,26 @@
 <!doctype html>
-<html class="sl-theme-dark candle" lang="en">
+<html lang="en" class="sl-theme-dark" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Grimoire — a Human-AI memory layer</title>
 <meta name="description" content="Grimoire is a Human-AI memory layer: a local Markdown vault (Obsidian-compatible) shared by you and your AI agents, indexed into a vector store for hybrid semantic + keyword search. Embeddings via a MASS gateway — local-first.">
 <link rel="icon" type="image/png" href="favicon.png">
+<script>
+// Stamp the stored theme before any CSS paints, or the light reader gets a
+// dark flash. Dark is the default — the site is designed around it. Mirrors
+// site.js's THEMES registry: a theme is the Shoelace base class plus an
+// overlay for pluggable themes.
+(function () {
+  var t = null;
+  try { t = localStorage.getItem("grimoire-site-theme"); } catch (e) { /* private mode */ }
+  if (t !== "light" && t !== "synthwave") return;
+  document.documentElement.className = t === "light" ? "sl-theme-light" : "sl-theme-dark sl-theme-synthwave";
+  document.documentElement.setAttribute("data-theme", t);
+})();
+</script>
 <link rel="stylesheet" href="vendor/theme.css">
+<link rel="stylesheet" href="vendor/synthwave.css">
 <link rel="stylesheet" href="site.css">
 <script type="module" src="vendor/datastar.js"></script>
 <script defer src="site.js"></script>
@@ -14,10 +28,10 @@
 <!-- $os drives the "your platform" hint in the download tables (Datastar signal). -->
 <body data-signals="{os: /Mac/.test(navigator.platform) ? 'darwin' : /Win/.test(navigator.platform) ? 'windows' : 'linux',
                      qs: /Mac/.test(navigator.platform) ? 'darwin' : /Win/.test(navigator.platform) ? 'windows' : 'linux'}">
-<!-- Candlelit backdrop: rising embers canvas (site.js) under a CSS smoke glow,
+<!-- Ambient backdrop: constellation canvas (site.js) under a CSS smoke glow,
      fixed behind the page. Sits at z-index -1 above the root canvas
      background (body's background propagates to the root), below content. -->
-<div class="smoke" aria-hidden="true"><canvas data-embers></canvas></div>
+<div class="smoke" aria-hidden="true"><canvas data-graph></canvas></div>
 <header>
   <div class="wrap">
     <nav>
@@ -28,11 +42,16 @@
       <a href="#ecosystem">Ecosystem</a>
       <a href="https://github.com/chinese-room-solutions/grimoire">GitHub</a>
     </nav>
+    <div class="themes" role="group" aria-label="Theme">
+      <button class="swatch" data-theme-pick="dark" title="Carbon" type="button" style="--sw:#171616"></button>
+      <button class="swatch" data-theme-pick="light" title="Cream" type="button" style="--sw:#f5efe2"></button>
+      <button class="swatch" data-theme-pick="synthwave" title="Synthwave" type="button" style="--sw:#241b2f"></button>
+    </div>
   </div>
 </header>
 
 <div class="hero wrap">
-  <div class="brand-cycle" data-brand-cycle aria-label="Grimoire">GRIMOIRE</div>
+  <div class="brand-mark" data-brand-flicker aria-label="Grimoire">GRIMOIRE</div>
   <h1>A Human-AI memory layer over your Markdown vault</h1>
   <p class="sub">A shared, local knowledge base that both you and your AI agents read and write.
   The memory itself is plain Markdown in a folder you own — a fresh vault or an existing Obsidian
@@ -47,18 +66,12 @@
 
 <section id="how"><div class="wrap">
   <h2>One daemon, one shared vault</h2>
-  <!-- Sigil circle: the Grimoire daemon as the glowing hub, linked to you, your
-       agents, the vault, and the MASS gateway that embeds it (site.js builds
-       the nodes; CSS motion paths drive the knowledge pulses). -->
-  <div class="sigil-frame" aria-hidden="true">
-    <svg class="sigil" viewBox="0 0 720 300" data-sigil></svg>
-  </div>
   <div class="cards">
     <div class="card"><h3>You browse &amp; edit</h3><p>The desktop app opens the vault as notes:
       create, edit, search. It is the same plain Markdown any editor — or Obsidian — can read.</p></div>
-    <div class="card"><h3>Agents read &amp; write</h3><p>The <code>grimoire</code> CLI gives agents one
-      command per action over the same vault, with no filesystem access needed — and every write is
-      indexed by the time the next command runs.</p></div>
+    <div class="card"><h3>Agents read &amp; write</h3><p>The <code>grimoire</code> CLI lets agents
+      read and write the same vault — no filesystem access needed, and every write is indexed by
+      the time the next command runs.</p></div>
     <div class="card"><h3>One safety layer</h3><p>App and CLI go through the same daemon: path-safety,
       atomic writes, automatic reindexing, trash-backed deletes. Nothing an agent sends can skip it.</p></div>
   </div>
@@ -67,14 +80,12 @@
 <section id="features"><div class="wrap">
   <h2>Features</h2>
   <div class="cards">
-    <div class="card"><h3>A vault you own</h3><p>Plain Markdown in a folder you choose — a fresh vault or your existing Obsidian one. Durable, portable, human-auditable.</p></div>
-    <div class="card"><h3>Hybrid semantic + keyword search</h3><p>Notes index into a vector store; search fuses the semantic leg with an FTS5 keyword leg, across every vault at once.</p></div>
-    <div class="card"><h3>Agents via CLI + skill</h3><p>One command per action over the vault the app shows. The agent skill ships inside the binary: <code>grimoire skill install DIR</code>.</p></div>
+    <div class="card"><h3>A vault you own</h3><p>Plain Markdown in a folder you choose — a fresh vault or your existing Obsidian one. Imports (.md, .html, .docx, .pdf) convert locally, and notes, index, and models stay on your machine — durable, portable, human-auditable.</p></div>
+    <div class="card"><h3>Hybrid semantic + keyword search</h3><p>Notes index into a vector store. Search fuses the semantic leg with an FTS5 keyword leg, across every vault at once.</p></div>
+    <div class="card"><h3>Agent integration</h3><p>Coding agents read and write the same vault you do, guided by an installable skill that teaches them the commands.</p></div>
     <div class="card"><h3>Code kernels</h3><p>Fenced blocks run in installable kernels — <code>kernel install grimoire-kernel-go</code> — shared across every vault, live without a restart.</p></div>
-    <div class="card"><h3>Trash-backed deletes</h3><p>Every delete lands in the vault's trash; permanent removal is explicit — <code>trash delete</code> or <code>trash empty</code>.</p></div>
-    <div class="card"><h3>Import what you have</h3><p><code>.md</code>/<code>.html</code>/<code>.docx</code> convert locally; <code>.pdf</code> goes through the convert model picked in the app.</p></div>
-    <div class="card"><h3>Themes</h3><p>UI themes shared across the MASS family — one self-describing CSS file, installed live from a registry.</p></div>
-    <div class="card"><h3>Local-first</h3><p>Notes, index, and models stay on your machine. One daemon serves every vault, spawned on demand, retired when idle.</p></div>
+    <div class="card"><h3>Trash-backed deletes</h3><p>Every delete lands in the vault's trash. Permanent removal is explicit — <code>trash delete</code> or <code>trash empty</code>.</p></div>
+    <div class="card"><h3>Themes</h3><p>Install a custom theme from a single self-describing CSS file — it applies live, no restart.</p></div>
   </div>
 </div></section>
 
@@ -125,7 +136,7 @@
 <span class="c"># 3 — in the app: pick a vault — an empty folder or an existing Obsidian vault</span>
 <span class="c"># 4 — in the app's settings: connect a MASS endpoint (URL + optional token, llama-cpp</span>
 <span class="c">#     runtime installed) and pick an embedding model from it</span>
-<span class="c"># 5 — Grimoire indexes the vault; semantic search works once indexing finishes</span>
+<span class="c"># 5 — Grimoire indexes the vault. Semantic search works once indexing finishes</span>
 
 <span class="c"># 6 — read and write from the terminal — an agent or script works the same way</span>
 <span class="k">$</span> <span class="cmd">grimoire search "index rebuild" -k 5</span>
@@ -142,7 +153,7 @@
 <span class="c"># 3 — in the app: pick a vault — an empty folder or an existing Obsidian vault</span>
 <span class="c"># 4 — in the app's settings: connect a MASS endpoint (URL + optional token, llama-cpp</span>
 <span class="c">#     runtime installed) and pick an embedding model from it</span>
-<span class="c"># 5 — Grimoire indexes the vault; semantic search works once indexing finishes</span>
+<span class="c"># 5 — Grimoire indexes the vault. Semantic search works once indexing finishes</span>
 
 <span class="c"># 6 — read and write from the terminal — an agent or script works the same way</span>
 <span class="k">$</span> <span class="cmd">grimoire search "index rebuild" -k 5</span>
@@ -159,7 +170,7 @@
 <span class="c"># 3 — in the app: pick a vault — an empty folder or an existing Obsidian vault</span>
 <span class="c"># 4 — in the app's settings: connect a MASS endpoint (URL + optional token, llama-cpp</span>
 <span class="c">#     runtime installed) and pick an embedding model from it</span>
-<span class="c"># 5 — Grimoire indexes the vault; semantic search works once indexing finishes</span>
+<span class="c"># 5 — Grimoire indexes the vault. Semantic search works once indexing finishes</span>
 
 <span class="c"># 6 — read and write from the terminal — an agent or script works the same way</span>
 <span class="k">&gt;</span> <span class="cmd">grimoire search "index rebuild" -k 5</span>
@@ -178,7 +189,7 @@
 
   <div class="dl-group">
     <h3>Memory stack — MASS</h3>
-    <p class="d">Grimoire embeds and re-embeds through a MASS gateway; everything else stays local.</p>
+    <p class="d">Grimoire embeds and re-embeds through a MASS gateway. Everything else stays local.</p>
     <div class="cards">
       <div class="card"><h3><a href="https://github.com/chinese-room-solutions/mass">MASS gateway</a></h3>
         <p>The self-hosted orchestrator that serves Grimoire's embeddings — a MASS endpoint with the

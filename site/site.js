@@ -1,75 +1,185 @@
-// Grimoire landing page behaviors: the ember backdrop, the sigil diagram,
-// the brand diffusion cycle, and live release data. Static-host friendly —
-// everything fails soft when the GitHub API is unreachable (offline,
-// rate-limited, or the repos are still private).
+// Grimoire landing page behaviors: the constellation backdrop, the SDK-style
+// theme picker, the brand flicker, and live release data. Static-host
+// friendly — everything fails soft when the GitHub API is unreachable
+// (offline, rate-limited, or the repos are still private).
 (function () {
   "use strict";
 
-  // --- Rising embers ------------------------------------------------------------
-  // Fixed full-viewport canvas behind the page: three parallax depth layers of
-  // warm motes drifting up with a gentle sway and a flicker, some tinted with
-  // the theme accent. Density scales with the viewport; DPR capped at 2. Under
-  // prefers-reduced-motion it draws one static frame; rAF pauses in background
-  // tabs on its own.
-  function initEmbers() {
-    var canvas = document.querySelector("[data-embers]");
+  // --- Knowledge-graph constellation --------------------------------------------
+  // Fixed full-viewport canvas behind the page: a faint graph of drifting
+  // notes — nodes wander slowly, each linking to a few near neighbors (its
+  // degree is fixed at birth, so the weave mixes chains, triangles, and
+  // stars), and pulses walk multi-hop paths across the links. Density scales
+  // with the viewport; DPR capped at 2. Under prefers-reduced-motion it draws
+  // one static frame; rAF pauses in background tabs on its own.
+  function initGraph() {
+    var canvas = document.querySelector("[data-graph]");
     if (!canvas) return;
     var ctx = canvas.getContext("2d");
     var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    // layer: [embers per 10000 px², radius, rise px/frame]; depth 0..1 drives
-    // parallax shift, rise speed, and brightness.
-    var LAYERS = [[3.2, 1.1, 0.10], [1.9, 1.6, 0.22], [0.8, 2.3, 0.38]];
-    var PARALLAX = 14, FLICKER = 0.55;
+    // node per px² of viewport, capped so huge screens stay cheap. LINK and
+    // the light-base density live in readColors — Cream runs a denser weave.
+    var NODE_PER_PX = 1 / 20000, MAX_NODES = 120;
+    var DRIFT = 0.06;      // max node speed, px/frame
+    var PARALLAX = 12;
+    var TOPO_TICKS = 20;   // frames between graph rebuilds (drift is slow)
     var dpr = Math.min(devicePixelRatio || 1, 2);
-    var embers = [], W = 0, H = 0, px = 0, py = 0, t = 0;
-    var base = "244, 232, 210"; // warm ember white
-    // Single theme: the accent is read once, at init.
-    var accent = getComputedStyle(document.documentElement)
-      .getPropertyValue("--mass-accent").trim() || "#d9a44a";
+    var nodes = [], edges = [], adj = [];
+    var W = 0, H = 0, px = 0, py = 0, tick = 0;
+    // Theme colors: read at init and re-read on the mass-theme event. On a
+    // light base the dark-tuned weave drowns in the pale background — too
+    // sparse to read and too faint where it exists — so Cream runs a denser
+    // graph with a longer link reach, drawn in the text ink at full-strength
+    // alphas. Dark keeps its subtle accent weave.
+    var accent, ink, gain, light, LINK;
+    function readColors() {
+      light = document.documentElement.classList.contains("sl-theme-light");
+      var style = getComputedStyle(document.documentElement);
+      accent = style.getPropertyValue("--mass-accent").trim() || "#d9a44a";
+      ink = style.getPropertyValue(light ? "--mass-text" : "--mass-text-muted").trim() || "#999";
+      gain = light ? 1.5 : 1;
+      LINK = light ? 230 : 150;
+    }
+    readColors();
+    // applyTheme dispatches on document (no bubbles), so listen there — a
+    // window listener never sees it.
+    document.addEventListener("mass-theme", function () {
+      readColors();
+      resize(); // re-roll the topology: Cream's density and link reach differ
+      if (reduced) frame(); // the static frame needs a repaint in the new colors
+    });
+    // Active pulses: {path: [node idx...], t0, dur} — a walk across linked nodes.
+    var pulses = [], nextPulse = 0;
 
     function resize() {
       W = innerWidth; H = innerHeight;
       canvas.width = W * dpr; canvas.height = H * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      embers = [];
-      LAYERS.forEach(function (l, li) {
-        var depth = (li + 1) / LAYERS.length;
-        var n = Math.round((W * H / 10000) * l[0]);
-        for (var i = 0; i < n; i++) {
-          embers.push({
-            x: Math.random() * W, y: Math.random() * H,
-            r: l[1] * (0.6 + Math.random() * 0.7), v: l[2], d: depth,
-            amp: 4 + Math.random() * 14,        // sway width, px
-            sw: 0.006 + Math.random() * 0.012,  // sway frequency
-            ph: Math.random() * 6.28,
-            // A flame's unsteadiness: most motes pulse in brightness.
-            fl: Math.random() < FLICKER ? 0.06 + Math.random() * 0.16 : 0,
-            accent: Math.random() < 0.2,
-          });
-        }
-      });
+      var n = Math.min(Math.round(W * H * (light ? 1 / 12000 : NODE_PER_PX)), MAX_NODES);
+      nodes = [];
+      for (var i = 0; i < n; i++) {
+        var a = Math.random() * 6.28;
+        nodes.push({
+          x: Math.random() * W, y: Math.random() * H,
+          vx: Math.cos(a) * DRIFT * Math.random(), vy: Math.sin(a) * DRIFT * Math.random(),
+          d: 0.35 + Math.random() * 0.65,       // depth: parallax + presence
+          r: 1 + Math.random() * 1.2,
+          cap: 2 + (Math.random() * 3 | 0),     // links this node may hold: 2..4
+        });
+      }
+      edges = []; adj = [];
+      pulses = [];
+      rebuild();
       if (reduced) frame();
     }
 
-    function frame() {
-      t += 1;
-      ctx.clearRect(0, 0, W, H);
-      for (var i = 0; i < embers.length; i++) {
-        var s = embers[i];
-        s.y -= s.v * s.d; // rise; far layers rise slower
-        if (s.y < -4) { s.y = H + 4; s.x = Math.random() * W; }
-        var alpha = 0.2 + s.d * 0.6;
-        if (s.fl) alpha *= 0.55 + 0.45 * Math.sin(t * s.fl + s.ph);
-        if (s.accent) {
-          ctx.globalAlpha = alpha; ctx.fillStyle = accent;
-        } else {
-          ctx.globalAlpha = 1;
-          ctx.fillStyle = "rgba(" + base + "," + alpha.toFixed(3) + ")";
+    // Rebuild the topology: each node links to its nearest neighbors that
+    // still have degree headroom. Fixed caps seed variety — chains, loops,
+    // triangles, and the occasional star — instead of one uniform mesh.
+    function rebuild() {
+      edges = []; adj = nodes.map(function () { return []; });
+      var linked = {};
+      for (var i = 0; i < nodes.length; i++) {
+        var cand = [];
+        for (var j = 0; j < nodes.length; j++) {
+          if (j === i) continue;
+          var dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
+          var d2 = dx * dx + dy * dy;
+          if (d2 < LINK * LINK) cand.push([d2, j]);
         }
+        cand.sort(function (a, b) { return a[0] - b[0]; });
+        for (var k = 0; k < cand.length && adj[i].length < nodes[i].cap; k++) {
+          j = cand[k][1];
+          if (adj[j].length >= nodes[j].cap || linked[i * nodes.length + j]) continue;
+          linked[i * nodes.length + j] = linked[j * nodes.length + i] = true;
+          adj[i].push(j); adj[j].push(i);
+          edges.push([i, j]);
+        }
+      }
+    }
+
+    // Wander: nodes keep their speed but get a new heading now and then, so
+    // the graph keeps re-forming instead of settling.
+    function wander(s) {
+      if (Math.random() < 0.004) {
+        var a = Math.random() * 6.28, v = DRIFT * (0.3 + Math.random() * 0.7);
+        s.vx = Math.cos(a) * v; s.vy = Math.sin(a) * v;
+      }
+      s.x += s.vx; s.y += s.vy;
+      if (s.x < -8) s.x = W + 8; else if (s.x > W + 8) s.x = -8;
+      if (s.y < -8) s.y = H + 8; else if (s.y > H + 8) s.y = -8;
+    }
+
+    // A pulse walks 2..4 linked hops from a random edge, never doubling back.
+    function spawnPulse() {
+      if (!edges.length) return;
+      var e = edges[(Math.random() * edges.length) | 0];
+      var path = [Math.random() < 0.5 ? e[0] : e[1]];
+      path.push(path[0] === e[0] ? e[1] : e[0]);
+      while (path.length < 2 + (Math.random() * 3 | 0)) {
+        var from = adj[path[path.length - 1]];
+        var next = from.filter(function (n) { return n !== path[path.length - 2]; });
+        if (!next.length) break;
+        path.push(next[(Math.random() * next.length) | 0]);
+      }
+      if (path.length < 2) return;
+      pulses.push({ path: path, t0: Date.now(), dur: 500 * (path.length - 1) + Math.random() * 500 });
+    }
+
+    function frame() {
+      ctx.clearRect(0, 0, W, H);
+      var i, s;
+      for (i = 0; i < nodes.length; i++) wander(nodes[i]);
+      if (++tick % TOPO_TICKS === 0) rebuild();
+
+      // Edges: alpha fades with distance, so links surface and dissolve as
+      // the nodes they bind drift. On the light base the accent drowns in
+      // the pale background, so the weave draws in the text ink (espresso)
+      // at full-strength alphas; dark keeps its subtle accent weave.
+      ctx.strokeStyle = light ? ink : accent; ctx.lineWidth = 1;
+      for (i = 0; i < edges.length; i++) {
+        var A = nodes[edges[i][0]], B = nodes[edges[i][1]];
+        var dx = A.x - B.x, dy = A.y - B.y;
+        var fade = 1 - Math.sqrt(dx * dx + dy * dy) / LINK;
+        if (fade <= 0) continue;
+        ctx.globalAlpha = light
+          ? Math.min(1, fade * 0.38)
+          : 0.14 * fade * Math.min(A.d, B.d);
         ctx.beginPath();
-        // Sway is an offset at draw time, not a drift, so motes hold their lane.
-        ctx.arc(s.x + Math.sin(t * s.sw + s.ph) * s.amp + px * PARALLAX * s.d,
-                s.y + py * PARALLAX * s.d, s.r, 0, 6.28);
+        ctx.moveTo(A.x + px * PARALLAX * A.d, A.y + py * PARALLAX * A.d);
+        ctx.lineTo(B.x + px * PARALLAX * B.d, B.y + py * PARALLAX * B.d);
+        ctx.stroke();
+      }
+
+      // Pulses walk their paths segment by segment.
+      if (pulses.length < 4 && Date.now() > nextPulse) {
+        spawnPulse();
+        nextPulse = Date.now() + 450 + Math.random() * 800;
+      }
+      for (i = pulses.length - 1; i >= 0; i--) {
+        var p = pulses[i];
+        var t = (Date.now() - p.t0) / p.dur;
+        if (t >= 1) { pulses.splice(i, 1); continue; }
+        var seg = Math.min(t * (p.path.length - 1), p.path.length - 2) | 0;
+        var lt = t * (p.path.length - 1) - seg;
+        var P = nodes[p.path[seg]], Q = nodes[p.path[seg + 1]];
+        var ex = P.x + (Q.x - P.x) * lt, ey = P.y + (Q.y - P.y) * lt;
+        var glow = Math.sin(t * Math.PI); // ease: bright mid-travel
+        var depth = Math.min(P.d, Q.d);
+        ctx.globalAlpha = 0.85 * glow;
+        ctx.fillStyle = accent;
+        ctx.beginPath(); ctx.arc(ex + px * PARALLAX * depth, ey + py * PARALLAX * depth, 1.6, 0, 6.28); ctx.fill();
+        ctx.globalAlpha = 0.25 * glow;
+        ctx.beginPath(); ctx.arc(ex + px * PARALLAX * depth, ey + py * PARALLAX * depth, 4, 0, 6.28); ctx.fill();
+      }
+
+      // Nodes on top.
+      ctx.fillStyle = ink;
+      for (i = 0; i < nodes.length; i++) {
+        s = nodes[i];
+        ctx.globalAlpha = Math.min(1, (0.25 + s.d * 0.5) * gain);
+        ctx.beginPath();
+        ctx.arc(s.x + px * PARALLAX * s.d, s.y + py * PARALLAX * s.d, s.r, 0, 6.28);
         ctx.fill();
       }
       ctx.globalAlpha = 1;
@@ -86,142 +196,55 @@
     }
   }
 
-  // --- Sigil circle -------------------------------------------------------------
-  // Builds the #how diagram: the daemon (glowing core inside three
-  // counter-rotating arcs) on a drawn circle, linked to the vault's four
-  // companions, with knowledge pulses riding the links on CSS motion paths
-  // (styling + animation live in site.css).
-  function initSigil() {
-    var svg = document.querySelector("[data-sigil]");
-    if (!svg) return;
-    var NS = "http://www.w3.org/2000/svg";
-    var HX = 360, HY = 150, RX = 185, RY = 88;
-    // Nodes sit on the ellipse at the diagonals, so no spoke blocks the hub's
-    // label. Each carries its role: who or what shares the circle.
-    var NODES = [
-      [229, 88, "you · the app", "end", -14],
-      [491, 88, "vault · markdown", "start", 14],
-      [491, 212, "agents · cli", "start", 14],
-      [229, 212, "mass · embeddings", "end", -14],
-    ];
+  // --- Themes -------------------------------------------------------------------
+  // Mirrors mass-sdk/uikit/theme.js (and MASS's own landing page): a theme is
+  // the Shoelace base class (sl-theme-dark|light) plus an overlay class for
+  // pluggable themes — synthwave layers on dark. applyTheme restamps <html>;
+  // the mass-theme event lets canvas painters re-read the theme's colors.
+  var THEMES = {
+    dark: {},
+    light: { base: "light" },
+    synthwave: { overlay: "sl-theme-synthwave" },
+  };
 
-    function el(name, attrs) {
-      var e = document.createElementNS(NS, name);
-      for (var k in attrs) e.setAttribute(k, attrs[k]);
-      svg.appendChild(e);
-      return e;
-    }
-
-    el("ellipse", { cx: HX, cy: HY, rx: RX, ry: RY, "class": "ring" });
-    // Cardinal ticks: the circle's four extreme points, runic ornaments.
-    [[HX, HY - RY], [HX - RX, HY], [HX, HY + RY], [HX + RX, HY]].forEach(function (p) {
-      el("circle", { cx: p[0], cy: p[1], r: 1.6, "class": "tick" });
+  function applyTheme(name) {
+    // Unknown or retired name falls back to dark, and is normalized so it does
+    // not get written back to storage.
+    if (!THEMES[name]) name = "dark";
+    var info = THEMES[name];
+    var h = document.documentElement;
+    Array.prototype.slice.call(h.classList).forEach(function (c) {
+      if (c.indexOf("sl-theme-") === 0) h.classList.remove(c);
     });
-
-    NODES.forEach(function (n, i) {
-      var d = "M" + HX + " " + HY + " L" + n[0] + " " + n[1];
-      el("path", { d: d, "class": "link" });
-      var p = el("circle", { r: 2.4, "class": "pulse" });
-      p.style.setProperty("--p", 'path("' + d + '")');
-      p.style.setProperty("--d", (i * 0.9) + "s");
-      el("circle", { cx: n[0], cy: n[1], r: 3, "class": "node" });
-      el("circle", { cx: n[0], cy: n[1], r: 7, "class": "node-ring", "stroke-dasharray": "2 3" });
-      var text = el("text", { x: n[0] + n[4], y: n[1] + 3 });
-      text.setAttribute("text-anchor", n[3]);
-      text.textContent = n[2];
+    h.classList.add(info.base === "light" ? "sl-theme-light" : "sl-theme-dark");
+    if (info.overlay) h.classList.add(info.overlay);
+    // The active theme's exact name — the same contract the SDK's Layout and
+    // massSetTheme maintain (theme.css keys its Carbon block on it).
+    h.setAttribute("data-theme", name);
+    document.dispatchEvent(new CustomEvent("mass-theme"));
+    document.querySelectorAll("[data-theme-pick]").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-theme-pick") === name));
     });
-
-    el("circle", { cx: HX, cy: HY, r: 14, "class": "hub-glow" });
-    el("circle", { cx: HX, cy: HY, r: 5, "class": "hub-core" });
-    [el("path", { "class": "arc a1", "stroke-width": 1.6, d: arc(HX, HY, 12, -40, 140) }),
-     el("path", { "class": "arc a2", "stroke-width": 1.2, d: arc(HX, HY, 19, 90, 240) }),
-     el("path", { "class": "arc a3", "stroke-width": 1.0, d: arc(HX, HY, 26, -20, 60) })]
-      .forEach(function (a) {
-        a.style.setProperty("--cx", HX + "px");
-        a.style.setProperty("--cy", HY + "px");
-      });
-    var hub = el("text", { x: HX, y: HY + 36 });
-    hub.setAttribute("text-anchor", "middle");
-    hub.textContent = "grimoire";
-
-    function arc(cx, cy, r, a0, a1) {
-      function pt(a) {
-        var rad = (a - 90) * Math.PI / 180;
-        return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)];
-      }
-      var s = pt(a0), e = pt(a1), large = a1 - a0 > 180 ? 1 : 0;
-      return "M" + s[0] + " " + s[1] + " A" + r + " " + r + " 0 " + large + " 1 " + e[0] + " " + e[1];
-    }
+    try { localStorage.setItem("grimoire-site-theme", name); } catch (e) { /* private mode */ }
   }
 
-  // --- Brand diffusion cycle ------------------------------------------------------
-  // The hero mark rolls GRIMOIRE → runes → 127.0.0.1 with a
-  // per-character diffusion: during a transition every character churns
-  // through the target variant's glyph pool and resolves left-to-right.
-  // Between cycles it throws brief glitch flickers. Static under
-  // prefers-reduced-motion. The daemon binds an ephemeral loopback port
-  // (published to daemon.port), so the address — not a port number — is the
-  // constant on the wire.
-  function initBrandCycle() {
-    var el = document.querySelector("[data-brand-cycle]");
+  function initTheme() {
+    var fromQuery = new URLSearchParams(location.search).get("theme");
+    var saved = null;
+    try { saved = localStorage.getItem("grimoire-site-theme"); } catch (e) { /* private mode */ }
+    applyTheme(fromQuery || saved || "dark");
+    document.querySelectorAll("[data-theme-pick]").forEach(function (b) {
+      b.addEventListener("click", function () { applyTheme(b.getAttribute("data-theme-pick")); });
+    });
+  }
+
+  // --- Brand flicker ------------------------------------------------------------
+  // The hero mark stays GRIMOIRE and throws rare glitch flickers between long
+  // quiet stretches. Static under prefers-reduced-motion.
+  function initBrandFlicker() {
+    var el = document.querySelector("[data-brand-flicker]");
     if (!el) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-
-    // Each variant scrambles in its own alphabet: letters condense into
-    // GRIMOIRE, Elder Futhark runes into the mark, digits into the loopback.
-    var VARIANTS = [
-      { text: "GRIMOIRE", pool: "ABCDEFGHIJKLMNOPQRSTUVWXYZ" },
-      { text: "ᚷᚱᛁᛗᛟᛁᚱᛖ", pool: "ᚠᚢᚦᚨᚱᚲᚷᚹᚺᚾᛁᛃᛇᛈᛉᛊᛏᛒᛖᛗᛚᛜᛞᛟ" },
-      { text: "127.0.0.1", pool: "0123456789." },
-    ];
-    var TICK = 45;        // ms per scramble frame
-    var RESOLVE = 220;    // ms between successive characters locking in
-    var DWELL = 3600;     // ms a variant stays before diffusing to the next
-    var idx = 0;
-
-    function glyph(pool) {
-      return pool[(Math.random() * pool.length) | 0];
-    }
-
-    function scrambled(pool, n) {
-      var s = "";
-      for (var i = 0; i < n; i++) s += glyph(pool);
-      return s;
-    }
-
-    // Two phases so different-length variants never snap: first the churning
-    // mark grows/shrinks one cell at a time to the target length, then the
-    // cells resolve left-to-right into the target.
-    function diffuseTo(next) {
-      var len = el.textContent.length;
-      var tick = 0;
-      var morph = setInterval(function () {
-        if (len === next.text.length) { clearInterval(morph); resolve(); return; }
-        if (++tick % 2 === 0) len += len < next.text.length ? 1 : -1;
-        el.textContent = scrambled(next.pool, len);
-      }, TICK);
-      function resolve() {
-        var start = Date.now();
-        var timer = setInterval(function () {
-          var t = Date.now() - start, out = "", done = true;
-          for (var i = 0; i < next.text.length; i++) {
-            if (t > i * RESOLVE + RESOLVE) {
-              out += next.text[i];
-            } else {
-              done = false;
-              out += glyph(next.pool);
-            }
-          }
-          el.textContent = out;
-          if (done) { el.textContent = next.text; clearInterval(timer); }
-        }, TICK);
-      }
-    }
-
-    setInterval(function () {
-      idx = (idx + 1) % VARIANTS.length;
-      diffuseTo(VARIANTS[idx]);
-    }, DWELL);
 
     (function flicker() {
       setTimeout(function () {
@@ -232,14 +255,13 @@
   }
 
   // --- Live release data ------------------------------------------------------
-  // Show the current version on the hero button, and light up any download that
-  // exists in the latest release ("coming soon" rows flip to links the moment
-  // the asset is uploaded — no site change needed).
+  // Show the current version on the hero button, and degrade any download
+  // link whose asset is missing from the latest release to "coming soon"
+  // (no site change needed).
   function wireReleases() {
     var repos = {};
-    document.querySelectorAll("[data-asset], [data-asset-cell]").forEach(function (el) {
-      var key = el.getAttribute("data-asset") || el.getAttribute("data-asset-cell");
-      repos[key.split("/")[0]] = true;
+    document.querySelectorAll("[data-asset]").forEach(function (el) {
+      repos[el.getAttribute("data-asset").split("/")[0]] = true;
     });
     Object.keys(repos).forEach(function (repo) {
       fetch("https://api.github.com/repos/chinese-room-solutions/" + repo + "/releases/latest", {
@@ -255,24 +277,12 @@
               el.textContent = rel.tag_name.replace(/^v/, "");
             });
           }
-          // Links whose asset is missing from the latest release degrade to
-          // "coming soon"; placeholder cells with a present asset become links.
           document.querySelectorAll('[data-asset^="' + repo + '/"]').forEach(function (a) {
             if (!have[a.getAttribute("data-asset").split("/")[1]]) {
               var s = document.createElement("span");
               s.className = "soon";
               s.textContent = "coming soon";
               a.replaceWith(s);
-            }
-          });
-          document.querySelectorAll('[data-asset-cell^="' + repo + '/"]').forEach(function (td) {
-            var name = td.getAttribute("data-asset-cell").split("/")[1];
-            if (have[name]) {
-              var a = document.createElement("a");
-              a.href = td.getAttribute("data-href");
-              a.textContent = name;
-              td.classList.remove("soon");
-              td.replaceChildren(a);
             }
           });
         })
@@ -334,7 +344,7 @@
     });
   }
 
-  function initPage() { initEmbers(); initSigil(); initBrandCycle(); wireReleases(); initCopy(); }
+  function initPage() { initGraph(); initTheme(); initBrandFlicker(); wireReleases(); initCopy(); }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", initPage);
   } else {

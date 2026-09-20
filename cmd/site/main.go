@@ -76,6 +76,18 @@ func stage() error {
 			return fmt.Errorf("stage %s: %w", dst, err)
 		}
 	}
+	// The SDK's seeded pluggable theme is declarations-only; wrap it in its
+	// overlay selector — the same wrap uikit/themes.go applies at runtime, and
+	// the same one mass/Makefile's site target stages for the MASS page.
+	synth, err := os.ReadFile(filepath.Join(sdkDir, "uikit", "themes", "synthwave.css"))
+	if err != nil {
+		return fmt.Errorf("stage synthwave.css: %w", err)
+	}
+	wrapped := append([]byte("html.sl-theme-synthwave {\n"), synth...)
+	wrapped = append(wrapped, []byte("}\n")...)
+	if err := os.WriteFile(filepath.Join("site", "vendor", "synthwave.css"), wrapped, 0o644); err != nil {
+		return fmt.Errorf("stage synthwave.css: %w", err)
+	}
 	fmt.Printf("    site/vendor staged from mass-sdk %s\n", ver)
 	return nil
 }
