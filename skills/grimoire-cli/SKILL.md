@@ -104,6 +104,9 @@ A full `reindex` before searching is wasted minutes, not a warm-up step.
   splice its output into the argument; PowerShell drops each backtick as an
   escape character. Single quotes are literal in both; embed `'` as `'\''`
   (POSIX) or `''` (PowerShell).
+- Windows builds from before the `grimoire.exe` console stub print nothing when
+  run directly from PowerShell — use `cmd /c grimoire ...` there; current
+  installs work directly.
 - `note update PATH` replaces the whole body (`--content S`, `-f FILE`, or
   stdin) — only when you mean to rewrite the note.
 - `note create PATH` takes the body the same three ways; `--overwrite` replaces

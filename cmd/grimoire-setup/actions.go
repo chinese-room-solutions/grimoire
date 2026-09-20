@@ -15,6 +15,10 @@ import (
 	"github.com/chinese-room-solutions/mass-sdk/tui"
 )
 
+// cliName is the command the user types; appSpec.ExeName names the staged
+// binary (grimoire-app.exe on Windows, behind a grimoire.exe console stub).
+const cliName = "grimoire"
+
 // stageIconFile writes the embedded app icon to a temp PNG so the installer can
 // place it (the Linux icon theme / macOS bundle). Best-effort: a failure returns
 // "" and the install proceeds with a generic icon.
@@ -76,9 +80,14 @@ func runInstall(c collected, tag string, mode endMode) actionOutcome {
 
 	// Self-update: the app that asked for this install is still exiting, and on
 	// Windows its exe can't be overwritten until it has. Wait for the staged
-	// binary to become replaceable before touching it.
+	// binary to become replaceable before touching it. A machine upgrading from
+	// the old layout still runs the daemon from <installDir>\grimoire.exe — the
+	// exact path the new console stub lands on — so wait for that too.
 	if c.relaunch {
 		selfupdate.WaitReplaceable(appSpec.StagedExePath(c.installDir), selfupdate.ReplaceableWait)
+		if runtime.GOOS == "windows" {
+			selfupdate.WaitReplaceable(filepath.Join(c.installDir, "grimoire.exe"), selfupdate.ReplaceableWait)
+		}
 	}
 
 	res, err := doInstall(c, tag, mode)
@@ -163,10 +172,10 @@ func reportStep(ph *term.Phase, installDir string, step install.Step, err error)
 		ph.Line(term.OKMark() + "Created the launcher")
 	case install.StepPath:
 		if err != nil {
-			ph.Line(term.FailMark() + "Could not expose `" + appSpec.ExeName + "` on PATH")
+			ph.Line(term.FailMark() + "Could not expose `" + cliName + "` on PATH")
 			return
 		}
-		ph.Line(term.OKMark() + "Exposed `" + appSpec.ExeName + "` on PATH")
+		ph.Line(term.OKMark() + "Exposed `" + cliName + "` on PATH")
 	case install.StepRecord:
 		// No row of its own: the summary names where the install landed, and a
 		// failure here aborts to the error screen with the reason.
@@ -260,7 +269,7 @@ func installSummary(c collected, launcherOK bool, cli install.CLIResult) term.Su
 		ways = append(ways, "your applications menu")
 	}
 	if cli.OnPath {
-		ways = append(ways, "`"+appSpec.ExeName+"` from a terminal")
+		ways = append(ways, "`"+cliName+"` from a terminal")
 	}
 	launch := strings.Join(ways, ", or ")
 	if launch == "" {
@@ -282,7 +291,7 @@ func installSummary(c collected, launcherOK bool, cli install.CLIResult) term.Su
 	}
 	// A PATH step that failed outright reports no hint of its own, so say it.
 	if !cli.OnPath && cli.Hint == "" {
-		s.Rows = append(s.Rows, term.SummaryRow{Label: "note", Value: "`" + appSpec.ExeName +
+		s.Rows = append(s.Rows, term.SummaryRow{Label: "note", Value: "`" + cliName +
 			"` could not be added to your PATH; run it from the install directory above"})
 	}
 	if cli.Hint != "" {

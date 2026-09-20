@@ -8,8 +8,13 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 # -H windowsgui (Windows only) detaches the binary from a console; the
 # committed .syso icon resources are linked automatically on Windows and
 # ignored elsewhere.
+#
+# Windows ships two exes: BIN is the GUI binary, CLI_BIN a console-subsystem
+# stub (cmd/grimoire-cli) that relays CLI stdio/exit codes to it — a
+# windowsgui binary has neither. Elsewhere one binary is both, no stub.
 ifeq ($(OS),Windows_NT)
-  BIN := bin/grimoire.exe
+  BIN := bin/grimoire-app.exe
+  CLI_BIN := bin/grimoire.exe
   SETUP_BIN := bin/grimoire-setup.exe
   LDFLAGS := -H windowsgui -s -w -X main.version=$(VERSION)
 else
@@ -39,6 +44,9 @@ icon:
 
 build: templ
 	go build -ldflags="$(LDFLAGS)" -o $(BIN) ./cmd/grimoire/
+ifeq ($(OS),Windows_NT)
+	go build -ldflags="-s -w -X main.version=$(VERSION)" -o $(CLI_BIN) ./cmd/grimoire-cli/
+endif
 
 build-debug:
 	go build -gcflags="all=-N -l" -o $(BIN) ./cmd/grimoire/
@@ -51,13 +59,13 @@ build-setup:
 
 # The single-file self-extracting installer: the grimoire-setup stub with the
 # Grimoire binary appended as a payload (mass-sdk/selfextract). The app binary's
-# leaf name ($(BIN) = grimoire[.exe]) matches the installer's ExeLeaf, so the
-# SDK's Stage finds it after extraction. grimoire-pack is a build-time tool, so
-# it's `go run` transiently rather than left in bin/.
+# leaf name ($(BIN) = grimoire-app.exe on Windows) matches the installer's
+# ExeLeaf, so the SDK's Stage finds it after extraction. grimoire-pack is a
+# build-time tool, so it's `go run` transiently rather than left in bin/.
 #
 # Windows: the GUI is pure-Go (jchv/go-webview2; the WebView2 runtime ships with
-# the OS), so there are no sibling DLLs — the payload is just grimoire.exe, and
-# the installer is a single double-clickable .exe.
+# the OS), so there are no sibling DLLs — the payload is the GUI exe plus the
+# console stub beside it, and the installer is a single double-clickable .exe.
 #
 # Linux/macOS: --container wraps the installer in a double-clickable .AppImage /
 # .app so the wizard launches from the file manager; the GUI links GTK/WebKit
@@ -65,7 +73,7 @@ build-setup:
 package: build build-setup
 	@mkdir -p $(DIST_DIR)
 ifeq ($(OS),Windows_NT)
-	go run ./cmd/grimoire-pack --host $(SETUP_BIN) --out $(DIST_DIR)/grimoire-setup.exe $(BIN)
+	go run ./cmd/grimoire-pack --host $(SETUP_BIN) --out $(DIST_DIR)/grimoire-setup.exe $(BIN) $(CLI_BIN)
 	@echo "Installer: $(DIST_DIR)/grimoire-setup.exe"
 else
 	go run ./cmd/grimoire-pack --host $(SETUP_BIN) --out $(DIST_DIR)/grimoire-setup \

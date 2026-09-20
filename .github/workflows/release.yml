@@ -131,7 +131,7 @@ jobs:
           # fetches. Empty on Windows, whose .exe above is already container-free.
           raw="${{ matrix.setup_asset }}"
           if [ "$RUNNER_OS" = "Windows" ]; then
-            7z a "$name.zip" ./bin/grimoire.exe
+            7z a "$name.zip" ./bin/grimoire.exe ./bin/grimoire-app.exe
             mv dist/grimoire-setup.exe "$setup.exe"
           elif [ "$RUNNER_OS" = "macOS" ]; then
             tar -czf "$name.tar.gz" -C bin grimoire
