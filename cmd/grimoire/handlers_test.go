@@ -245,6 +245,51 @@ func TestParseJSONList(t *testing.T) {
 	}
 }
 
+// TestVaultFileHandlerCaching guards the serving of a note's referenced images
+// against the stale-image bug: with no Cache-Control the webview's heuristic
+// cache kept an old SVG fresh indefinitely. The response must force
+// revalidation, keep it cheap (304) while the file is unchanged, and pick up
+// new content once the file's modtime moves past the cached validator.
+func TestVaultFileHandlerCaching(t *testing.T) {
+	reg := newTestRegistry(t)
+	vault := tempVault(t)
+	svc, err := reg.runtime(context.Background(), vault)
+	require.NoError(t, err)
+
+	svg := filepath.Join(vault, "assets", "pic.svg")
+	require.NoError(t, os.MkdirAll(filepath.Dir(svg), 0o755))
+	require.NoError(t, os.WriteFile(svg, []byte("<svg>v1</svg>"), 0o644))
+
+	h := vaultFileHandler(svc)
+	get := func(ifModifiedSince string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/vault-file/assets/pic.svg", nil)
+		req.SetPathValue("path", "assets/pic.svg")
+		if ifModifiedSince != "" {
+			req.Header.Set("If-Modified-Since", ifModifiedSince)
+		}
+		rec := httptest.NewRecorder()
+		h(rec, req)
+		return rec
+	}
+
+	first := get("")
+	require.Equal(t, http.StatusOK, first.Code)
+	require.Equal(t, "no-cache", first.Header().Get("Cache-Control"),
+		"no validator-lifetime policy means heuristic caching serves stale images forever")
+	lm := first.Header().Get("Last-Modified")
+	require.NotEmpty(t, lm, "ServeFile's modtime validator is what makes revalidation cheap")
+
+	require.Equal(t, http.StatusNotModified, get(lm).Code,
+		"an unchanged file revalidates to 304")
+
+	require.NoError(t, os.WriteFile(svg, []byte("<svg>v2</svg>"), 0o644))
+	next := time.Now().Add(2 * time.Second) // past the cached validator, second precision
+	require.NoError(t, os.Chtimes(svg, next, next))
+	fresh := get(lm)
+	require.Equal(t, http.StatusOK, fresh.Code)
+	require.Contains(t, fresh.Body.String(), "v2")
+}
+
 func TestIsSelfOrDescendant(t *testing.T) {
 	tests := []struct {
 		name           string

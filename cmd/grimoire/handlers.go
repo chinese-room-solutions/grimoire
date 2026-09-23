@@ -1414,6 +1414,11 @@ func vaultFileHandler(svc *app.Service) http.HandlerFunc {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		// No validator-lifetime hint means heuristic caching, which keeps a
+		// stale image fresh in the webview long after its file changed.
+		// no-cache forces revalidation; ServeFile's Last-Modified handling
+		// still answers unchanged files with a 304.
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, clean)
 	}
 }
